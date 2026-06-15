@@ -114,7 +114,7 @@ The final ultragoal story is not complete until the active agent has run the fin
 ```json
 {
   "aiSlopCleaner": { "status": "passed", "evidence": "cleaner report" },
-  "verification": { "status": "passed", "commands": ["npm test"], "evidence": "post-cleaner verification" },
+  "verification": { "status": "passed", "commands": ["pnpm test"], "evidence": "post-cleaner verification" },
   "codeReview": {
     "recommendation": "APPROVE",
     "architectStatus": "CLEAR",

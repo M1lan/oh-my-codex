@@ -30,7 +30,7 @@ After rebuilding and rerunning `omx setup --force`, spawned-agent metadata shoul
 ## Re-test steps
 
 ```bash
-npm run build   # TypeScript build
+pnpm run build   # TypeScript build
 node bin/omx.js setup --scope project --force
 ```
 

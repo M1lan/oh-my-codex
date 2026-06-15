@@ -31,12 +31,12 @@ UltraQA release-prep evidence is recorded in `docs/qa/release-readiness-0.18.3.m
 
 Local gates completed before metadata finalization:
 
-- `npm run lint`
-- `npm run check:no-unused`
-- `npm run test`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
+- `pnpm run test`
 - Project-native targeted changed-area tests, rerun twice through `dist/scripts/run-test-files.js`
 - Adversarial release harness for malformed state, prompt-injection, repeated interruption/cancel wording, hung child process, misleading success output, and no-tag side-effect guard
-- `npm pack --dry-run`
+- `pnpm pack --dry-run`
 
 Accepted residual risk:
 

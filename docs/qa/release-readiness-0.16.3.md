@@ -21,13 +21,13 @@ Release: https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.16.3
 | Gate | Result |
 | --- | --- |
 | Official Codex docs check | PASS — lifecycle hooks use `[features].hooks = true`. |
-| Local blocker suite | PASS — `npm run build`, `npm run lint`, `npm run check:no-unused`, targeted setup/config/uninstall/hook/Team Node tests, and `git diff --check`. |
+| Local blocker suite | PASS — `pnpm run build`, `pnpm run lint`, `pnpm run check:no-unused`, targeted setup/config/uninstall/hook/Team Node tests, and `git diff --check`. |
 | Release body generation | PASS — generated from `RELEASE_BODY.md` with `v0.16.2...v0.16.3` compare inputs before tagging. |
 | Dev CI | PENDING — verify after pushing the release-prep commit. |
 | Main CI | PENDING — verify after promotion. |
 | Release workflow | PENDING — verify after pushing tag `v0.16.3`. |
 | GitHub release | PENDING — verify non-draft/non-prerelease release and native assets. |
-| npm | PENDING — verify `npm view oh-my-codex version` returns `0.16.3`. |
+| npm | PENDING — verify `pnpm view oh-my-codex version` returns `0.16.3`. |
 
 ## Notes
 

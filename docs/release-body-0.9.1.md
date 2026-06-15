@@ -27,14 +27,14 @@ Changed files:
 Planned local release-critical validation for `0.9.1`:
 
 - `node scripts/check-version-sync.mjs --tag v0.9.1`
-- `npm run lint`
-- `npx tsc --noEmit`
-- `npm run check:no-unused`
-- `npm test`
+- `pnpm run lint`
+- `pnpm dlx tsc --noEmit`
+- `pnpm run check:no-unused`
+- `pnpm test`
 - `node --test scripts/__tests__/smoke-packed-install.test.mjs`
-- `npm run build:full`
-- `npm run smoke:packed-install`
-- `npm pack --dry-run`
+- `pnpm run build:full`
+- `pnpm run smoke:packed-install`
+- `pnpm pack --dry-run`
 
 ## Historical note
 

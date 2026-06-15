@@ -20,14 +20,14 @@ Hotfix for `omx team` launch failures introduced in the `0.17.0` -> `0.17.1` wor
 
 ## Local gates
 
-- PASS — `npm run build`
+- PASS — `pnpm run build`
 - PASS — `node --test dist/team/__tests__/tmux-session.test.js` (186 passing)
-- PASS — `npm run check:no-unused`
+- PASS — `pnpm run check:no-unused`
 - PASS — default live Team smoke: `OMX_TEAM_READY_TIMEOUT_MS=12000 OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS=1500 ./dist/cli/omx.js team 1:explore "default smoke launch fixed"`
 - PASS — compat live Team smoke: `OMX_TEAM_WORKER_MCP_COMPAT=1 OMX_TEAM_READY_TIMEOUT_MS=12000 OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS=1500 ./dist/cli/omx.js team 1:explore "compat smoke launch still fixed"`
 - PASS — `node --test dist/team/__tests__/tmux-session.test.js dist/cli/__tests__/version-sync-contract.test.js` (188 passing)
-- PASS — `npm run verify:plugin-bundle`
-- PASS — `npm run verify:native-agents`
+- PASS — `pnpm run verify:plugin-bundle`
+- PASS — `pnpm run verify:native-agents`
 - PASS — version metadata aligned across `package.json`, `Cargo.toml`, `Cargo.lock`, and plugin metadata.
 - PASS — release body generated and reviewed before tag push: `node dist/scripts/generate-release-body.js --template RELEASE_BODY.md --out /tmp/RELEASE_BODY.0.17.3.generated.md --current-tag v0.17.3 --previous-tag v0.17.2 --repo Yeachan-Heo/oh-my-codex`.
 
@@ -40,6 +40,6 @@ Hotfix for `omx team` launch failures introduced in the `0.17.0` -> `0.17.1` wor
 
 ## Known gaps
 
-- Full `npm test` was not rerun locally for the hotfix; targeted Team launch tests, version-sync contract tests, typecheck, plugin/native verification, and live Team smokes cover the regression surface.
+- Full `pnpm test` was not rerun locally for the hotfix; targeted Team launch tests, version-sync contract tests, typecheck, plugin/native verification, and live Team smokes cover the regression surface.
 - `dist/scripts/check-version-sync.js --tag v0.17.3` could not run before local tag creation and still references obsolete `native/*/Cargo.toml` paths; the authoritative version-sync contract test passed against current `crates/*` paths.
 - Final publication evidence must be filled after GitHub Actions and npm complete.

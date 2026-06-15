@@ -29,7 +29,7 @@ Scope: issue **#1712** — sharper boundary and handoff regression coverage for 
 
 ## Verification commands
 
-- `npm run build`
+- `pnpm run build`
 - `node --test dist/team/__tests__/role-router.test.js dist/team/__tests__/followup-planner.test.js dist/hooks/__tests__/prompt-guidance-wave-two.test.js`
 
 ## Deliberate non-goals

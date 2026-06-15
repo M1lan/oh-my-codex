@@ -37,6 +37,6 @@ No open GitHub issues remain for the release range at release prep time. Closed 
 
 Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.11.md`.
 
-Release gates include version sync, build, CLI smoke (`omx --help`, `omx doctor`), `npm pack` + packed-install smoke, release body generation and review, branch CI, tag-triggered release workflow, GitHub release proof, and npm publication proof.
+Release gates include version sync, build, CLI smoke (`omx --help`, `omx doctor`), `pnpm pack` + packed-install smoke, release body generation and review, branch CI, tag-triggered release workflow, GitHub release proof, and npm publication proof.
 
 **Full Changelog**: [`v0.18.10...v0.18.11`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.10...v0.18.11)

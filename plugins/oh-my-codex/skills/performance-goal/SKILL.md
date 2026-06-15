@@ -22,7 +22,7 @@ Create the workflow and evaluator contract:
 ```sh
 omx performance-goal create \
   --objective "Reduce CLI startup latency by 20%" \
-  --evaluator-command "npm run perf:startup" \
+  --evaluator-command "pnpm run perf:startup" \
   --evaluator-contract "PASS when p95 latency improves by 20% and regression tests pass" \
   --slug startup-latency
 ```

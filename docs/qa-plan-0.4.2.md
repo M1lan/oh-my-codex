@@ -35,7 +35,7 @@ Expected at time of writing:
 ## 3) Automated QA
 
 ```bash
-npm run test:run
+pnpm run test:run
 ```
 
 Pass criteria:

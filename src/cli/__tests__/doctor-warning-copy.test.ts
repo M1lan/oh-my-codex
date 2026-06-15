@@ -1299,7 +1299,7 @@ command = "node"
 			assert.match(check.message, /minimal UserPromptSubmit smoke/);
 			assert.match(
 				check.message,
-				/npm install -g oh-my-codex@0\.18\.0 --force --min-release-age=0 --before=/,
+				/pnpm add -g oh-my-codex@0\.18\.0 --force/,
 			);
 			assert.match(check.message, /omx setup --force/);
 		} finally {

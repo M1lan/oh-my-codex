@@ -23,7 +23,7 @@
 
 Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.11.md`.
 
-Local gates before tagging include version sync, build, CLI smoke (`omx --help`, `omx doctor`), `npm pack` + packed-install smoke, release body generation and review, `git diff --check`, branch CI, tag-triggered release workflow, GitHub release proof, and npm publication proof.
+Local gates before tagging include version sync, build, CLI smoke (`omx --help`, `omx doctor`), `pnpm pack` + packed-install smoke, release body generation and review, `git diff --check`, branch CI, tag-triggered release workflow, GitHub release proof, and npm publication proof.
 
 The GitHub release workflow remains the authoritative cross-platform native asset gate after tag push, including the uploaded `native-release-manifest.json`.
 

@@ -24,7 +24,7 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Full source build | `npm run build:full` | PASS |
+| Full source build | `pnpm run build:full` | PASS |
 | CLI help smoke | `node bin/omx.js --help` | PASS |
 | Version smoke | `node bin/omx.js version` | PASS (`oh-my-codex v0.9.0`) |
 | Version sync | `node scripts/check-version-sync.mjs --tag v0.9.0` | PASS |
@@ -40,10 +40,10 @@ Verdict: **GO** ✅
 | Sparkshell direct smoke | `node bin/omx.js sparkshell git --version` | PASS (`git version 2.34.1`) |
 | Sparkshell summary smoke | `OMX_SPARKSHELL_LINES=1 node bin/omx.js sparkshell git log --oneline -10` | PASS (summary output emitted) |
 | Sparkshell tmux-pane smoke | `node bin/omx.js sparkshell --tmux-pane %2141 --tail-lines 120` | PASS |
-| Full test suite | `npm test` | PASS (`2375` pass / `0` fail) |
-| Packed tarball dry run | `npm pack --dry-run` | PASS (`oh-my-codex-0.9.0.tgz`) |
-| Explore verification lane | `npm run test:explore` | PASS (`39` pass / `0` fail) |
-| Sparkshell verification lane | `npm run test:sparkshell` | PASS (Rust suites passed: `32 + 11 + 5`, `0` fail) |
+| Full test suite | `pnpm test` | PASS (`2375` pass / `0` fail) |
+| Packed tarball dry run | `pnpm pack --dry-run` | PASS (`oh-my-codex-0.9.0.tgz`) |
+| Explore verification lane | `pnpm run test:explore` | PASS (`39` pass / `0` fail) |
+| Sparkshell verification lane | `pnpm run test:sparkshell` | PASS (Rust suites passed: `32 + 11 + 5`, `0` fail) |
 
 ## Current release-shape evidence
 
@@ -59,7 +59,7 @@ Verdict: **GO** ✅
   - native asset publishing
   - native asset manifest verification
   - packed install smoke verification
-  - npm publish
+  - pnpm publish
 - publish the GitHub release using `docs/release-notes-0.9.0.md`
 
 ## Risk notes
@@ -67,7 +67,7 @@ Verdict: **GO** ✅
 - Primary regression surface is the new native distribution contract: hydration, fallback ordering, and cross-platform asset resolution.
 - `omx explore` is intentionally constrained; release validation should keep checking that shell-only/read-only boundaries stay intact while sparkshell routing is enabled.
 - `omx sparkshell --tmux-pane` is operator-critical for team debugging, so pane summarization behavior should be treated as a release-facing feature, not a hidden internal detail.
-- `npm pack --dry-run` remaining green is important because packaged installs intentionally exclude staged native binaries; the release workflow must supply those binaries through GitHub Release assets instead.
+- `pnpm pack --dry-run` remaining green is important because packaged installs intentionally exclude staged native binaries; the release workflow must supply those binaries through GitHub Release assets instead.
 - Cross-platform Windows-specific fixes landed in the release window, but this Linux smoke pass cannot validate Windows runtime behavior directly; that still depends on CI/release-matrix confirmation.
 
 ## Final local verdict

@@ -54,7 +54,7 @@ OMX — це шар робочих процесів для [OpenAI Codex CLI](ht
 
 ```bash
 codex --version
-npm install -g oh-my-codex
+pnpm add -g oh-my-codex
 omx setup
 omx --madmax --high
 ```
@@ -62,8 +62,8 @@ omx --madmax --high
 Якщо Codex CLI ще не встановлено й ви хочете, щоб ним керував npm:
 
 ```bash
-npm install -g @openai/codex
-npm install -g oh-my-codex
+pnpm add -g @openai/codex
+pnpm add -g oh-my-codex
 omx setup
 ```
 

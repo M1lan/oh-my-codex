@@ -58,21 +58,21 @@
 
 Commands were run from `/home/bellman/Workspace/oh-my-codex-release-0.18.10`.
 
-- [x] `npm ci` — PASS; installed 151 packages, retained existing audit warnings from dependency graph.
-- [x] `npm run build` — PASS, `.omx/release-0.18.10/logs/build.log`.
+- [x] `pnpm install --frozen-lockfile` — PASS; installed 151 packages, retained existing audit warnings from dependency graph.
+- [x] `pnpm run build` — PASS, `.omx/release-0.18.10/logs/build.log`.
 - [x] `node dist/scripts/check-version-sync.js --tag v0.18.10` — PASS, `.omx/release-0.18.10/logs/version-sync.log`.
-- [x] `npm run lint` — PASS, `.omx/release-0.18.10/logs/lint.log`.
-- [x] `npm run check:no-unused` — PASS, `.omx/release-0.18.10/logs/no-unused.log`.
-- [x] `npm run verify:native-agents` — PASS, `.omx/release-0.18.10/logs/verify-native-agents.log`.
-- [x] `npm run sync:plugin:check` — PASS, `.omx/release-0.18.10/logs/sync-plugin-check.log`.
-- [x] `npm run verify:plugin-bundle` — PASS, `.omx/release-0.18.10/logs/verify-plugin-bundle.log`.
+- [x] `pnpm run lint` — PASS, `.omx/release-0.18.10/logs/lint.log`.
+- [x] `pnpm run check:no-unused` — PASS, `.omx/release-0.18.10/logs/no-unused.log`.
+- [x] `pnpm run verify:native-agents` — PASS, `.omx/release-0.18.10/logs/verify-native-agents.log`.
+- [x] `pnpm run sync:plugin:check` — PASS, `.omx/release-0.18.10/logs/sync-plugin-check.log`.
+- [x] `pnpm run verify:plugin-bundle` — PASS, `.omx/release-0.18.10/logs/verify-plugin-bundle.log`.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS, `.omx/release-0.18.10/logs/catalog-docs-check.log`.
-- [x] `npm run test:recent-bug-regressions:compiled` — PASS, `.omx/release-0.18.10/logs/test-recent-bug-regressions-compiled.log` (`runtime` sub-suite took about 139s; all pass).
-- [x] `npm run test:team:worker-runtime-identity:compiled` — PASS, `.omx/release-0.18.10/logs/test-team-worker-runtime-identity-compiled.log`.
-- [x] `npm run test:plugin-boundaries:compiled` — PASS, `.omx/release-0.18.10/logs/test-plugin-boundaries-compiled.log`.
-- [x] `npm run test:explicit-terminal-contract:compiled` — PASS, `.omx/release-0.18.10/logs/test-explicit-terminal-contract-compiled.log`.
-- [x] `npm pack --dry-run` — PASS, `.omx/release-0.18.10/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.10.tgz`, package size `3.9 MB`, unpacked size `24.3 MB`, `3045` files).
-- [x] `npm run smoke:packed-install` — PASS, `.omx/release-0.18.10/logs/smoke-packed-install.log`.
+- [x] `pnpm run test:recent-bug-regressions:compiled` — PASS, `.omx/release-0.18.10/logs/test-recent-bug-regressions-compiled.log` (`runtime` sub-suite took about 139s; all pass).
+- [x] `pnpm run test:team:worker-runtime-identity:compiled` — PASS, `.omx/release-0.18.10/logs/test-team-worker-runtime-identity-compiled.log`.
+- [x] `pnpm run test:plugin-boundaries:compiled` — PASS, `.omx/release-0.18.10/logs/test-plugin-boundaries-compiled.log`.
+- [x] `pnpm run test:explicit-terminal-contract:compiled` — PASS, `.omx/release-0.18.10/logs/test-explicit-terminal-contract-compiled.log`.
+- [x] `pnpm pack --dry-run` — PASS, `.omx/release-0.18.10/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.10.tgz`, package size `3.9 MB`, unpacked size `24.3 MB`, `3045` files).
+- [x] `pnpm run smoke:packed-install` — PASS, `.omx/release-0.18.10/logs/smoke-packed-install.log`.
 - [x] `git diff --check` — PASS, `.omx/release-0.18.10/logs/git-diff-check.log`.
 
 ## CI / publication evidence

@@ -80,12 +80,12 @@ Before merging to `main` or tagging:
 5. Verify:
    - GitHub release exists and is non-draft/non-prerelease.
    - Native assets and manifest are attached.
-   - `npm view oh-my-codex version` returns the release version.
+   - `pnpm view oh-my-codex version` returns the release version.
 6. Fast-forward `dev` to the shipped `main` commit and wait for final `dev` CI green.
 
 ## 6. Post-publish corrections
 
-If release notes are found incomplete after npm publish:
+If release notes are found incomplete after pnpm publish:
 
 1. Do **not** move a published npm provenance tag unless the release artifact itself is invalid and maintainers explicitly choose an emergency retag.
 2. Commit corrected release collateral to `dev`, then promote it to `main` through the normal CI path.

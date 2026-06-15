@@ -36,7 +36,7 @@ The branch now matches the PRD/test-spec shape much more closely than the earlie
 ## Verified evidence
 
 ### Build
-- `npm run build` → PASS
+- `pnpm run build` → PASS
 
 ### Focused tests
 - `node --test dist/autoresearch/__tests__/runtime.test.js dist/cli/__tests__/autoresearch.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/nested-help-routing.test.js dist/team/__tests__/worktree.test.js dist/modes/__tests__/base-autoresearch-contract.test.js` → PASS

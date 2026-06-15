@@ -39,7 +39,7 @@
 
 ## Validation
 
-- Local release-review gates: `npm run build`, `npm run lint`, `npm run check:no-unused`, targeted setup/config/uninstall/hook/Team Node tests, and `git diff --check`.
+- Local release-review gates: `pnpm run build`, `pnpm run lint`, `pnpm run check:no-unused`, targeted setup/config/uninstall/hook/Team Node tests, and `git diff --check`.
 - Release collateral generated from the `v0.16.2...v0.16.3` compare range and verified with `generate-release-body.js` before tagging.
 - GitHub CI and publication evidence are recorded in `docs/qa/release-readiness-0.16.3.md`.
 

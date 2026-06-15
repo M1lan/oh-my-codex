@@ -223,7 +223,7 @@ describe('CI Rust gates', () => {
 
     assert.match(
       workflow,
-      /build:\s*\n(?:.*\n)*?\s+- name: Setup Rust\s*\n\s+uses: dtolnay\/rust-toolchain@v1\s*\n\s+with:\s*\n\s+toolchain: stable(?:.*\n)*?\s+- name: Download prebuilt dist artifact\s*\n\s+uses: actions\/download-artifact@v8(?:.*\n)*?\s+- run: npm run build:explore:release(?:.*\n)*?\s+- run: npm run build:sparkshell/m,
+      /build:\s*\n(?:.*\n)*?\s+- name: Setup Rust\s*\n\s+uses: dtolnay\/rust-toolchain@v1\s*\n\s+with:\s*\n\s+toolchain: stable(?:.*\n)*?\s+- name: Download prebuilt dist artifact\s*\n\s+uses: actions\/download-artifact@v8(?:.*\n)*?\s+- run: pnpm run build:explore:release(?:.*\n)*?\s+- run: pnpm run build:sparkshell/m,
     );
   });
 
@@ -253,18 +253,19 @@ describe('CI Rust gates', () => {
       /^\s+- name:\s*Download prebuilt dist artifact\s*\n\s+uses:\s*actions\/download-artifact@v8(?:.*\n)*?\s+path:\s*dist/m,
     );
     assert.match(testJob, /^\s+- name:\s*Run grouped full-suite lane\s*\n(?:.*\n)*?^\s+run:\s*\|\n\s+node dist\/scripts\/run-test-files\.js/m);
-    assert.doesNotMatch(testJob, /^\s+npm run build$/m);
+    assert.doesNotMatch(testJob, /^\s+pnpm run build$/m);
   });
 
-  it('uses npm package caching without skipping clean dependency installs', () => {
+  it('uses pnpm package caching without skipping clean dependency installs', () => {
     const workflow = readCiWorkflow();
 
     for (const jobName of ['lint', 'typecheck', 'build-dist', 'test', 'coverage-team-critical', 'ralph-persistence-gate', 'build']) {
       const job = jobBlock(workflow, jobName);
 
+      assert.match(job, /uses:\s*pnpm\/action-setup@v4/);
       assert.match(job, /uses:\s*actions\/setup-node@v6/);
-      assert.match(job, /cache:\s*npm/);
-      assert.match(job, /run:\s*npm ci/);
+      assert.match(job, /cache:\s*pnpm/);
+      assert.match(job, /run:\s*pnpm install --frozen-lockfile/);
       assert.doesNotMatch(job, /uses:\s*actions\/cache@v4/);
       assert.doesNotMatch(job, /path:\s*node_modules/);
       assert.doesNotMatch(job, /cache-hit != 'true'/);

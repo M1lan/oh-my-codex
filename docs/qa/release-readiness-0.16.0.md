@@ -27,12 +27,12 @@ obsolete skills retired from installable/plugin delivery where catalog-deprecate
 
 | Headline claim | Source evidence | Verification evidence | Status |
 | --- | --- | --- | --- |
-| Native goal-mode workflows are first-class release surfaces | `src/cli/ultragoal.ts`, `src/cli/performance-goal.ts`, `src/cli/autoresearch-goal.ts`, `docs/ultragoal.md`, `docs/performance-goal.md`, `docs/autoresearch-goal.md`, commits `5277152f`, `f7fbb97b`, `9814c162` | Clean `npm test` passed 4564/4564, with targeted goal workflow suite passed 46/46 | Verified locally |
-| Completion requires fresh Codex goal snapshot reconciliation | `src/goal-workflows/codex-goal-snapshot.ts`, `src/goal-workflows/validation.ts`, commits `448f17d3`, `8e6650d8` | Covered by clean `npm test` and targeted goal workflow suite | Verified locally |
-| Ralph/Team handoffs respect goal-mode truth boundaries | `src/cli/ralph.ts`, `src/team/goal-workflow.ts`, `src/team/approved-execution.ts`, commits `ed3c2ace`, `1e99d1d0`, `f5abbec9` | Clean `npm test` passed; Team approved-execution targeted rerun passed 4/4 after explicit state-root fixture fix | Verified locally |
-| Obsolete skills retired from installable/plugin delivery where catalog-deprecated; deprecated root wrappers may remain as compatibility stubs. | `src/catalog/manifest.json`, `templates/catalog-manifest.json`, `src/scripts/sync-plugin-mirror.ts`, plugin skill deletions/additions in `plugins/oh-my-codex/skills/`, commit `fa5a6430` | `npm run verify:plugin-bundle`, generated catalog-doc check, clean `npm test`, and `npm pack --dry-run` passed | Verified locally |
-| Direct `omx autoresearch` remains deprecated with goal-mode replacement path | `src/cli/autoresearch.ts`, `src/autoresearch/goal.ts`, `skills/autoresearch-goal/SKILL.md`, `plugins/oh-my-codex/skills/autoresearch-goal/SKILL.md` | Covered by clean `npm test` and targeted goal workflow suite | Verified locally |
-| Notification transports honor proxy environments | `src/notifications/http-client.ts`, `src/notifications/dispatcher.ts`, commit `a43b1b7f`, PR `#2113` | Covered by clean `npm test`; notify dispatch targeted rerun passed 27/27 after legacy fallback fixture correction | Verified locally |
+| Native goal-mode workflows are first-class release surfaces | `src/cli/ultragoal.ts`, `src/cli/performance-goal.ts`, `src/cli/autoresearch-goal.ts`, `docs/ultragoal.md`, `docs/performance-goal.md`, `docs/autoresearch-goal.md`, commits `5277152f`, `f7fbb97b`, `9814c162` | Clean `pnpm test` passed 4564/4564, with targeted goal workflow suite passed 46/46 | Verified locally |
+| Completion requires fresh Codex goal snapshot reconciliation | `src/goal-workflows/codex-goal-snapshot.ts`, `src/goal-workflows/validation.ts`, commits `448f17d3`, `8e6650d8` | Covered by clean `pnpm test` and targeted goal workflow suite | Verified locally |
+| Ralph/Team handoffs respect goal-mode truth boundaries | `src/cli/ralph.ts`, `src/team/goal-workflow.ts`, `src/team/approved-execution.ts`, commits `ed3c2ace`, `1e99d1d0`, `f5abbec9` | Clean `pnpm test` passed; Team approved-execution targeted rerun passed 4/4 after explicit state-root fixture fix | Verified locally |
+| Obsolete skills retired from installable/plugin delivery where catalog-deprecated; deprecated root wrappers may remain as compatibility stubs. | `src/catalog/manifest.json`, `templates/catalog-manifest.json`, `src/scripts/sync-plugin-mirror.ts`, plugin skill deletions/additions in `plugins/oh-my-codex/skills/`, commit `fa5a6430` | `pnpm run verify:plugin-bundle`, generated catalog-doc check, clean `pnpm test`, and `pnpm pack --dry-run` passed | Verified locally |
+| Direct `omx autoresearch` remains deprecated with goal-mode replacement path | `src/cli/autoresearch.ts`, `src/autoresearch/goal.ts`, `skills/autoresearch-goal/SKILL.md`, `plugins/oh-my-codex/skills/autoresearch-goal/SKILL.md` | Covered by clean `pnpm test` and targeted goal workflow suite | Verified locally |
+| Notification transports honor proxy environments | `src/notifications/http-client.ts`, `src/notifications/dispatcher.ts`, commit `a43b1b7f`, PR `#2113` | Covered by clean `pnpm test`; notify dispatch targeted rerun passed 27/27 after legacy fallback fixture correction | Verified locally |
 | Explore startup environment and timeout behavior are bounded | `crates/omx-explore/src/main.rs`, `src/cli/explore.ts`, commit `3b4274f3` | `cargo test --workspace` passed after process-group timeout fixture stabilization | Verified locally |
 | Release metadata aligned to 0.16.0 | `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, `plugins/oh-my-codex/.codex-plugin/plugin.json` | Metadata grep after edits | Verified locally before gates |
 
@@ -59,24 +59,24 @@ obsolete skills retired from installable/plugin delivery where catalog-deprecate
 | Gate | Command | Result | Notes |
 | --- | --- | --- | --- |
 | Metadata alignment | `grep -R "0\.15\.3" -n package.json package-lock.json Cargo.toml Cargo.lock plugins/oh-my-codex/.codex-plugin/plugin.json .agents/plugins/marketplace.json` | PASS | No stale `0.15.3` in version metadata surfaces after local bump. |
-| Build | `npm run build` | PASS | Ran as part of `npm test` and `npm pack --dry-run`; package version reported `0.16.0`. |
-| Native agents | `npm run verify:native-agents` | PASS | `verified 18 installable native agents and 33 setup prompt assets`. |
-| Plugin bundle | `npm run verify:plugin-bundle` | PASS | `verified 26 canonical skill directories and plugin metadata`. |
-| Lint | `npm run lint` | PASS | `Checked 614 files in 100ms. No fixes applied.` Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
-| No-unused typecheck | `npm run check:no-unused` | PASS | Completed with exit code `0`. Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
-| Generated catalog-doc check | `node dist/scripts/generate-catalog-docs.js --check` | PASS | `catalog check ok`; also covered by final clean `npm test`. Log: `.omx/logs/release-0.16.0-local-gates.log`. |
-| Pack smoke | `npm pack --dry-run` | PASS | Produced `oh-my-codex-0.16.0.tgz`; prepack built, synced plugin mirror, verified native agents/plugin bundle, and cleaned native package assets. Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
+| Build | `pnpm run build` | PASS | Ran as part of `pnpm test` and `pnpm pack --dry-run`; package version reported `0.16.0`. |
+| Native agents | `pnpm run verify:native-agents` | PASS | `verified 18 installable native agents and 33 setup prompt assets`. |
+| Plugin bundle | `pnpm run verify:plugin-bundle` | PASS | `verified 26 canonical skill directories and plugin metadata`. |
+| Lint | `pnpm run lint` | PASS | `Checked 614 files in 100ms. No fixes applied.` Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
+| No-unused typecheck | `pnpm run check:no-unused` | PASS | Completed with exit code `0`. Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
+| Generated catalog-doc check | `node dist/scripts/generate-catalog-docs.js --check` | PASS | `catalog check ok`; also covered by final clean `pnpm test`. Log: `.omx/logs/release-0.16.0-local-gates.log`. |
+| Pack smoke | `pnpm pack --dry-run` | PASS | Produced `oh-my-codex-0.16.0.tgz`; prepack built, synced plugin mirror, verified native agents/plugin bundle, and cleaned native package assets. Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
 | Goal workflow targeted tests | `node --test dist/cli/__tests__/ultragoal.test.js ... dist/catalog/__tests__/plugin-bundle-ssot.test.js` | PASS | 46/46 passed after approved-execution fixture/root handling fixes. Log: `.omx/logs/release-0.16.0-targeted-goal-tests-after-fixes.log`. |
 | Team approved-execution targeted rerun | `node --test dist/team/__tests__/approved-execution.test.js` | PASS | 4/4 passed after unboxing `OMX_ROOT` for explicit state-root assertions. Log: `.omx/logs/release-0.16.0-approved-execution-rerun2.log`. |
 | Notify dispatch targeted rerun | `node --test dist/hooks/__tests__/notify-hook-team-dispatch.test.js` | PASS | 27/27 passed after making the legacy fallback fixture queue a real legacy request before corrupting dispatch state. Log: `.omx/logs/release-0.16.0-notify-dispatch-rerun-after-fix.log`. |
-| Full Node/package gate | `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u OMX_ENTRY_PATH -u OMX_SOURCE_CWD -u OMX_STARTUP_CWD -u OMX_TEAM_WORKER_LAUNCH_ARGS npm test` | PASS | Clean release-gate environment passed 4564/4564 tests and `catalog check ok`. Earlier live OMX/tmux-session runs failed/terminated because state/tmux-sensitive tests observed active runtime contamination; the clean release gate passed after fixture fixes. Log: `.omx/logs/release-0.16.0-npm-test-clean-final.log`. |
+| Full Node/package gate | `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u OMX_ENTRY_PATH -u OMX_SOURCE_CWD -u OMX_STARTUP_CWD -u OMX_TEAM_WORKER_LAUNCH_ARGS pnpm test` | PASS | Clean release-gate environment passed 4564/4564 tests and `catalog check ok`. Earlier live OMX/tmux-session runs failed/terminated because state/tmux-sensitive tests observed active runtime contamination; the clean release gate passed after fixture fixes. Log: `.omx/logs/release-0.16.0-npm-test-clean-final.log`. |
 | Cargo workspace verification | `cargo test --workspace` | PASS | Workspace passed after stabilizing the `omx-explore` timeout/process-group child readiness fixture. Log: `.omx/logs/release-0.16.0-cargo-test-after-fixes.log`. |
 | Post-pack status/diff review | `git status --short --branch && git diff --name-only` | PASS | Intended local prep diff only: release metadata/docs plus verification-stability fixes in `crates/omx-explore/src/main.rs`, `src/hooks/__tests__/notify-hook-team-dispatch.test.ts`, and `src/team/__tests__/approved-execution.test.ts`. Log: `.omx/logs/release-0.16.0-final-local-gates.log`. |
 | GitHub CI | GitHub Actions on release candidate | NOT RUN | Required before tag/npm/GitHub publication. |
 
 ## Known limits / skipped checks
 
-- GitHub CI, tag creation, npm publish, and GitHub release publication have not been run by this local prep step.
+- GitHub CI, tag creation, pnpm publish, and GitHub release publication have not been run by this local prep step.
 - Publication remains blocked until GitHub CI is green and a human explicitly authorizes tag creation, npm publication, and GitHub release publication.
 
 ## Verdict

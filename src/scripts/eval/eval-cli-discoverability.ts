@@ -21,7 +21,7 @@ function run(command: string, args: string[]) {
   };
 }
 
-const build = run('npm', ['run', 'build']);
+const build = run('pnpm', ['run', 'build']);
 const results = [build, ...checks.map(([command, args]) => run(command, args))];
 const passed = results.filter((result) => result.status === 0).length;
 const score = Number((passed / results.length).toFixed(2));

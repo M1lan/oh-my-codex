@@ -20,12 +20,12 @@
 ### Release-focused verification suite
 
 - `cargo test -p omx-runtime-core` ✅
-- `npm run build` ✅
-- `npm run lint` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
 - `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js` ✅
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
-- `npm test` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm test` ✅
+- `pnpm run smoke:packed-install` ✅
 - `git diff --check origin/main...HEAD` ✅
 
 ## Remaining risk

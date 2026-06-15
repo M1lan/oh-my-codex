@@ -60,12 +60,12 @@
 
 Release verification evidence is recorded in `docs/qa/release-readiness-0.13.0.md`.
 
-- `npm run build` ✅
-- `npm run lint` ✅
-- `npm test` ✅
-- `npm run test:recent-bug-regressions` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
+- `pnpm test` ✅
+- `pnpm run test:recent-bug-regressions` ✅
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run smoke:packed-install` ✅
 
 ## Remaining risk
 

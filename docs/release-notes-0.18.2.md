@@ -30,12 +30,12 @@ Opened after `v0.18.1` and currently closed:
 
 ## Validation
 
-- `npm run build`
-- `npm run verify:native-agents`
-- `npm run verify:plugin-bundle`
-- `npm run test:recent-bug-regressions:compiled`
+- `pnpm run build`
+- `pnpm run verify:native-agents`
+- `pnpm run verify:plugin-bundle`
+- `pnpm run test:recent-bug-regressions:compiled`
 - `node --test dist/hud/__tests__/authority.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/scripts/__tests__/notify-dispatcher.test.js dist/ultragoal/__tests__/artifacts.test.js dist/cli/__tests__/codex-plugin-layout.test.js dist/cli/__tests__/setup-install-mode.test.js dist/hooks/__tests__/keyword-detector.test.js dist/team/__tests__/runtime.test.js`
-- `npm run sync:plugin:check`
+- `pnpm run sync:plugin:check`
 - Tag-time release workflow/gate regenerates the release body from `RELEASE_BODY.md` after `v0.18.2` exists.
 - `cargo check --workspace`
 

@@ -58,14 +58,14 @@ Minor release after `0.17.3` that ships the OMX API gateway, SparkShell summary/
 
 - PASS — `git merge-base --is-ancestor v0.17.3 dev`.
 - PASS — version metadata aligned across `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, and plugin metadata at `0.18.0`.
-- PASS — `npm run build`.
-- PASS — `npm run lint`.
-- PASS — `npm run check:no-unused`.
+- PASS — `pnpm run build`.
+- PASS — `pnpm run lint`.
+- PASS — `pnpm run check:no-unused`.
 - PASS — `node --test dist/cli/__tests__/version-sync-contract.test.js dist/cli/__tests__/api.test.js`.
-- PASS — `npm run verify:native-agents`.
-- PASS — `npm run verify:plugin-bundle`.
-- PASS — `npm run build:full`.
-- PASS — `npm run smoke:packed-install`.
+- PASS — `pnpm run verify:native-agents`.
+- PASS — `pnpm run verify:plugin-bundle`.
+- PASS — `pnpm run build:full`.
+- PASS — `pnpm run smoke:packed-install`.
 - PASS — `cargo fmt --all --check`.
 - PASS — `cargo clippy --workspace --all-targets -- -D warnings`.
 - PASS — `cargo test -p omx-api -p omx-sparkshell -p omx-explore-harness`.
@@ -82,11 +82,11 @@ Minor release after `0.17.3` that ships the OMX API gateway, SparkShell summary/
 - PASS — release workflow run [26072175376](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/26072175376) completed successfully.
 - PASS — GitHub release published: <https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.18.0>.
 - PASS — GitHub release contains 57 assets, including `native-release-manifest.json` and per-target archives/checksums for `omx-api`, `omx-explore-harness`, `omx-runtime`, and `omx-sparkshell`.
-- PASS — npm registry reports `oh-my-codex@0.18.0` via `npm view oh-my-codex version`.
+- PASS — npm registry reports `oh-my-codex@0.18.0` via `pnpm view oh-my-codex version`.
 - PASS — `dev` and `main` both point at shipped commit `fd7e4779`; the pre-tag `dev` CI run for that commit is green.
 
 ## Known gaps
 
-- Full `npm run test:ci:compiled` was attempted during release-blocker resolution but stopped after existing attached-OMX/tmux environment-sensitive failures unrelated to the 0.18.0 fixes. The release is covered by targeted compiled tests, full build/lint/no-unused gates, native/plugin verification, packed-install smoke, and Cargo fmt/clippy/test gates.
+- Full `pnpm run test:ci:compiled` was attempted during release-blocker resolution but stopped after existing attached-OMX/tmux environment-sensitive failures unrelated to the 0.18.0 fixes. The release is covered by targeted compiled tests, full build/lint/no-unused gates, native/plugin verification, packed-install smoke, and Cargo fmt/clippy/test gates.
 - Lifecycle-notification grouping remains open as [#2353](https://github.com/Yeachan-Heo/oh-my-codex/issues/2353); this release focuses on preventing recursive notification process storms rather than grouping benign child-agent lifecycle messages.
 - GitHub Actions emitted the repository's Node.js 20 deprecation annotation for `actions/checkout@v4`; it did not fail CI or the release workflow.

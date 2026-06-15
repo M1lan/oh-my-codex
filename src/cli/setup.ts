@@ -2423,7 +2423,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			console.log("  omx team api command detected (CLI-first interop ready)");
 		} else {
 			console.log(`  WARNING: ${teamToolsCheck.message}`);
-			console.log("  Run `npm run build` and then re-run `omx setup`.");
+			console.log("  Run `pnpm run build` and then re-run `omx setup`.");
 		}
 	} else {
 		console.log("  Skipped because Team mode is disabled for this setup.");

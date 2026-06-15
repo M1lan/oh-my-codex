@@ -68,9 +68,9 @@ This release adds/extends tests and validation hardening around:
 Release verification evidence is recorded in `docs/qa/release-readiness-0.8.4.md`.
 
 Planned release gates:
-- `npm run build`
-- `npm test`
-- `npm run check:no-unused`
+- `pnpm run build`
+- `pnpm test`
+- `pnpm run check:no-unused`
 - CLI smoke checks (`--help`, `version`, `doctor`, `setup --dry-run`)
 
 ---

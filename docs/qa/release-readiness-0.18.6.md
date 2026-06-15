@@ -34,16 +34,16 @@ Release-prep correction included in this cut: `src/scripts/check-version-sync.ts
 Final gates for this cut:
 
 - [x] Release workflow version-sync probe — PASS (`package=0.18.6`, `workspace=0.18.6`, `tag=v0.18.6`). Log: `.omx/logs/release-0.18.6-workflow-version-sync.log`.
-- [x] `npm run build` — PASS. Log: `.omx/logs/release-0.18.6-build.log`.
+- [x] `pnpm run build` — PASS. Log: `.omx/logs/release-0.18.6-build.log`.
 - [x] HUD regression slice: `node --test dist/hud/__tests__/render.test.js dist/hud/__tests__/index.test.js dist/hud/__tests__/reconcile.test.js dist/hud/__tests__/hud-tmux-injection.test.js` — PASS (`128` pass / `0` fail). Log: `.omx/logs/release-0.18.6-hud-regression.log`.
-- [x] `npm run lint` — PASS. Log: `.omx/logs/release-0.18.6-lint.log`.
-- [x] `npm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.6-no-unused.log`.
-- [x] `npm run verify:native-agents` — PASS. Log: `.omx/logs/release-0.18.6-verify-native-agents.log`.
-- [x] `npm run sync:plugin` — PASS. Log: `.omx/logs/release-0.18.6-sync-plugin.log`.
-- [x] `npm run verify:plugin-bundle` — PASS. Log: `.omx/logs/release-0.18.6-verify-plugin-bundle.log`.
+- [x] `pnpm run lint` — PASS. Log: `.omx/logs/release-0.18.6-lint.log`.
+- [x] `pnpm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.6-no-unused.log`.
+- [x] `pnpm run verify:native-agents` — PASS. Log: `.omx/logs/release-0.18.6-verify-native-agents.log`.
+- [x] `pnpm run sync:plugin` — PASS. Log: `.omx/logs/release-0.18.6-sync-plugin.log`.
+- [x] `pnpm run verify:plugin-bundle` — PASS. Log: `.omx/logs/release-0.18.6-verify-plugin-bundle.log`.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS. Log: `.omx/logs/release-0.18.6-catalog-docs-check.log`.
 - [x] `git diff --check` — PASS (`PASS: git diff --check produced no whitespace errors.`). Log: `.omx/logs/release-0.18.6-diff-check.log`.
-- [x] `npm pack --dry-run` — PASS (`oh-my-codex-0.18.6.tgz`, package size `3.6 MB`, unpacked size `22.2 MB`, `2974` files). Log: `.omx/logs/release-0.18.6-npm-pack-dry-run.log`.
+- [x] `pnpm pack --dry-run` — PASS (`oh-my-codex-0.18.6.tgz`, package size `3.6 MB`, unpacked size `22.2 MB`, `2974` files). Log: `.omx/logs/release-0.18.6-npm-pack-dry-run.log`.
 
 ## CI validation evidence
 
@@ -61,7 +61,7 @@ Final gates for this cut:
 
 - `git tag --list 'v0.18.6'` showed no local `v0.18.6` tag before tagging.
 - `git tag --points-at HEAD` showed no tag at the release-prep worktree HEAD before the release commit.
-- No local `npm publish` command is intended; publication is delegated to the release workflow after `v0.18.6` tag push.
+- No local `pnpm publish` command is intended; publication is delegated to the release workflow after `v0.18.6` tag push.
 
 ## External release actions
 

@@ -12,10 +12,10 @@
 
 ## Verification evidence
 
-- `npm run build` ✅
-- `npm run lint` ✅
-- `npm test` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
+- `pnpm test` ✅
+- `pnpm run smoke:packed-install` ✅
 
 ## Remaining risk
 

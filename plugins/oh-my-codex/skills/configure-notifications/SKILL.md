@@ -270,7 +270,7 @@ jq '.notifications.enabled = false' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$
 After writing config, run a smoke check:
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 For OpenClaw-like HTTP integrations, verify both:

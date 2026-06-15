@@ -48,17 +48,17 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Lint gate | `npm run lint` | PASS |
-| Full Node build/test/catalog gate | `npm test` | PASS |
+| Lint gate | `pnpm run lint` | PASS |
+| Full Node build/test/catalog gate | `pnpm test` | PASS |
 | Native crates | `cargo test -p omx-explore-harness -p omx-sparkshell` | PASS |
-| Publish-path packaging | `npm pack --dry-run` | PASS |
+| Publish-path packaging | `pnpm pack --dry-run` | PASS |
 
 ## Risk assessment
 
 - The code-review WATCH items are maintainability risks rather than correctness or security blockers. They should be considered for follow-up cleanup: state-clear tombstone writing is duplicated in both CLI and MCP paths, detached renderer semantics are retained but no longer selected in normal strategy resolution, and deep-interview prose contracts are still repeated across shipped guidance surfaces.
 - The TypeScript major upgrade is broader than the runtime behavior fixes, but the release gate includes a full Node build/test/catalog pass and package dry run.
 - Duplicate MCP sibling cleanup still relies on conservative same-parent/process-age/timing heuristics, but the new lifecycle coverage proves the intended idle self-exit path.
-- GitHub Actions release and npm publish remain delegated to the tag-triggered release workflow.
+- GitHub Actions release and pnpm publish remain delegated to the tag-triggered release workflow.
 
 ## Final verdict
 

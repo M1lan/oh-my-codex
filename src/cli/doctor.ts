@@ -1440,7 +1440,7 @@ export async function checkNativeHookDistSmoke(
 			return {
 				name: "Native hook dist smoke",
 				status: "fail",
-				message: `installed native hook dist failed a minimal UserPromptSubmit smoke (${detail}); reinstall with "npm install -g oh-my-codex@${packageVersion} --force --min-release-age=0 --before=" and then run "omx setup --force"`,
+				message: `installed native hook dist failed a minimal UserPromptSubmit smoke (${detail}); reinstall with "pnpm add -g oh-my-codex@${packageVersion} --force" and then run "omx setup --force"`,
 			};
 		}
 

@@ -65,8 +65,8 @@
 
 ## Verification evidence
 
-- `npm run build` ✅
-- `npm run lint` ✅
-- `npm test` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
+- `pnpm test` ✅
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run smoke:packed-install` ✅

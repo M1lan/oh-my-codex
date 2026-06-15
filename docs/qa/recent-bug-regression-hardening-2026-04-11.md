@@ -16,6 +16,6 @@ Covered files:
 
 Verification target:
 
-- `npm run build`
+- `pnpm run build`
 - `node --test dist/hooks/__tests__/keyword-detector.test.js dist/scripts/__tests__/codex-native-hook.test.js dist/cli/__tests__/launch-fallback.test.js dist/team/__tests__/runtime.test.js dist/team/__tests__/hardening-e2e.test.js`
-- `npm run test:recent-bug-regressions:compiled`
+- `pnpm run test:recent-bug-regressions:compiled`

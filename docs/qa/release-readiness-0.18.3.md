@@ -47,14 +47,14 @@ UltraQA planning artifacts:
 
 Completed gates:
 
-- [x] `npm run lint` — PASS (`Checked 665 files`, no fixes applied). Log: `.omx/logs/ultraqa-0.18.3-lint.log`.
-- [x] `npm run check:no-unused` — PASS. Log: `.omx/logs/ultraqa-0.18.3-no-unused.log`.
-- [x] `npm run test` — PASS. Evidence: `5335` passed, `0` failed, `1` skipped; catalog check ok. Log: `.omx/logs/ultraqa-0.18.3-npm-test.log`.
+- [x] `pnpm run lint` — PASS (`Checked 665 files`, no fixes applied). Log: `.omx/logs/ultraqa-0.18.3-lint.log`.
+- [x] `pnpm run check:no-unused` — PASS. Log: `.omx/logs/ultraqa-0.18.3-no-unused.log`.
+- [x] `pnpm run test` — PASS. Evidence: `5335` passed, `0` failed, `1` skipped; catalog check ok. Log: `.omx/logs/ultraqa-0.18.3-npm-test.log`.
 - [x] Adversarial release harness — PASS for malformed state, prompt-injection text, repeated interruption/cancel wording, bounded hung child process, misleading success output, and no-`v0.18.3` tag side-effect guard. Log: `.omx/logs/ultraqa-0.18.3-adversarial-harness.log`.
 - [x] Targeted changed-area tests, project-native harness, rerun twice — PASS (`1149` tests, `0` failed on each run). Log: `.omx/logs/ultraqa-0.18.3-targeted-rerun-project-native.log`.
-- [x] `npm pack --dry-run` before metadata bump — PASS for the pre-bump package surface. Log: `.omx/logs/ultraqa-0.18.3-npm-pack-dry-run.log`.
-- [x] Final metadata-sensitive `npm pack --dry-run` after the `0.18.3` bump — PASS. Produced `oh-my-codex-0.18.3.tgz` dry-run listing, package size `3.6 MB`, unpacked size `21.8 MB`, `2910` files. Log: `.omx/logs/release-0.18.3-final-npm-pack-dry-run.log`.
-- [x] Final post-bump `npm run build`, `npm run lint`, `npm run check:no-unused`, `npm run verify:native-agents`, `npm run sync:plugin`, `npm run verify:plugin-bundle`, `node dist/scripts/generate-catalog-docs.js --check`, and `git diff --check` — PASS. Logs under `.omx/logs/release-0.18.3-final-*`.
+- [x] `pnpm pack --dry-run` before metadata bump — PASS for the pre-bump package surface. Log: `.omx/logs/ultraqa-0.18.3-npm-pack-dry-run.log`.
+- [x] Final metadata-sensitive `pnpm pack --dry-run` after the `0.18.3` bump — PASS. Produced `oh-my-codex-0.18.3.tgz` dry-run listing, package size `3.6 MB`, unpacked size `21.8 MB`, `2910` files. Log: `.omx/logs/release-0.18.3-final-npm-pack-dry-run.log`.
+- [x] Final post-bump `pnpm run build`, `pnpm run lint`, `pnpm run check:no-unused`, `pnpm run verify:native-agents`, `pnpm run sync:plugin`, `pnpm run verify:plugin-bundle`, `node dist/scripts/generate-catalog-docs.js --check`, and `git diff --check` — PASS. Logs under `.omx/logs/release-0.18.3-final-*`.
 
 Harness correction note:
 
@@ -70,7 +70,7 @@ Harness correction note:
 
 - `git tag --points-at HEAD` showed no `v0.18.3` during UltraQA.
 - `git tag --list 'v0.18.3'` showed no local `v0.18.3` tag during UltraQA.
-- No `npm publish` command was run by this local prep. Grep matches in logs are release-workflow test text only, not an executed publish command.
+- No `pnpm publish` command was run by this local prep. Grep matches in logs are release-workflow test text only, not an executed publish command.
 
 ## Remaining external release actions
 

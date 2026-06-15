@@ -20,10 +20,10 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Lint | `npm run lint` | PASS |
-| Full test suite | `npm test` | PASS |
-| Packed-install smoke | `npm run smoke:packed-install` | PASS |
+| Build | `pnpm run build` | PASS |
+| Lint | `pnpm run lint` | PASS |
+| Full test suite | `pnpm test` | PASS |
+| Packed-install smoke | `pnpm run smoke:packed-install` | PASS |
 
 ## Final verdict
 

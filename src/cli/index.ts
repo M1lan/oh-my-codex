@@ -210,7 +210,7 @@ Usage:
                 (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Install the stable channel now, then refresh setup
   omx update --stable
-                Install/rollback to npm stable (oh-my-codex@latest), then refresh setup
+                Install/rollback to the stable release (oh-my-codex@latest), then refresh setup
   omx update --dev
                 Install the upstream dev branch, then refresh setup
   omx uninstall Remove OMX configuration and clean up installed artifacts

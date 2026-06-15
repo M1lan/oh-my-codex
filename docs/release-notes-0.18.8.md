@@ -62,17 +62,17 @@ Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.8.md`.
 The planned local gates before tagging are:
 
 - release workflow version-sync probe for `v0.18.8`
-- `npm run build`
-- `npm run lint`
-- `npm run check:no-unused`
-- `npm run verify:native-agents`
-- `npm run sync:plugin` and `npm run verify:plugin-bundle`
+- `pnpm run build`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
+- `pnpm run verify:native-agents`
+- `pnpm run sync:plugin` and `pnpm run verify:plugin-bundle`
 - `node dist/scripts/generate-catalog-docs.js --check`
-- full compiled test suite via `npm test` / `npm run test:ci:compiled`
+- full compiled test suite via `pnpm test` / `pnpm run test:ci:compiled`
 - all discovered e2e/smoke/live gates from the release test spec, including Team demo e2e and Codex/OMX live smoke when prerequisites are present
 - generated GitHub release body check
 - `git diff --check`
-- `npm pack --dry-run`
+- `pnpm pack --dry-run`
 
 The GitHub release workflow remains the authoritative cross-platform native asset and npm publication gate after tag push.
 

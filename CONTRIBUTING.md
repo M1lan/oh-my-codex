@@ -5,19 +5,19 @@ Thanks for contributing.
 ## Development setup
 
 - Node.js >= 20
-- npm
+- pnpm
 
 ```bash
-npm install
-npm run lint
-npm run build
-npm test
+pnpm install
+pnpm run lint
+pnpm run build
+pnpm test
 ```
 
 For local CLI testing:
 
 ```bash
-npm link
+pnpm link --global
 omx setup
 omx doctor
 ```
@@ -27,7 +27,7 @@ omx doctor
 CI enforces minimum coverage for critical team orchestration modules:
 
 ```bash
-npm run coverage:team-critical
+pnpm run coverage:team-critical
 ```
 
 This command checks coverage for `dist/team/**` and `dist/state/**` and writes reports to `coverage/team/`.
@@ -37,9 +37,9 @@ This command checks coverage for `dist/team/**` and `dist/state/**` and writes r
 When validating team/state changes, run this sequence locally:
 
 ```bash
-npm run build
+pnpm run build
 node --test dist/team/__tests__/state.test.js dist/hooks/__tests__/notify-hook-cross-worktree-heartbeat.test.js
-npm test
+pnpm test
 ```
 
 If you were recently in a team worker session, clear team env vars first so tests do not inherit worker-specific state roots:
@@ -135,9 +135,9 @@ docs: clarify setup steps for Codex CLI users
 ## Pull request checklist
 
 - [ ] Scope is focused and clearly described
-- [ ] `npm run build` passes
-- [ ] `npm test` passes
-- [ ] `npm run lint` passes
+- [ ] `pnpm run build` passes
+- [ ] `pnpm test` passes
+- [ ] `pnpm run lint` passes
 - [ ] Documentation updated when behavior changed
 - [ ] No unrelated formatting/refactor churn
 

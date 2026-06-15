@@ -228,7 +228,7 @@ Use the CLI-first state surface (`omx state ... --json`) for UltraQA lifecycle s
 
 **Good:** A CLI prints `SUCCESS` while exiting 1. Mark the misleading success output scenario failed, fix the parser or reporting path, and rerun the generated harness.
 
-**Bad:** The workflow runs only `npm test`, `npm run build`, `npm run lint`, or `npm run typecheck`, sees green output, and declares UltraQA complete without adversarial dynamic e2e coverage.
+**Bad:** The workflow runs only `pnpm test`, `pnpm run build`, `pnpm run lint`, or `pnpm run typecheck`, sees green output, and declares UltraQA complete without adversarial dynamic e2e coverage.
 
 **Bad:** A generated harness leaves untracked files, state, or a child process behind and the final report omits cleanup status.
 

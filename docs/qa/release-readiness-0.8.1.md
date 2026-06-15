@@ -14,9 +14,9 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Full test suite | `npm test` | PASS (`1908` pass / `0` fail) |
-| No-unused type gate | `npm run check:no-unused` | PASS |
+| Build | `pnpm run build` | PASS |
+| Full test suite | `pnpm test` | PASS (`1908` pass / `0` fail) |
+| No-unused type gate | `pnpm run check:no-unused` | PASS |
 | CLI help smoke | `node bin/omx.js --help` | PASS |
 | Version smoke | `node bin/omx.js version` | PASS (`oh-my-codex v0.8.1`) |
 | Status smoke | `node bin/omx.js status` | PASS |
@@ -27,7 +27,7 @@ Verdict: **GO** ✅
 ## Risk notes
 
 - No failing checks observed in release validation.
-- `npm test` runtime was long (~721s) due expected long-running notification/tmux integration tests; all completed successfully.
+- `pnpm test` runtime was long (~721s) due expected long-running notification/tmux integration tests; all completed successfully.
 
 ## Final verdict
 

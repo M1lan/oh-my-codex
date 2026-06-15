@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js >= 20
-- [Codex CLI](https://github.com/openai/codex) installed (`npm install -g @openai/codex`)
+- [Codex CLI](https://github.com/openai/codex) installed (`pnpm add -g @openai/codex`)
 - OpenAI API key configured
 
 ## Setup (< 2 minutes)
@@ -12,9 +12,9 @@
 # Clone and install
 git clone https://github.com/Yeachan-Heo/oh-my-codex.git
 cd oh-my-codex
-npm install
-npm run build
-npm link
+pnpm install
+pnpm run build
+pnpm link --global
 
 # Run setup (installs prompts, skills, configures Codex CLI)
 omx setup
@@ -387,7 +387,7 @@ Expected:
 
 ## Troubleshooting
 
-**Codex CLI not found:** Install with `npm install -g @openai/codex`
+**Codex CLI not found:** Install with `pnpm add -g @openai/codex`
 
 **Slash commands not appearing:** Run `omx setup --force` to reinstall prompts
 

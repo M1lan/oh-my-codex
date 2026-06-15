@@ -14,7 +14,7 @@ Verdict: **GO** ✅
 - `src/question/__tests__/*`, `src/scripts/__tests__/codex-native-hook.test.ts` — regression coverage for inactive-but-pending question obligations and detached renderer liveness
 
 ### Setup / update / install refresh
-- `src/cli/update.ts`, `src/scripts/postinstall.ts` — setup refresh retry paths, npm install-root anchoring, and explicit update behavior when setup state is stale
+- `src/cli/update.ts`, `src/scripts/postinstall.ts` — setup refresh retry paths, pnpm install-root anchoring, and explicit update behavior when setup state is stale
 - `src/cli/__tests__/update.test.ts`, `src/scripts/__tests__/postinstall.test.ts` — install stamp, setup refresh, and failure-path coverage
 
 ### Lifecycle / guidance / release collateral
@@ -26,15 +26,15 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Full Node build/test/catalog gate | `npm test` | PASS |
+| Full Node build/test/catalog gate | `pnpm test` | PASS |
 | Native crates | `cargo test -p omx-explore-harness -p omx-sparkshell` | PASS |
-| Publish-path packaging | `npm pack --dry-run` | PASS |
+| Publish-path packaging | `pnpm pack --dry-run` | PASS |
 
 ## Risk assessment
 
 - The patch train is broader than a single hotfix but still concentrated on reliability follow-through rather than a new top-level feature surface.
 - The strongest remaining operator-facing risk is still real tmux / reused-session behavior around `omx question`, deep-interview Stop blocking, and upgrade-triggered setup refresh.
-- GitHub Actions release and npm publish remain delegated to the tag-triggered release workflow.
+- GitHub Actions release and pnpm publish remain delegated to the tag-triggered release workflow.
 
 ## Final verdict
 

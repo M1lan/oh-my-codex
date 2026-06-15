@@ -4,7 +4,7 @@ The repository keeps one canonical authoring surface for each plugin/setup asset
 
 ## Canonical roots
 
-- **Plugin skills:** root `skills/<name>/SKILL.md` is canonical. The plugin mirror at `plugins/oh-my-codex/skills/<name>/` is refreshed by `npm run sync:plugin` and verified by `npm run verify:plugin-bundle`.
+- **Plugin skills:** root `skills/<name>/SKILL.md` is canonical. The plugin mirror at `plugins/oh-my-codex/skills/<name>/` is refreshed by `pnpm run sync:plugin` and verified by `pnpm run verify:plugin-bundle`.
 - **Plugin skill membership:** `templates/catalog-manifest.json` controls which catalog skills are installable. Active/internal skills, plus setup-only policy additions, must have canonical root skill directories and plugin mirrors.
 - **Plugin MCP metadata:** `src/config/omx-first-party-mcp.ts` is canonical. `plugins/oh-my-codex/.mcp.json` must match `buildOmxPluginMcpManifest()`.
 - **Plugin manifest version and paths:** `package.json` is canonical for the plugin version. The plugin manifest must point to `./skills/`, `./.mcp.json`, and `./.app.json`.
@@ -13,9 +13,9 @@ The repository keeps one canonical authoring surface for each plugin/setup asset
 ## Commands
 
 ```bash
-npm run sync:plugin           # mutate plugin mirror/metadata from canonical roots
-npm run verify:plugin-bundle  # non-mutating SSOT check for CI/review
-npm run sync:plugin:check     # compatibility alias for the same non-mutating check
+pnpm run sync:plugin           # mutate plugin mirror/metadata from canonical roots
+pnpm run verify:plugin-bundle  # non-mutating SSOT check for CI/review
+pnpm run sync:plugin:check     # compatibility alias for the same non-mutating check
 ```
 
 `prepack` runs sync and verification before packaging, but contributors should run the non-mutating verification before review so release-time sync does not hide stale plugin artifacts.
@@ -24,8 +24,8 @@ npm run sync:plugin:check     # compatibility alias for the same non-mutating ch
 
 1. Edit or add the root skill under `skills/<name>/SKILL.md`.
 2. Add/update the skill entry in `templates/catalog-manifest.json` and `src/catalog/manifest.json`.
-3. Run `npm run build && npm run sync:plugin`.
-4. Run `npm run verify:plugin-bundle`.
+3. Run `pnpm run build && pnpm run sync:plugin`.
+4. Run `pnpm run verify:plugin-bundle`.
 
 Root skill directories that should not appear in the plugin must be represented in the catalog as `alias` or `merged`; otherwise the plugin bundle verifier fails because the root directory is neither installable nor explicitly excluded.
 
@@ -42,7 +42,7 @@ Native agents are setup-owned assets, not plugin-scoped bundle assets. Generated
 Run the non-mutating native-agent verifier before review or release:
 
 ```bash
-npm run verify:native-agents
+pnpm run verify:native-agents
 ```
 
 The verifier fails when installable catalog agents are missing definitions or prompts, when definitions are missing catalog rows, when merged/alias canonical targets do not resolve directly to installable agents, when prompt files are neither cataloged native agents nor explicit setup prompt assets, or when generated TOML loses required metadata.

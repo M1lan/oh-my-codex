@@ -53,7 +53,7 @@ The command marks the next pending OMX story `in_progress`, appends a ledger ent
 For intermediate stories, do **not** call `update_goal`; checkpoint the OMX story with a fresh `get_goal` snapshot whose objective matches `codexObjective` and whose status is still `active`:
 
 ```sh
-omx ultragoal checkpoint --goal-id G001-example --status complete --evidence "npm test passed; docs updated" --codex-goal-json ./get-goal.json
+omx ultragoal checkpoint --goal-id G001-example --status complete --evidence "pnpm test passed; docs updated" --codex-goal-json ./get-goal.json
 ```
 
 For the final story, run the whole-run audit plus the mandatory final `ai-slop-cleaner`, post-cleaner verification, and independent `$code-review` gate. If review is clean (`APPROVE` + `CLEAR` with distinct `code-reviewer` and `architect` subagent evidence), call `update_goal({status: "complete"})`, call `get_goal` again, and checkpoint with the fresh complete aggregate snapshot plus `--quality-gate-json`. If review is non-clean or independent delegation is unavailable, do not call `update_goal`; use `omx ultragoal record-review-blockers` to append a durable blocker-resolution story and continue.
@@ -152,7 +152,7 @@ The final ultragoal story is not complete until the active agent has run the fin
 ```json
 {
   "aiSlopCleaner": { "status": "passed", "evidence": "cleaner report" },
-  "verification": { "status": "passed", "commands": ["npm test"], "evidence": "post-cleaner verification" },
+  "verification": { "status": "passed", "commands": ["pnpm test"], "evidence": "post-cleaner verification" },
   "codeReview": {
     "recommendation": "APPROVE",
     "architectStatus": "CLEAR",

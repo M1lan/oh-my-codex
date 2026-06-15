@@ -2,8 +2,8 @@
 
 Date: **2026-03-11**
 Scope: opt-in/manual stress scenarios that complement the deterministic CI lane in:
-- `npm run test:explore`
-- `npm run test:sparkshell`
+- `pnpm run test:explore`
+- `pnpm run test:sparkshell`
 
 This document covers the heavy/manual scenarios intentionally excluded from default CI because they depend on noisy operator environments, repeated invocation, or judgment-based evidence review.
 
@@ -12,10 +12,10 @@ This document covers the heavy/manual scenarios intentionally excluded from defa
 From the repository root:
 
 ```bash
-npm run build:full
+pnpm run build:full
 ```
 
-`npm run build:full` covers the TypeScript build plus the packaged explore harness and sparkshell native binary. Use `npm run build:explore` separately only if you specifically want the debug cargo build path during local investigation.
+`pnpm run build:full` covers the TypeScript build plus the packaged explore harness and sparkshell native binary. Use `pnpm run build:explore` separately only if you specifically want the debug cargo build path during local investigation.
 
 Use a clean throwaway workspace when possible. If you need tmux-pane coverage, run inside tmux and confirm the target pane id first.
 
@@ -56,8 +56,8 @@ A manual scenario passes only when all of the following are true:
 Final deterministic recheck (required for the later Ralph verification sweep; not re-run in this doc-only pass):
 
 ```bash
-npm run test:explore
-npm run test:sparkshell
+pnpm run test:explore
+pnpm run test:sparkshell
 ```
 
 ## Scenario 1: large noisy tmux-pane captures
@@ -213,8 +213,8 @@ node bin/omx.js explore --help
 Use this checklist after both deterministic and heavy/manual work are present.
 
 ### Deterministic lane
-- [ ] `npm run test:explore`
-- [ ] `npm run test:sparkshell`
+- [ ] `pnpm run test:explore`
+- [ ] `pnpm run test:sparkshell`
 - [ ] deterministic tests assert semantic fact preservation with predeclared must-preserve facts
 - [ ] deterministic tests assert fallback path selection or actionable failure output
 - [ ] deterministic tests assert sparkshell guidance/help remains actionable

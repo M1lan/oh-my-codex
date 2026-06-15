@@ -42,16 +42,16 @@
 Completed final gates for this cut:
 
 - [x] Release workflow version-sync probe — PASS (`package=0.18.5`, `workspace=0.18.5`, `tag=v0.18.5`); `Cargo.lock` crate package entries are updated to `0.18.5`. Log: `.omx/logs/release-0.18.5-workflow-version-sync.log`.
-- [x] `npm run build` — PASS. Log: `.omx/logs/release-0.18.5-build.log`.
-- [x] `npm run lint` — PASS. Log: `.omx/logs/release-0.18.5-lint.log`.
-- [x] `npm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.5-no-unused.log`.
-- [x] `npm run verify:native-agents` — PASS. Log: `.omx/logs/release-0.18.5-verify-native-agents.log`.
-- [x] `npm run sync:plugin` — PASS. Log: `.omx/logs/release-0.18.5-sync-plugin.log`.
-- [x] `npm run verify:plugin-bundle` — PASS. Log: `.omx/logs/release-0.18.5-verify-plugin-bundle.log`.
+- [x] `pnpm run build` — PASS. Log: `.omx/logs/release-0.18.5-build.log`.
+- [x] `pnpm run lint` — PASS. Log: `.omx/logs/release-0.18.5-lint.log`.
+- [x] `pnpm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.5-no-unused.log`.
+- [x] `pnpm run verify:native-agents` — PASS. Log: `.omx/logs/release-0.18.5-verify-native-agents.log`.
+- [x] `pnpm run sync:plugin` — PASS. Log: `.omx/logs/release-0.18.5-sync-plugin.log`.
+- [x] `pnpm run verify:plugin-bundle` — PASS. Log: `.omx/logs/release-0.18.5-verify-plugin-bundle.log`.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS. Log: `.omx/logs/release-0.18.5-catalog-docs-check.log`.
 - [x] `git diff --check` — PASS (`PASS: git diff --check produced no whitespace errors.`). Log: `.omx/logs/release-0.18.5-diff-check.log`.
-- [x] `npm pack --dry-run` — PASS (`oh-my-codex-0.18.5.tgz`, package size `3.6 MB`, unpacked size `22.2 MB`, `2974` files). Log: `.omx/logs/release-0.18.5-npm-pack-dry-run.log`.
-- [x] `npm run test` — LOCAL ENV-CONTAMINATED FULL RUN: `5404` pass / `3` fail / `1` skipped. The failures were isolated to active-session environment contamination (`USE_OMX_EXPLORE_CMD`, boxed `OMX_ROOT`, symlinked TMPDIR) and one timeout race in the combined run. Log: `.omx/logs/release-0.18.5-npm-test.log`.
+- [x] `pnpm pack --dry-run` — PASS (`oh-my-codex-0.18.5.tgz`, package size `3.6 MB`, unpacked size `22.2 MB`, `2974` files). Log: `.omx/logs/release-0.18.5-npm-pack-dry-run.log`.
+- [x] `pnpm run test` — LOCAL ENV-CONTAMINATED FULL RUN: `5404` pass / `3` fail / `1` skipped. The failures were isolated to active-session environment contamination (`USE_OMX_EXPLORE_CMD`, boxed `OMX_ROOT`, symlinked TMPDIR) and one timeout race in the combined run. Log: `.omx/logs/release-0.18.5-npm-test.log`.
 - [x] Failed-test clean-environment rerun — PASS for `dist/cli/__tests__/auth.test.js`, `dist/hooks/extensibility/__tests__/dispatcher.test.js`, and after unsetting boxed OMX env, `dist/compat/__tests__/doctor-contract.test.js`. Logs: `.omx/logs/release-0.18.5-failed-tests-clean-env.log`, `.omx/logs/release-0.18.5-compat-clean-env.log`.
 
 ## CI validation evidence
@@ -68,7 +68,7 @@ Completed final gates for this cut:
 
 - `git tag --list 'v0.18.5'` showed no local `v0.18.5` tag before tagging.
 - `git tag --points-at HEAD` showed no tag at the release-prep worktree HEAD before the release commit.
-- No `npm publish` command was run by local prep; publication is delegated to the release workflow after `v0.18.5` tag push.
+- No `pnpm publish` command was run by local prep; publication is delegated to the release workflow after `v0.18.5` tag push.
 
 ## External release actions
 

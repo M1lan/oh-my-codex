@@ -312,9 +312,9 @@ Minor release focused on local-generation infrastructure, SparkShell operator sa
 
 ### Validation
 
-- `npm run build`
+- `pnpm run build`
 - `node --test dist/team/__tests__/tmux-session.test.js`
-- `npm run check:no-unused`
+- `pnpm run check:no-unused`
 - Live default team launch smoke: `./dist/cli/omx.js team 1:explore "default smoke launch fixed"`
 - Live compatibility smoke: `OMX_TEAM_WORKER_MCP_COMPAT=1 ./dist/cli/omx.js team 1:explore "compat smoke launch still fixed"`
 
@@ -329,10 +329,10 @@ Hotfix release for the `omx question` leader-pane resume regression observed aft
 
 ### Validation
 
-- `npm run build`
+- `pnpm run build`
 - `env -u OMX_STATE_ROOT -u OMX_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID node --test dist/question/__tests__/state.test.js dist/question/__tests__/ui.test.js dist/mcp/__tests__/hermes-bridge.test.js dist/question/__tests__/renderer.test.js`
-- `npm run check:no-unused`
-- `npx biome lint src/question src/mcp/hermes-bridge.ts`
+- `pnpm run check:no-unused`
+- `pnpm dlx biome lint src/question src/mcp/hermes-bridge.ts`
 
 ### Release metadata
 
@@ -496,7 +496,7 @@ Patch release focused on post-`0.16.0` reliability and release-safety hardening:
 - **Explore fast-path regression coverage** — local explore tests now cover symlink fallback and oversized text-search fallback behavior.
 
 ### Changed
-- **CI dependency proof is clean again** — Node CI jobs run `npm ci` unconditionally instead of skipping install on a restored `node_modules` cache.
+- **CI dependency proof is clean again** — Node CI jobs run `pnpm install --frozen-lockfile` unconditionally instead of skipping install on a restored `node_modules` cache.
 - **Team approved handoffs are stricter and more repairable** — selected handoffs, invalid diagnostics, nonready repair-only handling, binding transport, and DAG fallback status stay aligned.
 - **Runtime/session authority is more durable** — session-scoped runtime state, project-scoped Codex goal state, and stale skill-active/HUD cleanup are tightened.
 
@@ -667,7 +667,7 @@ Minor release centered on interactive orchestration changes: the new `omx questi
 - **Autoresearch is now skill-first and validator-gated** — direct `omx autoresearch` invocation is hard-deprecated in favor of the prompt/skill workflow, and completion now requires validator evidence.
 - **Runtime continuation semantics are explicit** — run outcomes are normalized into a shared terminal/non-terminal contract so stop/continue behavior stays consistent across runtime loops and state surfaces.
 - **Specialist routing guidance is clearer** — repository lookup, official-doc research, and dependency-evaluation routes now have narrower ownership boundaries in prompts and role routing.
-- **Lint validation now targets tracked source roots** — `npm run lint` validates `src` and `bin` directly so nested local worktrees/runtime dirs with their own Biome roots no longer break release gating.
+- **Lint validation now targets tracked source roots** — `pnpm run lint` validates `src` and `bin` directly so nested local worktrees/runtime dirs with their own Biome roots no longer break release gating.
 
 ### Fixed
 - **Stop gating around interactive work** — pending deep-interview questions and incomplete autoresearch validation now block Stop consistently until their required interactive/validator work is satisfied.
@@ -895,9 +895,9 @@ MCP-CLI parity surface, HUD recovery and reconciliation hardening, native-hook a
 - **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes aligned to `0.12.4`.
 
 ### Verified
-- `npm run build` ✅
-- `npx biome lint src/` ✅ (435 files)
-- `npm test` — 3068/3070 passing. The 2 failures (`state.test.ts: dispatch request store keeps failed requests failed`, `runtime.test.ts: sendWorkerMessage keeps failed hook receipts failed`) are pre-existing on `main` (commit `3a193cfb`) and not regressions introduced by this release.
+- `pnpm run build` ✅
+- `pnpm dlx biome lint src/` ✅ (435 files)
+- `pnpm test` — 3068/3070 passing. The 2 failures (`state.test.ts: dispatch request store keeps failed requests failed`, `runtime.test.ts: sendWorkerMessage keeps failed hook receipts failed`) are pre-existing on `main` (commit `3a193cfb`) and not regressions introduced by this release.
 
 ## [0.12.3] - 2026-04-08
 
@@ -911,10 +911,10 @@ Follow-up patch release for the `v0.12.2..v0.12.3` train: `$team` prompt-routing
 - **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.3`.
 
 ### Verified
-- `npm run build`
-- `npm run lint`
-- `npm test`
-- `npm run smoke:packed-install`
+- `pnpm run build`
+- `pnpm run lint`
+- `pnpm test`
+- `pnpm run smoke:packed-install`
 
 ## [0.12.2] - 2026-04-08
 
@@ -931,10 +931,10 @@ Patch release for the `v0.12.1..v0.12.2` train: Windows team worker boot and shu
 - **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.2`.
 
 ### Verified
-- `npm run build`
-- `npm run lint`
-- `npm test`
-- `npm run smoke:packed-install`
+- `pnpm run build`
+- `pnpm run lint`
+- `pnpm test`
+- `pnpm run smoke:packed-install`
 
 ## [0.12.1] - 2026-04-07
 
@@ -952,12 +952,12 @@ Patch release for the `v0.12.0..v0.12.1` train: team-runtime hygiene, launch/cle
 - **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release body, and release notes are aligned to `0.12.1`.
 
 ### Verified
-- `npm run build`
-- `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json`
+- `pnpm run build`
+- `pnpm dlx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json`
 - `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js`
 - `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js`
 - `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js`
-- `npm run smoke:packed-install`
+- `pnpm run smoke:packed-install`
 
 ## [0.12.0] - 2026-04-06
 
@@ -977,14 +977,14 @@ Minor release for native Codex hook ownership, first-party Bash pre/post tool gu
 - **Release metadata sync** — Node/Cargo package metadata, lockfiles, changelog, release notes, QA/readiness notes, and release body are aligned to `0.12.0`.
 
 ### Verified
-- `npm ci`
-- `npm run build`
+- `pnpm install --frozen-lockfile`
+- `pnpm run build`
 - `node dist/cli/omx.js version`
 - `node --test dist/cli/__tests__/version-sync-contract.test.js`
-- `npm run lint`
-- `npm test`
+- `pnpm run lint`
+- `pnpm test`
 - `cargo test -p omx-runtime-core`
-- `npm run smoke:packed-install`
+- `pnpm run smoke:packed-install`
 - `git diff --check origin/main...HEAD`
 
 ## [0.11.13] - 2026-04-04
@@ -1002,12 +1002,12 @@ Patch release for team/runtime delivery integrity, busy-leader nudge handling, r
 
 ### Verified
 - `cargo test -p omx-runtime-core`
-- `npm run build`
-- `npm run lint`
+- `pnpm run build`
+- `pnpm run lint`
 - `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js`
 - `node --test dist/cli/__tests__/version-sync-contract.test.js`
-- `npm test`
-- `npm run smoke:packed-install`
+- `pnpm test`
+- `pnpm run smoke:packed-install`
 - `git diff --check origin/main...HEAD`
 
 ## [0.11.12] - 2026-04-02
@@ -1026,12 +1026,12 @@ Patch release for Windows flicker reductions, team/runtime seam cleanup, safer a
 
 ### Verified
 - `cargo check --workspace`
-- `npm run build`
-- `npm run lint`
+- `pnpm run build`
+- `pnpm run lint`
 - `node --test dist/cli/__tests__/version-sync-contract.test.js`
 - release-workflow inline version-sync check from `.github/workflows/release.yml`
-- `npm run test:node:cross-platform`
-- `npm run smoke:packed-install`
+- `pnpm run test:node:cross-platform`
+- `pnpm run smoke:packed-install`
 
 ## [0.11.10] - 2026-03-30
 
@@ -1045,12 +1045,12 @@ Patch release for approved handoff alias parsing hardening and release metadata 
 - **Release collateral refresh** — release notes and `RELEASE_BODY.md` are refreshed for the `0.11.10` cut.
 
 ### Verified
-- `npx biome lint src/planning/__tests__/artifacts.test.ts`
-- `npm run build && node --test dist/planning/__tests__/artifacts.test.js`
-- `npm run test:sparkshell`
-- `npm run test:team:cross-rebase-smoke`
-- `npm run smoke:packed-install`
-- `npm test`
+- `pnpm dlx biome lint src/planning/__tests__/artifacts.test.ts`
+- `pnpm run build && node --test dist/planning/__tests__/artifacts.test.js`
+- `pnpm run test:sparkshell`
+- `pnpm run test:team:cross-rebase-smoke`
+- `pnpm run smoke:packed-install`
+- `pnpm test`
 
 ## [0.11.9] - 2026-03-25
 
@@ -1072,9 +1072,9 @@ Patch release for deeper deep-interview / ralplan coordination, setup repair, an
 
 ### Verified
 - `cargo check --workspace`
-- `npm run build`
-- `npm run lint`
-- `npm run check:no-unused`
+- `pnpm run build`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
 - `node --test --test-reporter=spec dist/cli/__tests__/version-sync-contract.test.js`
 - `node --test --test-reporter=spec dist/cli/__tests__/setup-refresh.test.js dist/cli/__tests__/setup-scope.test.js dist/cli/__tests__/doctor-warning-copy.test.js`
 - `node --test --test-reporter=spec dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js dist/hooks/__tests__/deep-interview-contract.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/hooks/__tests__/notify-hook-auto-nudge.test.js dist/hooks/__tests__/agents-overlay.test.js`
@@ -1094,7 +1094,7 @@ Hotfix release for deep-interview nudge suppression and duplicate fresh-leader n
 
 ### Verified
 - `cargo check --workspace`
-- `npm run build`
+- `pnpm run build`
 - `node --test --test-reporter=spec dist/hooks/__tests__/notify-hook-auto-nudge.test.js`
 - `node --test --test-reporter=spec dist/hooks/__tests__/notify-hook-team-leader-nudge.test.js`
 - `node --test --test-reporter=spec dist/hooks/__tests__/notify-fallback-watcher.test.js`
@@ -1155,7 +1155,7 @@ Hotfix release for team worker delivery regressions.
 ### Fixed
 - **Deep-interview state mode compatibility** — deep-interview workflow now correctly uses OMX state APIs instead of legacy OMC state paths. (PR [#987](https://github.com/Yeachan-Heo/oh-my-codex/pull/987), closes [#1783](https://github.com/Yeachan-Heo/oh-my-codex/issues/1783))
 - **Real tmux test isolation** — tmux/session tests are now isolated from live maintainer sessions to prevent interference. (PR [#980](https://github.com/Yeachan-Heo/oh-my-codex/pull/980), closes [#960](https://github.com/Yeachan-Heo/oh-my-codex/issues/960))
-- **npm pack dry-run race condition** — prevented parallel test runs from rebuilding dist during npm pack dry-runs. (PR [#986](https://github.com/Yeachan-Heo/oh-my-codex/pull/986))
+- **pnpm pack dry-run race condition** — prevented parallel test runs from rebuilding dist during pnpm pack dry-runs. (PR [#986](https://github.com/Yeachan-Heo/oh-my-codex/pull/986))
 - **Ambient tmux bootstrap restoration** — restored ambient tmux bootstrap for state tools with aligned fake tmux fixtures. (hotfix commits)
 
 ### Changed

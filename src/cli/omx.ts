@@ -24,6 +24,6 @@ if (existsSync(distEntry)) {
     process.exit(process.exitCode ?? 0);
   }
 } else {
-  console.error('oh-my-codex: run "npm run build" first');
+  console.error('oh-my-codex: run "pnpm run build" first');
   process.exit(1);
 }

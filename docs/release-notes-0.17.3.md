@@ -22,9 +22,9 @@
 
 ## Validation evidence
 
-- `npm run build`
+- `pnpm run build`
 - `node --test dist/team/__tests__/tmux-session.test.js`
-- `npm run check:no-unused`
+- `pnpm run check:no-unused`
 - Default live Team smoke: `OMX_TEAM_READY_TIMEOUT_MS=12000 OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS=1500 ./dist/cli/omx.js team 1:explore "default smoke launch fixed"`
 - Compat live Team smoke: `OMX_TEAM_WORKER_MCP_COMPAT=1 OMX_TEAM_READY_TIMEOUT_MS=12000 OMX_TEAM_STARTUP_EVIDENCE_TIMEOUT_MS=1500 ./dist/cli/omx.js team 1:explore "compat smoke launch still fixed"`
 

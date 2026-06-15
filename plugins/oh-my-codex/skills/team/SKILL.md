@@ -103,7 +103,7 @@ Before running `$team`, confirm:
 1. `tmux` installed (`tmux -V`)
 2. Current leader session is inside tmux (`$TMUX` is set)
 3. `omx` command resolves to the intended install/build
-4. If running repo-local `node bin/omx.js ...`, run `npm run build` after `src` changes
+4. If running repo-local `node bin/omx.js ...`, run `pnpm run build` after `src` changes
 5. Check HUD pane count in the leader window and avoid duplicate `hud --watch` panes before split
 
 Suggested preflight:
@@ -421,7 +421,7 @@ Checks:
 1. `tmux list-panes -F '#{pane_id}\t#{pane_start_command}'`
 2. `tmux capture-pane -t %<worker-pane> -p -S -120`
 3. Verify worker process alive and not stuck on trust prompt
-4. Rebuild if running repo-local (`npm run build`)
+4. Rebuild if running repo-local (`pnpm run build`)
 
 ### Team starts but leader gets no ACK
 

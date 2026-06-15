@@ -61,15 +61,15 @@ Filter used: GitHub issues with `createdAt > 2026-05-21T04:44:28Z` and `state = 
 
 Completed before promotion:
 
-- [x] `npm run build` — PASS.
-- [x] `npm run verify:native-agents` — PASS (`21` installable native agents, `36` setup prompt assets).
-- [x] `npm run verify:plugin-bundle` — PASS after `npm run sync:plugin` updated plugin metadata to `0.18.2`.
-- [x] `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID npm run test:recent-bug-regressions:compiled` — PASS (`627` tests). The first unsanitized attempt failed because the active OMX runtime `OMX_ROOT` contaminated temp-root team tests; rerun with release-clean env passed.
+- [x] `pnpm run build` — PASS.
+- [x] `pnpm run verify:native-agents` — PASS (`21` installable native agents, `36` setup prompt assets).
+- [x] `pnpm run verify:plugin-bundle` — PASS after `pnpm run sync:plugin` updated plugin metadata to `0.18.2`.
+- [x] `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID pnpm run test:recent-bug-regressions:compiled` — PASS (`627` tests). The first unsanitized attempt failed because the active OMX runtime `OMX_ROOT` contaminated temp-root team tests; rerun with release-clean env passed.
 - [x] `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID node --test dist/hud/__tests__/authority.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/scripts/__tests__/notify-dispatcher.test.js dist/ultragoal/__tests__/artifacts.test.js dist/cli/__tests__/codex-plugin-layout.test.js dist/cli/__tests__/setup-install-mode.test.js dist/hooks/__tests__/keyword-detector.test.js dist/team/__tests__/runtime.test.js` — PASS (`436` tests). This gate previously exposed a real slow-dispatch coalescing gap; the release candidate now fixes it with completion-anchored identity-scoped coalescing plus pruning and includes the clean rerun.
 - [x] `env -u OMX_ROOT -u OMX_STATE_ROOT -u OMX_SESSION_ID -u CODEX_SESSION_ID -u SESSION_ID node --test dist/scripts/__tests__/notify-dispatcher.test.js` — PASS (`15`/`15`).
-- [x] `npm run sync:plugin:check` — PASS.
+- [x] `pnpm run sync:plugin:check` — PASS.
 - [x] `cargo check --workspace` — PASS.
-- [x] `npm pack --dry-run --json` — PASS after parsing mixed lifecycle output; produced `oh-my-codex-0.18.2.tgz`, `entryCount=2893`, `unpackedSize=21598080`, no `.omx` package leaks.
+- [x] `pnpm pack --dry-run --json` — PASS after parsing mixed lifecycle output; produced `oh-my-codex-0.18.2.tgz`, `entryCount=2893`, `unpackedSize=21598080`, no `.omx` package leaks.
 - [x] `git diff --check` — PASS.
 - [x] `node dist/scripts/generate-release-body.js --template RELEASE_BODY.md --out /tmp/RELEASE_BODY.generated.md --current-tag v0.18.2 --previous-tag v0.18.1 --repo Yeachan-Heo/oh-my-codex` — PASS against a local annotated `v0.18.2` tag; generated body includes Contributors and the `v0.18.1...v0.18.2` changelog link.
 - [x] `$code-review` final gate: APPROVE / CLEAR (code-reviewer APPROVE; architect CLEAR).
@@ -82,7 +82,7 @@ Promotion and publication proof:
 - `main` CI after fast-forward merge to `29e87a24a0ed354283604bfc1ba995d1245813c4`: PASS, GitHub Actions run `26335226535`.
 - `v0.18.2` release workflow for tag `29e87a24a0ed354283604bfc1ba995d1245813c4`: PASS, GitHub Actions run `26335367646`. The first attempt had a transient checkout credential failure in `Build native (aarch64-unknown-linux-gnu)`; rerunning failed jobs passed and the workflow completed successfully.
 - GitHub release: `v0.18.2` is published, non-draft, non-prerelease, target `main`, with `57` assets including `native-release-manifest.json` and native archives/checksums.
-- npm publication: `npm view oh-my-codex version dist-tags --json` returns version `0.18.2` and `latest: 0.18.2`.
+- npm publication: `pnpm view oh-my-codex version dist-tags --json` returns version `0.18.2` and `latest: 0.18.2`.
 - Final branch/tag state at publication: `origin/main`, `origin/dev`, local `HEAD`, and tag `v0.18.2^{}` all pointed to `29e87a24a0ed354283604bfc1ba995d1245813c4`.
 
 Post-publish correction note: this section was filled after npm publication to replace pre-promotion placeholders with final evidence. The published npm provenance tag was not moved; this docs-only correction may intentionally make `main`/`dev` advance beyond the release tag after the correction is promoted.

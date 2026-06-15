@@ -10,7 +10,7 @@ if (stillUsesCatShellout) {
   process.exit(1);
 }
 
-const build = spawnSync('npm', ['run', 'build'], { encoding: 'utf-8' });
+const build = spawnSync('pnpm', ['run', 'build'], { encoding: 'utf-8' });
 if (build.stdout) process.stderr.write(build.stdout);
 if (build.stderr) process.stderr.write(build.stderr);
 if (build.status !== 0) {

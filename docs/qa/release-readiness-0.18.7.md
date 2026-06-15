@@ -45,17 +45,17 @@
 Final gates for this cut:
 
 - [x] Release workflow version-sync probe — PASS (`package=0.18.7`, `workspace=0.18.7`, `tag=v0.18.7`): `node dist/scripts/check-version-sync.js --tag v0.18.7`.
-- [x] `npm run build` — PASS.
+- [x] `pnpm run build` — PASS.
 - [x] Focused duplicate HUD/tmux regression suite — PASS (`633` pass / `0` fail): `node --test dist/hud/__tests__/tmux.test.js dist/hud/__tests__/reconcile.test.js dist/hud/__tests__/index.test.js dist/cli/__tests__/index.test.js dist/team/__tests__/tmux-session.test.js dist/team/__tests__/runtime.test.js`.
 - [x] Changed-surface compiled regression suite — PASS (`1173` pass / `0` fail): question, hooks, Autopilot, ralplan, Team, state, MCP, native-hook, agents, pipeline, and mode-contract tests.
-- [x] `npm run lint` — PASS.
-- [x] `npm run check:no-unused` — PASS.
-- [x] `npm run verify:native-agents` — PASS.
-- [x] `npm run sync:plugin` — PASS; plugin manifest metadata synced to `0.18.7`.
-- [x] `npm run verify:plugin-bundle` — PASS.
+- [x] `pnpm run lint` — PASS.
+- [x] `pnpm run check:no-unused` — PASS.
+- [x] `pnpm run verify:native-agents` — PASS.
+- [x] `pnpm run sync:plugin` — PASS; plugin manifest metadata synced to `0.18.7`.
+- [x] `pnpm run verify:plugin-bundle` — PASS.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS.
 - [x] `git diff --check` — PASS.
-- [x] `npm pack --dry-run` — PASS (`oh-my-codex-0.18.7.tgz`).
+- [x] `pnpm pack --dry-run` — PASS (`oh-my-codex-0.18.7.tgz`).
 
 ## Duplicate HUD release-blocker evidence
 
@@ -77,7 +77,7 @@ The duplicate HUD blocker is covered by both implementation and tests:
 ## No-publish / no-tag evidence before final tag
 
 - Do not create or push `v0.18.7` until this PR is merged and release gates are green.
-- No local `npm publish` command is intended; publication remains delegated to the release workflow after tag push.
+- No local `pnpm publish` command is intended; publication remains delegated to the release workflow after tag push.
 
 ## Current readiness verdict
 

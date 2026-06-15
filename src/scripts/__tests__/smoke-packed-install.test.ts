@@ -10,7 +10,7 @@ import {
   buildNativeHookSmokePayload,
   PACKED_INSTALL_NATIVE_HOOK_SMOKE_EVENTS,
   PACKED_INSTALL_SMOKE_CORE_COMMANDS,
-  parseNpmPackJsonOutput,
+  parsePnpmPackTarballPath,
   resolveGitCommonDir,
   resolveReusableNodeModulesSource,
   validateHookStdout,
@@ -61,18 +61,14 @@ test('packed install native hook stdout validation allows empty or JSON output o
   );
 });
 
-test('parseNpmPackJsonOutput ignores prepack logs before npm pack JSON', () => {
-  const parsed = parseNpmPackJsonOutput([
+test('parsePnpmPackTarballPath ignores prepack logs before the pnpm pack tarball path', () => {
+  const parsed = parsePnpmPackTarballPath([
     '[sync-plugin-mirror] synced 29 canonical skill directories and plugin metadata',
-    '[',
-    '  {',
-    '    "filename": "oh-my-codex-0.15.0.tgz"',
-    '  }',
-    ']',
+    '/tmp/oh-my-codex/oh-my-codex-0.15.0.tgz',
     '',
   ].join('\n'));
 
-  assert.deepEqual(parsed, [{ filename: 'oh-my-codex-0.15.0.tgz' }]);
+  assert.equal(parsed, '/tmp/oh-my-codex/oh-my-codex-0.15.0.tgz');
 });
 
 test('resolveGitCommonDir resolves relative git common dir output against the repo root', () => {
@@ -169,7 +165,7 @@ test('ensureRepoDependencies symlinks a reusable primary worktree node_modules',
   }
 });
 
-test('ensureRepoDependencies falls back to npm ci when no reusable node_modules source exists', async () => {
+test('ensureRepoDependencies falls back to pnpm install when no reusable node_modules source exists', async () => {
   const root = await mkdtemp(join(tmpdir(), 'omx-smoke-install-node-modules-'));
   try {
     const installs: string[] = [];

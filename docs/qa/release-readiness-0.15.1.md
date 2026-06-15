@@ -24,17 +24,17 @@ Range note: `v0.15.0` exists but is not an ancestor of the current `dev` release
 
 | Gate | Command | Result | Notes |
 | --- | --- | --- | --- |
-| TypeScript build | `npm run build` | PASS | Rebuilt `dist/` after local 0.15.1 bump. |
-| Native agent generation check | `npm run verify:native-agents` | PASS | `verified 20 installable native agents and 33 setup prompt assets`. |
-| Plugin bundle / mirror check | `npm run verify:plugin-bundle` | PASS | `verified 29 canonical skill directories and plugin metadata`. |
-| Lint | `npm run lint` | PASS | `Checked 581 files ... No fixes applied.` |
-| No-unused typecheck | `npm run check:no-unused` | PASS | Completed with exit code `0`. |
-| Focused recent regression lane | `npm run test:recent-bug-regressions:compiled` | PASS | 462 tests passed after local 0.15.1 metadata bump. |
+| TypeScript build | `pnpm run build` | PASS | Rebuilt `dist/` after local 0.15.1 bump. |
+| Native agent generation check | `pnpm run verify:native-agents` | PASS | `verified 20 installable native agents and 33 setup prompt assets`. |
+| Plugin bundle / mirror check | `pnpm run verify:plugin-bundle` | PASS | `verified 29 canonical skill directories and plugin metadata`. |
+| Lint | `pnpm run lint` | PASS | `Checked 581 files ... No fixes applied.` |
+| No-unused typecheck | `pnpm run check:no-unused` | PASS | Completed with exit code `0`. |
+| Focused recent regression lane | `pnpm run test:recent-bug-regressions:compiled` | PASS | 462 tests passed after local 0.15.1 metadata bump. |
 
 ## Known limits / skipped checks
 
-- External GitHub CI, release tag creation, npm publish, and GitHub release publication are intentionally not run by this local prep step.
-- Full `npm test`, packed install smoke, cross-OS manual checks, and Cargo workspace tests are recommended before external publication if GitHub CI is unavailable.
+- External GitHub CI, release tag creation, pnpm publish, and GitHub release publication are intentionally not run by this local prep step.
+- Full `pnpm test`, packed install smoke, cross-OS manual checks, and Cargo workspace tests are recommended before external publication if GitHub CI is unavailable.
 
 ## Verdict
 

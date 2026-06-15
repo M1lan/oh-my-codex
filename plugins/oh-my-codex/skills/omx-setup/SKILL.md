@@ -121,7 +121,7 @@ From `omx doctor`, expect:
 - If using local source changes, run build first:
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 - If your global `omx` points to another install, run local entrypoint:

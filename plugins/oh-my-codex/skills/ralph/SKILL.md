@@ -160,8 +160,8 @@ Why good: Three independent tasks fired simultaneously while explicitly selectin
 <Good>
 Correct verification before completion:
 ```
-1. Run: npm test           → Output: "42 passed, 0 failed"
-2. Run: npm run build      → Output: "Build succeeded"
+1. Run: pnpm test           → Output: "42 passed, 0 failed"
+2. Run: pnpm run build      → Output: "Build succeeded"
 3. Run: lsp_diagnostics    → Output: 0 errors
 4. task(agent_type="architect", reasoning_effort="medium", prompt="verify completion") → Verdict: "APPROVED"
 5. Run /cancel
@@ -279,7 +279,7 @@ Workflow: Detect flag, extract task, create `.omx/plans/prd-{slug}.md`, create `
 ## Background Execution Rules
 
 **Run in background** (`run_in_background: true`):
-- Package installation (npm install, pip install, cargo build)
+- Package installation (pnpm install, pip install, cargo build)
 - Build processes (make, project build commands)
 - Test suites
 - Docker operations (docker build, docker pull)

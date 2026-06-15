@@ -103,7 +103,7 @@ export async function runTscDiagnostics(
   const args = ['--noEmit', '--pretty', 'false'];
   args.push('--project', tsconfig);
 
-  const { stdout, stderr } = await runCommand('npx', ['tsc', ...args], { cwd: projectDir, timeout: 60000 });
+  const { stdout, stderr } = await runCommand('pnpm', ['exec', 'tsc', ...args], { cwd: projectDir, timeout: 60000 });
   const output = stdout + '\n' + stderr;
   let diagnostics = parseTscOutput(output, projectDir);
 
@@ -117,7 +117,7 @@ export async function runTscDiagnostics(
     // tsc only emits errors, so warning/info/hint filters return empty
   }
 
-  return { diagnostics, command: `npx tsc ${args.join(' ')}` };
+  return { diagnostics, command: `pnpm exec tsc ${args.join(' ')}` };
 }
 
 // ── Symbol extraction (regex-based) ─────────────────────────────────────────
@@ -192,10 +192,10 @@ async function findSgBinary(): Promise<string | null> {
       process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
     }
   }
-  // Try npx
+  // Try pnpm dlx
   try {
-    await execFileAsync('npx', ['@ast-grep/cli', '--version'], { timeout: 15000 });
-    return 'npx-ast-grep';
+    await execFileAsync('pnpm', ['dlx', '@ast-grep/cli', '--version'], { timeout: 15000 });
+    return 'pnpm-dlx-ast-grep';
   } catch (err) {
     process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
   }
@@ -240,13 +240,13 @@ async function runAstGrep(
 ): Promise<{ matches: unknown[]; command: string }> {
   const sg = await findSgBinary();
   if (!sg) {
-    return { matches: [], command: 'ast-grep not installed. Install: npm i -g @ast-grep/cli' };
+    return { matches: [], command: 'ast-grep not installed. Install: pnpm add -g @ast-grep/cli' };
   }
 
   const args: string[] = [];
-  const cmd = sg === 'npx-ast-grep' ? 'npx' : sg;
-  if (sg === 'npx-ast-grep') {
-    args.push('--yes', '@ast-grep/cli');
+  const cmd = sg === 'pnpm-dlx-ast-grep' ? 'pnpm' : sg;
+  if (sg === 'pnpm-dlx-ast-grep') {
+    args.push('dlx', '@ast-grep/cli');
   }
 
   args.push(...buildAstGrepRunArgs(pattern, language, options));
@@ -619,18 +619,18 @@ export async function handleCodeIntelToolCall(request: {
       const checks: Record<string, { available: boolean; version?: string; note?: string }> = {};
       // Check tsc
       try {
-        const { stdout } = await exec('npx', ['tsc', '--version'], { timeout: 10000 });
+        const { stdout } = await exec('pnpm', ['exec', 'tsc', '--version'], { timeout: 10000 });
         checks['typescript'] = { available: true, version: stdout.trim() };
       } catch (err) {
         process.stderr.write(`[code-intel-server] operation failed: ${err}\n`);
-        checks['typescript'] = { available: false, note: 'Install: npm i -D typescript' };
+        checks['typescript'] = { available: false, note: 'Install: pnpm add -D typescript' };
       }
       // Check ast-grep
       const sg = await findSgBinary();
       if (sg) {
         checks['ast-grep'] = { available: true, version: sg };
       } else {
-        checks['ast-grep'] = { available: false, note: 'Install: npm i -g @ast-grep/cli' };
+        checks['ast-grep'] = { available: false, note: 'Install: pnpm add -g @ast-grep/cli' };
       }
       // Check grep
       try {
