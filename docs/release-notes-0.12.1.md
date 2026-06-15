@@ -15,12 +15,12 @@
 
 ## Verification evidence
 
-- `npm run build` ✅
-- `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json` ✅
+- `pnpm run build` ✅
+- `pnpm dlx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json` ✅
 - `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js` ✅
 - `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js` ✅
 - `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run smoke:packed-install` ✅
 
 ## Remaining risk
 

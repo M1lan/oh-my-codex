@@ -25,11 +25,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Verify version sync against workspace crates
         shell: bash
         run: |
@@ -161,13 +162,14 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: release-artifacts
+      - uses: pnpm/action-setup@v4
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -225,12 +227,13 @@ jobs:
         with:
           name: native-release-assets
           path: release-assets
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - name: Verify release archives and manifest
         run: node dist/scripts/verify-native-release-assets.js --manifest release-assets/native-release-manifest.json --artifacts-dir release-assets
 
@@ -241,28 +244,30 @@ jobs:
     needs: [smoke-verify-native]
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - name: Smoke test packed install boot + core commands
-        run: npm run smoke:packed-install
+        run: pnpm run smoke:packed-install
 
-  publish-npm:
-    name: Publish npm Package
+  publish-package:
+    name: Publish Package (pnpm)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     needs: [smoke-packed-install]
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Verify version sync against workspace crates
         shell: bash
         run: |
@@ -319,7 +324,7 @@ jobs:
 
           console.log(`[version-sync] OK package=${pkg.version} workspace=${workspace.workspace?.package?.version} tag=${tag ?? ''}`.trim());
           EOF
-      - run: npm pack --dry-run
-      - run: npm publish --access public --provenance
+      - run: pnpm pack
+      - run: pnpm publish --access public --provenance --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

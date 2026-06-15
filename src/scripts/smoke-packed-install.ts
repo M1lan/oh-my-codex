@@ -2,6 +2,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,7 +40,7 @@ function usage(): string {
   return [
     'Usage: node scripts/smoke-packed-install.mjs',
     '',
-    'Creates an npm tarball, installs it into an isolated prefix, and smoke tests the installed omx CLI.',
+    'Creates a pnpm tarball, installs it into an isolated host project, and smoke tests the installed omx CLI.',
     'Release smoke stays intentionally minimal: install + boot + 1-2 core commands only.',
   ].join('\n');
 }
@@ -68,13 +69,13 @@ export function ensureRepoDependencies(repoRoot: string, options: EnsureRepoDeps
   const {
     gitRunner = spawnSync,
     install = (cwd: string) => {
-      const result = spawnSync('npm', ['ci'], {
+      const result = spawnSync('pnpm', ['install', '--frozen-lockfile'], {
         cwd,
         encoding: 'utf-8',
         stdio: 'pipe',
       });
       if (result.status !== 0) {
-        throw new Error(formatCommandFailure('npm', ['ci'], result));
+        throw new Error(formatCommandFailure('pnpm', ['install', '--frozen-lockfile'], result));
       }
     },
     log = () => {},
@@ -89,7 +90,7 @@ export function ensureRepoDependencies(repoRoot: string, options: EnsureRepoDeps
     return reusable;
   }
 
-  log('[smoke:packed-install] Installing repo dependencies with npm ci');
+  log('[smoke:packed-install] Installing repo dependencies with pnpm install --frozen-lockfile');
   install(repoRoot);
   return {
     strategy: 'installed',
@@ -119,15 +120,8 @@ function run(cmd: string, args: readonly string[], options: Record<string, unkno
   return result;
 }
 
-function npmBinName(name: string): string {
+function binName(name: string): string {
   return process.platform === 'win32' ? `${name}.cmd` : name;
-}
-
-function resolveGlobalNodeModules(prefixDir: string): string {
-  const result = run('npm', ['root', '-g', '--prefix', prefixDir], { cwd: prefixDir });
-  const root = String(result.stdout || '').trim();
-  if (!root) throw new Error('npm root -g did not return a node_modules directory');
-  return root;
 }
 
 export function validateHookStdout(eventName: string, stdout: string): void {
@@ -189,9 +183,8 @@ export function buildNativeHookSmokePayload(
   }
 }
 
-function smokeInstalledNativeHookDist(prefixDir: string): void {
-  const globalNodeModules = resolveGlobalNodeModules(prefixDir);
-  const packageRoot = join(globalNodeModules, 'oh-my-codex');
+function smokeInstalledNativeHookDist(installDir: string): void {
+  const packageRoot = join(installDir, 'node_modules', 'oh-my-codex');
   const hookScript = join(packageRoot, 'dist', 'scripts', 'codex-native-hook.js');
   const smokeCwd = mkdtempSync(join(tmpdir(), 'omx-packed-hook-smoke-'));
   try {
@@ -216,13 +209,17 @@ function smokeInstalledNativeHookDist(prefixDir: string): void {
   }
 }
 
-export function parseNpmPackJsonOutput(stdout: string): Array<{ filename: string }> {
-  const start = stdout.lastIndexOf('\n[');
-  const jsonText = (start >= 0 ? stdout.slice(start + 1) : stdout).trim();
-  if (!jsonText.startsWith('[')) {
-    throw new Error(`npm pack did not return JSON output: ${stdout.trim()}`);
+export function parsePnpmPackTarballPath(stdout: string): string {
+  const lines = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].endsWith('.tgz')) {
+      return lines[i];
+    }
   }
-  return JSON.parse(jsonText) as Array<{ filename: string }>;
+  throw new Error(`pnpm pack did not return a tarball path: ${stdout.trim()}`);
 }
 
 async function main(): Promise<void> {
@@ -230,8 +227,12 @@ async function main(): Promise<void> {
 
   const repoRoot = process.cwd();
   const tempRoot = mkdtempSync(join(tmpdir(), 'omx-packed-install-'));
-  const prefixDir = join(tempRoot, 'prefix');
-  mkdirSync(prefixDir, { recursive: true });
+  const installDir = join(tempRoot, 'host');
+  mkdirSync(installDir, { recursive: true });
+  writeFileSync(
+    join(installDir, 'package.json'),
+    `${JSON.stringify({ name: 'omx-packed-install-smoke-host', version: '0.0.0', private: true }, null, 2)}\n`,
+  );
 
   let tarballPath: string | undefined;
   try {
@@ -239,19 +240,16 @@ async function main(): Promise<void> {
       log: (message: string) => console.log(message),
     });
 
-    const pack = run('npm', ['pack', '--json'], { cwd: repoRoot });
-    const packOutput = parseNpmPackJsonOutput(pack.stdout as string);
-    const tarballName = packOutput[0]?.filename;
-    if (!tarballName) throw new Error('npm pack did not return a tarball filename');
-    tarballPath = join(repoRoot, tarballName);
+    const pack = run('pnpm', ['pack'], { cwd: repoRoot });
+    tarballPath = parsePnpmPackTarballPath(pack.stdout as string);
 
-    run('npm', ['install', '-g', tarballPath, '--prefix', prefixDir], { cwd: repoRoot });
+    run('pnpm', ['--dir', installDir, 'add', tarballPath, '--ignore-workspace'], { cwd: installDir });
 
-    const omxPath = join(prefixDir, process.platform === 'win32' ? '' : 'bin', npmBinName('omx'));
+    const omxPath = join(installDir, 'node_modules', '.bin', binName('omx'));
     for (const argv of PACKED_INSTALL_SMOKE_CORE_COMMANDS) {
       run(omxPath, argv, { cwd: repoRoot });
     }
-    smokeInstalledNativeHookDist(prefixDir);
+    smokeInstalledNativeHookDist(installDir);
 
     console.log('packed install smoke: PASS');
   } finally {

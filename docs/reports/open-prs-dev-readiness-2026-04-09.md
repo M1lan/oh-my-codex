@@ -15,7 +15,7 @@ Push run `24141814673` on `dev` finished red because long jobs were cancelled, n
 
 | PR | Summary | Current checks | Merge blockers | Recommendation |
 | --- | --- | --- | --- | --- |
-| #1403 | Shared-session shutdown hardening + regression coverage | Fast checks mostly green, but both Typecheck jobs failed in run `24173665271`; full Node 20 suite still running | **Hard blocker:** `npm run check:no-unused` fails locally on PR head `e802eff1` with `src/team/runtime.ts(20,3): error TS6133: 'isNativeWindows' is declared but its value is never read.` | **Do not merge yet.** Fix unused import, rerun PR CI, then reassess. |
+| #1403 | Shared-session shutdown hardening + regression coverage | Fast checks mostly green, but both Typecheck jobs failed in run `24173665271`; full Node 20 suite still running | **Hard blocker:** `pnpm run check:no-unused` fails locally on PR head `e802eff1` with `src/team/runtime.ts(20,3): error TS6133: 'isNativeWindows' is declared but its value is never read.` | **Do not merge yet.** Fix unused import, rerun PR CI, then reassess. |
 | #1402 | tmux HUD self-healing / prompt-submit reconcile | Lint, typecheck, smoke, rust coverage, team coverage gate passed; full Node 20 and TS full coverage still pending | Pending long jobs; touches `src/cli`, `src/hud`, and native-hook operational events, so I would not merge before `dev` CI is green | **Good candidate once long jobs finish green and `dev` is green.** Recommended ahead of docs-only work. |
 | #1400 | Unknown `$token` duplicate continuation + stale Ralph state fix | Lint, typecheck, smoke, rust coverage, team coverage gate passed; full Node 20 and TS full coverage still pending | Pending long jobs; overlaps `src/scripts/codex-native-hook.ts` and its tests with #1380 | **Merge after #1380 is in `dev`, then rebase/retest.** Otherwise likely conflict/re-review churn. |
 | #1382 | Stale team worktree cleanup at startup | PR is open, but its head commit `e5f9ffe7...` is already an ancestor of current `dev` head | No merge work left; CI Status failure is stale noise from cancelled long jobs on an already-landed change | **Close as stale/already merged.** No merge needed. |
@@ -38,6 +38,6 @@ Push run `24141814673` on `dev` finished red because long jobs were cancelled, n
 - `gh pr diff --name-only` for overlap checks.
 - `git rev-list --left-right --count dev...pr-<n>` and `git merge-base dev pr-1382` for ancestry / already-merged detection.
 - Local PR verification for #1403 in `/tmp/worker3-pr1403`:
-  - `npm ci`
-  - `npm run build`
-  - `npm run check:no-unused` → unused import failure in `src/team/runtime.ts`.
+  - `pnpm install --frozen-lockfile`
+  - `pnpm run build`
+  - `pnpm run check:no-unused` → unused import failure in `src/team/runtime.ts`.

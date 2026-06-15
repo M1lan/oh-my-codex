@@ -59,14 +59,14 @@
 ## Validation evidence
 
 - `git merge-base --is-ancestor v0.17.3 dev` — PASS.
-- `npm run build`
-- `npm run lint`
-- `npm run check:no-unused`
+- `pnpm run build`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
 - `node --test dist/cli/__tests__/version-sync-contract.test.js dist/cli/__tests__/api.test.js`
-- `npm run verify:native-agents`
-- `npm run verify:plugin-bundle`
-- `npm run build:full`
-- `npm run smoke:packed-install`
+- `pnpm run verify:native-agents`
+- `pnpm run verify:plugin-bundle`
+- `pnpm run build:full`
+- `pnpm run smoke:packed-install`
 - `cargo fmt --all --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test -p omx-api -p omx-sparkshell -p omx-explore-harness`

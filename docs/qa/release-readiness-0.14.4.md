@@ -22,7 +22,7 @@ Candidate branch: `hotrelease/0.14.4-gpt55`
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| TypeScript build | `npm run build` | PASS |
+| TypeScript build | `pnpm run build` | PASS |
 | Targeted model/default suites | `node --test dist/agents/__tests__/definitions.test.js dist/agents/__tests__/native-config.test.js dist/team/__tests__/model-contract.test.js dist/utils/__tests__/agents-model-table.test.js dist/cli/__tests__/setup-agents-overwrite.test.js` | PASS |
 | Targeted executor launch defaults | `node --test --test-name-pattern=... dist/team/__tests__/runtime.test.js` | PASS |
 | Scope check | `git diff --name-status v0.14.3..HEAD` plus plugin-path grep | PASS |

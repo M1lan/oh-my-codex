@@ -78,9 +78,9 @@ Release validation also hardened a flaky watcher test so the full suite reliably
 Release verification evidence is recorded in `docs/qa/release-readiness-0.8.3.md`.
 
 Planned release gates:
-- `npm run build`
-- `npm test`
-- `npm run check:no-unused`
+- `pnpm run build`
+- `pnpm test`
+- `pnpm run check:no-unused`
 - CLI smoke checks (`--help`, `version`, `status`, `doctor`, `setup --dry-run`, `cancel`)
 - Gemini-targeted regression checks from PR `#585`
 

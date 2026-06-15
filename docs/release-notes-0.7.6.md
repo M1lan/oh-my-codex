@@ -41,18 +41,18 @@ This release note is based strictly on:
 - Revert for visual-verdict guidance restoration change followed by path normalization fix.
 
 ### Verification for release readiness
-- [x] `npm run build` passes
-- [x] `npm test` passes
-- [x] `npm run check:no-unused` passes
+- [x] `pnpm run build` passes
+- [x] `pnpm test` passes
+- [x] `pnpm run check:no-unused` passes
 - [x] smoke checks from `DEMO.md` pass (or are documented if environment-limited)
 
 ### Smoke verification evidence (2026-03-02)
 
 | Command | Exit | Evidence |
 |---|---:|---|
-| `npm run build` | 0 | build completed |
-| `npm test` | 0 | test pipeline completed |
-| `npm run check:no-unused` | 0 | `tsc -p tsconfig.no-unused.json` succeeded |
+| `pnpm run build` | 0 | build completed |
+| `pnpm test` | 0 | test pipeline completed |
+| `pnpm run check:no-unused` | 0 | `tsc -p tsconfig.no-unused.json` succeeded |
 | `node bin/omx.js --help` | 0 | CLI usage rendered |
 | `node bin/omx.js doctor` | 0 | `Results: 9 passed, 0 warnings, 0 failed` |
 | `node bin/omx.js version` | 0 | `oh-my-codex v0.7.6` |

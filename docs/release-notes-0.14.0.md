@@ -24,7 +24,7 @@
 - Autoresearch CLI entry is hard-deprecated in favor of `$deep-interview --autoresearch` and `$autoresearch`.
 - Runtime run outcomes are normalized into shared terminal/non-terminal semantics.
 - Specialist routing guidance and role-router ownership boundaries are tighter.
-- `npm run lint` now runs `biome lint src bin`.
+- `pnpm run lint` now runs `biome lint src bin`.
 
 ## Fixed
 
@@ -36,14 +36,14 @@
 
 Release verification evidence is recorded in `docs/qa/release-readiness-0.14.0.md`.
 
-- `npm run build` ✅
-- `npm run lint` ✅
-- `npx tsc --noEmit --pretty false --project tsconfig.json` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
+- `pnpm dlx tsc --noEmit --pretty false --project tsconfig.json` ✅
 - Affected interactive/runtime regression suites ✅
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
 - `node dist/scripts/generate-catalog-docs.js --check` ✅
-- `npm run smoke:packed-install` ✅
-- `npm pack --dry-run` ✅
+- `pnpm run smoke:packed-install` ✅
+- `pnpm pack --dry-run` ✅
 
 ## Remaining risk
 

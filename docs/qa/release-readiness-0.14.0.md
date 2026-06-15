@@ -31,15 +31,15 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Lint | `npm run lint` | PASS |
-| TypeScript diagnostics | `npx tsc --noEmit --pretty false --project tsconfig.json` | PASS |
+| Build | `pnpm run build` | PASS |
+| Lint | `pnpm run lint` | PASS |
+| TypeScript diagnostics | `pnpm dlx tsc --noEmit --pretty false --project tsconfig.json` | PASS |
 | Affected interactive/runtime suites | `node --test dist/cli/__tests__/question.test.js dist/question/__tests__/deep-interview.test.js dist/question/__tests__/renderer.test.js dist/question/__tests__/ui.test.js dist/cli/__tests__/autoresearch-guided.test.js dist/autoresearch/__tests__/skill-validation.test.js dist/hooks/__tests__/keyword-detector.test.js dist/hooks/__tests__/triage-heuristic.test.js dist/hooks/__tests__/triage-state.test.js dist/runtime/__tests__/run-outcome.test.js dist/runtime/__tests__/run-loop.test.js dist/scripts/__tests__/codex-native-hook.test.js dist/team/__tests__/role-router.test.js dist/cli/__tests__/question-helpers.test.js dist/question/__tests__/policy.test.js` | PASS |
 | Secondary affected coverage | `node --test dist/catalog/__tests__/schema.test.js dist/catalog/__tests__/generator.test.js dist/cli/__tests__/autoresearch.test.js dist/hooks/__tests__/analyze-routing-contract.test.js dist/hooks/__tests__/analyze-skill-contract.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/hooks/__tests__/notify-hook-auto-nudge.test.js dist/hooks/__tests__/notify-hook-cross-worktree.test.js dist/hooks/__tests__/notify-hook-managed-tmux.test.js dist/hooks/__tests__/notify-hook-ralph-resume.test.js dist/hooks/__tests__/notify-hook-tmux-heal.test.js dist/prompts/__tests__/guidance-contract.test.js dist/prompts/__tests__/orchestration-boundary-contract.test.js dist/prompts/__tests__/team-routing-contract.test.js` | PASS |
 | Version sync contract | `node --test dist/cli/__tests__/version-sync-contract.test.js` | PASS |
 | Catalog drift check | `node dist/scripts/generate-catalog-docs.js --check` | PASS |
-| Packed-install smoke | `npm run smoke:packed-install` | PASS |
-| Publish-path packaging | `npm pack --dry-run` | PASS |
+| Packed-install smoke | `pnpm run smoke:packed-install` | PASS |
+| Publish-path packaging | `pnpm pack --dry-run` | PASS |
 
 ## Risk assessment
 

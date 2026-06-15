@@ -48,13 +48,13 @@
 
 Commands were run from the `omx-release-0.18.11` release worktree.
 
-- [x] `npm ci` — PASS, `.omx/release-0.18.11/logs/npm-ci.log`.
-- [x] `npm run build` — PASS, `.omx/release-0.18.11/logs/build.log`.
+- [x] `pnpm install --frozen-lockfile` — PASS, `.omx/release-0.18.11/logs/npm-ci.log`.
+- [x] `pnpm run build` — PASS, `.omx/release-0.18.11/logs/build.log`.
 - [x] `node dist/scripts/check-version-sync.js --tag v0.18.11` — PASS, `.omx/release-0.18.11/logs/version-sync.log`.
 - [x] `node dist/cli/omx.js --help` — PASS, `.omx/release-0.18.11/logs/cli-help.log`.
 - [x] `node dist/cli/omx.js doctor` — PASS (13 passed, 4 environment-specific warnings, 0 failed), `.omx/release-0.18.11/logs/cli-doctor.log`.
-- [x] `npm pack --dry-run` — PASS, `.omx/release-0.18.11/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.11.tgz`, package size `3.9 MB`, unpacked size `24.2 MB`, `3049` files).
-- [x] `npm run smoke:packed-install` — PASS, `.omx/release-0.18.11/logs/smoke-packed-install.log`.
+- [x] `pnpm pack --dry-run` — PASS, `.omx/release-0.18.11/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.11.tgz`, package size `3.9 MB`, unpacked size `24.2 MB`, `3049` files).
+- [x] `pnpm run smoke:packed-install` — PASS, `.omx/release-0.18.11/logs/smoke-packed-install.log`.
 - [x] `git diff --check` — PASS, `.omx/release-0.18.11/logs/git-diff-check.log`.
 - [x] `node dist/scripts/generate-release-body.js ... --current-tag v0.18.11 --previous-tag v0.18.10` — validated against a local annotated `v0.18.11` tag at the release-prep commit; generated body retains the full compare-range PR inventory, the `## Contributors` section, and the `**Full Changelog**: v0.18.10...v0.18.11` line.
 

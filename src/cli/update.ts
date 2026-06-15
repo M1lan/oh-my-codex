@@ -3,12 +3,12 @@
  *
  * The launch-time checker is intentionally passive, non-fatal, and throttled.
  * The explicit `omx update` command uses the same executor but bypasses the
- * launch-time cadence so a user request always checks npm immediately.
+ * launch-time cadence so a user request always checks the registry immediately.
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
 import { spawn, spawnSync } from 'child_process';
 import { createInterface } from 'readline/promises';
@@ -168,15 +168,15 @@ function isEnoentSpawnError(error: unknown): boolean {
   );
 }
 
-function spawnNpmSync(
+function spawnPnpmSync(
   args: string[],
   options: SpawnSyncOptions,
   spawnProcess: SpawnSyncLike = spawnSync,
   platform: NodeJS.Platform = process.platform,
 ): ReturnType<SpawnSyncLike> {
-  const result = spawnProcess('npm', args, options);
+  const result = spawnProcess('pnpm', args, options);
   if (platform === 'win32' && isEnoentSpawnError(result.error)) {
-    return spawnProcess('npm.cmd', args, options);
+    return spawnProcess('pnpm.cmd', args, options);
   }
   return result;
 }
@@ -230,15 +230,12 @@ function runDevGlobalUpdate(
       ? String(clonedRevision).slice(0, 12)
       : null;
 
-    const installResult = spawnNpmSync(
+    const installResult = spawnPnpmSync(
       [
         'install',
-        '--global=false',
-        '--location=project',
-        '--include=dev',
+        '--config.global=false',
+        '--prod=false',
         '--ignore-scripts',
-        '--no-audit',
-        '--no-progress',
       ],
       {
         cwd: checkoutDir,
@@ -253,10 +250,10 @@ function runDevGlobalUpdate(
     );
     if (installResult.error) return { ok: false, stderr: installResult.error.message };
     if (installResult.status !== 0) {
-      return commandFailure(installResult.stderr, installResult.status, 'npm install --include=dev');
+      return commandFailure(installResult.stderr, installResult.status, 'pnpm install');
     }
 
-    const prepackResult = spawnNpmSync(
+    const prepackResult = spawnPnpmSync(
       ['run', 'prepack'],
       {
         cwd: checkoutDir,
@@ -270,11 +267,11 @@ function runDevGlobalUpdate(
     );
     if (prepackResult.error) return { ok: false, stderr: prepackResult.error.message };
     if (prepackResult.status !== 0) {
-      return commandFailure(prepackResult.stderr, prepackResult.status, 'npm run prepack');
+      return commandFailure(prepackResult.stderr, prepackResult.status, 'pnpm run prepack');
     }
 
-    const packResult = spawnNpmSync(
-      ['pack', '--ignore-scripts', '--json'],
+    const packResult = spawnPnpmSync(
+      ['pack'],
       {
         cwd: checkoutDir,
         encoding: 'utf-8',
@@ -287,25 +284,30 @@ function runDevGlobalUpdate(
     );
     if (packResult.error) return { ok: false, stderr: packResult.error.message };
     if (packResult.status !== 0) {
-      return commandFailure(packResult.stderr, packResult.status, 'npm pack');
+      return commandFailure(packResult.stderr, packResult.status, 'pnpm pack');
     }
 
     let tarballPath: string | null = null;
     try {
-      const packed = JSON.parse(String(packResult.stdout || '[]')) as Array<{ filename?: string }>;
-      const filename = packed[0]?.filename;
-      if (typeof filename === 'string' && filename.trim() !== '') {
-        tarballPath = join(checkoutDir, filename);
+      // `pnpm pack` prints the created tarball path as the final stdout line.
+      const filename = String(packResult.stdout || '')
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .pop();
+      if (typeof filename === 'string' && filename !== '') {
+        tarballPath = isAbsolute(filename) ? filename : join(checkoutDir, filename);
       }
     } catch {
       tarballPath = null;
     }
     if (!tarballPath || !existsSync(tarballPath)) {
-      return { ok: false, stderr: 'npm pack did not produce an installable tarball.' };
+      return { ok: false, stderr: 'pnpm pack did not produce an installable tarball.' };
     }
 
-    const globalInstallResult = spawnNpmSync(
-      ['install', '-g', tarballPath],
+    const globalInstallResult = spawnPnpmSync(
+      ['add', '-g', tarballPath],
       {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -319,7 +321,7 @@ function runDevGlobalUpdate(
       return { ok: false, stderr: globalInstallResult.error.message };
     }
     if (globalInstallResult.status !== 0) {
-      return commandFailure(globalInstallResult.stderr, globalInstallResult.status, 'npm install -g dev tarball');
+      return commandFailure(globalInstallResult.stderr, globalInstallResult.status, 'pnpm add -g dev tarball');
     }
 
     return { ok: true, stderr: '', revision: installRevision };
@@ -328,7 +330,7 @@ function runDevGlobalUpdate(
       rmSync(tempRoot, { recursive: true, force: true });
     } catch {
       // Cleanup is best-effort. Do not mask a successful update or the primary
-      // failure from git/npm with a transient temp-directory removal error.
+      // failure from git/pnpm with a transient temp-directory removal error.
     }
   }
 }
@@ -357,8 +359,8 @@ export function runGlobalUpdate(
     return runDevGlobalUpdate(spawnProcess, resolvedPlatform);
   }
 
-  const result = spawnNpmSync(
-    ['install', '-g', installSource],
+  const result = spawnPnpmSync(
+    ['add', '-g', installSource],
     {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -373,7 +375,7 @@ export function runGlobalUpdate(
     return { ok: false, stderr: result.error.message };
   }
   if (result.status !== 0) {
-    return { ok: false, stderr: String(result.stderr || '').trim() || `npm exited ${result.status}` };
+    return { ok: false, stderr: String(result.stderr || '').trim() || `pnpm exited ${result.status}` };
   }
   return { ok: true, stderr: '' };
 }
@@ -461,7 +463,7 @@ export function runDeferredGlobalUpdate(
             '$log = $env:OMX_DEFERRED_UPDATE_LOG',
             '$parentPid = [int]$env:OMX_DEFERRED_UPDATE_PARENT_PID',
             'while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }',
-            'npm install -g oh-my-codex@latest *>> $log',
+            'pnpm add -g oh-my-codex@latest *>> $log',
             `if ($LASTEXITCODE -eq 0) { ${setupCommand} *>> $log }`,
           ].join('; '),
         ]
@@ -469,7 +471,7 @@ export function runDeferredGlobalUpdate(
           '-c',
           [
             'while kill -0 "$OMX_DEFERRED_UPDATE_PARENT_PID" 2>/dev/null; do sleep 1; done',
-            'npm install -g oh-my-codex@latest >> "$OMX_DEFERRED_UPDATE_LOG" 2>&1',
+            'pnpm add -g oh-my-codex@latest >> "$OMX_DEFERRED_UPDATE_LOG" 2>&1',
             `if [ "$?" -eq 0 ]; then ${setupCommand} >> "$OMX_DEFERRED_UPDATE_LOG" 2>&1; fi`,
           ].join('; '),
         ];
@@ -508,7 +510,7 @@ function formatDeferredUpdateFailure(stderr: string, logPath?: string): string {
     '[omx] Failed to schedule the deferred update.',
     stderr.trim() ? `[omx] scheduler error: ${stderr.trim()}` : undefined,
     logPath ? `[omx] Intended log: ${logPath}` : undefined,
-    '[omx] You can retry manually with: npm install -g oh-my-codex@latest && omx setup',
+    '[omx] You can retry manually with: pnpm add -g oh-my-codex@latest && omx setup',
   ].filter((line): line is string => typeof line === 'string').join('\n');
 }
 
@@ -527,10 +529,10 @@ function summarizeUpdateFailure(
     ].filter((line): line is string => typeof line === 'string').join('\n');
   }
   return [
-    `[omx] Update failed while running npm install -g ${installSource}.`,
-    details ? `[omx] npm stderr: ${details}` : undefined,
+    `[omx] Update failed while running pnpm add -g ${installSource}.`,
+    details ? `[omx] pnpm stderr: ${details}` : undefined,
     logPath ? `[omx] Full log: ${logPath}` : undefined,
-    `[omx] You can retry manually with: npm install -g ${installSource} && omx setup`,
+    `[omx] You can retry manually with: pnpm add -g ${installSource} && omx setup`,
   ].filter((line): line is string => typeof line === 'string').join('\n');
 }
 
@@ -681,7 +683,7 @@ export function resolveGlobalInstallRoot(
   spawnProcess: SpawnSyncLike = spawnSync,
   platform: NodeJS.Platform = process.platform,
 ): string | null {
-  const result = spawnNpmSync(
+  const result = spawnPnpmSync(
     ['root', '-g'],
     {
       encoding: 'utf-8',
@@ -789,7 +791,7 @@ async function runSetupRefresh(cwd: string): Promise<RunSetupRefreshResult> {
   if (!globalInstallRoot) {
     return {
       ok: false,
-      stderr: 'Unable to resolve the npm global install root after updating.',
+      stderr: 'Unable to resolve the pnpm global install root after updating.',
     };
   }
 
@@ -903,9 +905,9 @@ async function executeUpdate(
   console.log(`[omx] Selected update channel: ${channelConfig.channel}`);
   console.log(`[omx] Install source: ${channelConfig.installSource}`);
   if (channelConfig.channel === 'dev') {
-    console.log('[omx] Running: clone dev branch, run prepack, then npm install -g the packed tarball');
+    console.log('[omx] Running: clone dev branch, run prepack, then pnpm add -g the packed tarball');
   } else {
-    console.log(`[omx] Running: npm install -g ${channelConfig.installSource}`);
+    console.log(`[omx] Running: pnpm add -g ${channelConfig.installSource}`);
   }
   const result = dependencies.runGlobalUpdate(channelConfig.installSource);
 

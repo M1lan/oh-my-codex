@@ -39,21 +39,21 @@
 Completed final gates for this cut:
 
 - [x] Release workflow version-sync probe — PASS (`package=0.18.4`, `workspace=0.18.4`, `tag=v0.18.4`). Log: `.omx/logs/release-0.18.4-workflow-version-sync.log`.
-- [x] `npm run build` — PASS. Log: `.omx/logs/release-0.18.4-build.log`.
-- [x] `npm run lint` — PASS (`Checked 681 files`, no fixes applied). Log: `.omx/logs/release-0.18.4-lint.log`.
-- [x] `npm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.4-no-unused.log`.
-- [x] `npm run verify:native-agents` — PASS (`22` installable native agents, `37` setup prompt assets). Log: `.omx/logs/release-0.18.4-verify-native-agents.log`.
-- [x] `npm run sync:plugin` — PASS (`29` canonical skill directories and plugin metadata synced). Log: `.omx/logs/release-0.18.4-sync-plugin.log`.
-- [x] `npm run verify:plugin-bundle` — PASS (`29` canonical skill directories and plugin metadata verified). Log: `.omx/logs/release-0.18.4-verify-plugin-bundle.log`.
+- [x] `pnpm run build` — PASS. Log: `.omx/logs/release-0.18.4-build.log`.
+- [x] `pnpm run lint` — PASS (`Checked 681 files`, no fixes applied). Log: `.omx/logs/release-0.18.4-lint.log`.
+- [x] `pnpm run check:no-unused` — PASS. Log: `.omx/logs/release-0.18.4-no-unused.log`.
+- [x] `pnpm run verify:native-agents` — PASS (`22` installable native agents, `37` setup prompt assets). Log: `.omx/logs/release-0.18.4-verify-native-agents.log`.
+- [x] `pnpm run sync:plugin` — PASS (`29` canonical skill directories and plugin metadata synced). Log: `.omx/logs/release-0.18.4-sync-plugin.log`.
+- [x] `pnpm run verify:plugin-bundle` — PASS (`29` canonical skill directories and plugin metadata verified). Log: `.omx/logs/release-0.18.4-verify-plugin-bundle.log`.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS (`catalog check ok`). Log: `.omx/logs/release-0.18.4-catalog-docs-check.log`.
 - [x] `git diff --check` — PASS. Log: `.omx/logs/release-0.18.4-diff-check.log`.
-- [x] `npm pack --dry-run` — PASS (`oh-my-codex-0.18.4.tgz`, package size `3.6 MB`, unpacked size `22.1 MB`, `2974` files). Log: `.omx/logs/release-0.18.4-npm-pack-dry-run.log`.
+- [x] `pnpm pack --dry-run` — PASS (`oh-my-codex-0.18.4.tgz`, package size `3.6 MB`, unpacked size `22.1 MB`, `2974` files). Log: `.omx/logs/release-0.18.4-npm-pack-dry-run.log`.
 
 ## No-publish / no-tag evidence before final tag
 
 - `git tag --list 'v0.18.4'` showed no local `v0.18.4` tag before tagging.
 - `git tag --points-at HEAD` showed no tag at the release-prep worktree HEAD before the release commit.
-- No `npm publish` command was run by local prep; publication is delegated to the release workflow after `v0.18.4` tag push.
+- No `pnpm publish` command was run by local prep; publication is delegated to the release workflow after `v0.18.4` tag push.
 
 ## External release actions
 

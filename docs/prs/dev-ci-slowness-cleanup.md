@@ -16,14 +16,14 @@ The CI workflow was doing repeated dependency install, typecheck, build, and rep
 ## Validation
 
 - [x] `python3 - <<'PY' ... yaml.safe_load('.github/workflows/ci.yml') ... PY` — parsed the workflow successfully and confirmed job metadata is present.
-- [x] `npx tsc --noEmit` — TypeScript check passed.
-- [x] `npm run check:no-unused` — no-unused TypeScript check passed.
-- [x] `npm run lint` — Biome lint passed for `src`.
-- [x] `npm run build` — compiled `dist` successfully.
+- [x] `pnpm dlx tsc --noEmit` — TypeScript check passed.
+- [x] `pnpm run check:no-unused` — no-unused TypeScript check passed.
+- [x] `pnpm run lint` — Biome lint passed for `src`.
+- [x] `pnpm run build` — compiled `dist` successfully.
 - [x] `node --test dist/verification/__tests__/ci-rust-gates.test.js dist/cli/__tests__/package-bin-contract.test.js` — updated workflow/package contract tests passed, including the required Rust test/coverage-summary gate.
 - [x] `python3 - <<'PY' ... assert workflow job graph ... PY` — confirmed report-only coverage jobs are absent and required gates remain.
-- [ ] `npm test` — not run locally because this PR specifically removes redundant full-suite CI duplication; targeted workflow/package tests plus lint/typecheck/build were run.
-- [ ] `npm run coverage:team-critical:compiled` — not run locally; the team-critical coverage gate remains wired in CI and unchanged semantically.
+- [ ] `pnpm test` — not run locally because this PR specifically removes redundant full-suite CI duplication; targeted workflow/package tests plus lint/typecheck/build were run.
+- [ ] `pnpm run coverage:team-critical:compiled` — not run locally; the team-critical coverage gate remains wired in CI and unchanged semantically.
 - [x] `cargo llvm-cov --workspace --summary-only` and `cargo llvm-cov --manifest-path crates/omx-sparkshell/Cargo.toml --summary-only` — Rust tests and coverage summaries passed locally, including the `omx-sparkshell` manifest path.
 - [ ] `omx doctor` — not needed unless setup/config behavior changes.
 
@@ -37,4 +37,4 @@ The CI workflow was doing repeated dependency install, typecheck, build, and rep
 
 - Preserve the Node 22 smoke lane so the cleanup does not remove all cross-runtime signal.
 - Prefer compiled coverage commands in CI after the build artifact is downloaded; source-level coverage scripts can still build first for local contributor convenience.
-- If a future edit removes `npm ci` from artifact-consuming jobs, confirm every required CLI/dev dependency is available from artifacts or another explicit setup step before merging.
+- If a future edit removes `pnpm install --frozen-lockfile` from artifact-consuming jobs, confirm every required CLI/dev dependency is available from artifacts or another explicit setup step before merging.

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('native release workflow', () => {
-  it('defines a unified tag workflow that publishes both Rust binaries before npm publish', () => {
+  it('defines a unified tag workflow that publishes both Rust binaries before publishing the package', () => {
     const workflowPath = join(process.cwd(), '.github', 'workflows', 'release.yml');
     assert.equal(existsSync(workflowPath), true, `missing workflow: ${workflowPath}`);
 
@@ -39,9 +39,9 @@ describe('native release workflow', () => {
     assert.match(workflow, /Publish Native Assets/);
     assert.match(workflow, /Smoke Verify Native Assets/);
     assert.match(workflow, /Smoke Test Packed Global Install/);
-    assert.match(workflow, /Publish npm Package/);
+    assert.match(workflow, /Publish Package \(pnpm\)/);
     assert.match(workflow, /needs:\s*\[smoke-packed-install\]/);
-    assert.match(workflow, /npm publish --access public --provenance/);
+    assert.match(workflow, /pnpm publish --access public --provenance/);
     assert.doesNotMatch(workflow, /Older Linux Runtime Proof/);
     assert.doesNotMatch(workflow, /node:20-bullseye/);
     assert.doesNotMatch(workflow, /docker run --rm/);
@@ -53,12 +53,12 @@ describe('native release workflow', () => {
     assert.doesNotMatch(workflow, /--require-no-fallback/);
 
     assert.match(workflow, /verify-version-sync:[\s\S]*Verify version sync against workspace crates[\s\S]*node --input-type=module/);
-    assert.match(workflow, /publish-native-assets:[\s\S]*npm run build[\s\S]*node dist\/scripts\/generate-native-release-manifest\.js/);
+    assert.match(workflow, /publish-native-assets:[\s\S]*pnpm run build[\s\S]*node dist\/scripts\/generate-native-release-manifest\.js/);
     assert.match(workflow, /publish-native-assets:[\s\S]*Generate release body[\s\S]*node dist\/scripts\/generate-release-body\.js --template RELEASE_BODY\.md --out RELEASE_BODY\.generated\.md/);
     assert.match(workflow, /body_path:\s*RELEASE_BODY\.generated\.md/);
-    assert.match(workflow, /smoke-verify-native:[\s\S]*npm run build[\s\S]*node dist\/scripts\/verify-native-release-assets\.js/);
-    assert.match(workflow, /smoke-packed-install:[\s\S]*npm run build[\s\S]*Smoke test packed install boot \+ core commands[\s\S]*npm run smoke:packed-install/);
-    assert.match(workflow, /publish-npm:[\s\S]*Verify version sync against workspace crates[\s\S]*npm pack --dry-run/);
+    assert.match(workflow, /smoke-verify-native:[\s\S]*pnpm run build[\s\S]*node dist\/scripts\/verify-native-release-assets\.js/);
+    assert.match(workflow, /smoke-packed-install:[\s\S]*pnpm run build[\s\S]*Smoke test packed install boot \+ core commands[\s\S]*pnpm run smoke:packed-install/);
+    assert.match(workflow, /publish-package:[\s\S]*Verify version sync against workspace crates[\s\S]*pnpm pack/);
   });
 
   it('keeps cargo-dist Linux targets aligned with musl-first plus glibc fallback assets', () => {

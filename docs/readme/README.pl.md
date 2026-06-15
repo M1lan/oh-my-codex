@@ -30,7 +30,7 @@ Wybierz jedną ścieżkę instalacji. Jeśli Codex CLI jest już zainstalowany (
 
 ```bash
 codex --version
-npm install -g oh-my-codex
+pnpm add -g oh-my-codex
 omx setup
 omx --madmax --high
 ```
@@ -38,8 +38,8 @@ omx --madmax --high
 Jeśli Codex CLI nie jest zainstalowany i chcesz, aby zarządzał nim npm:
 
 ```bash
-npm install -g @openai/codex
-npm install -g oh-my-codex
+pnpm add -g @openai/codex
+pnpm add -g oh-my-codex
 omx setup
 ```
 

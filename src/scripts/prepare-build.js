@@ -12,14 +12,14 @@ if (requiredDistFiles.every((file) => existsSync(file))) {
   process.exit(0);
 }
 
-const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const pnpmBin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const tscBin = process.platform === 'win32'
   ? join(process.cwd(), 'node_modules', '.bin', 'tsc.cmd')
   : join(process.cwd(), 'node_modules', '.bin', 'tsc');
 const nodeModulesDir = join(process.cwd(), 'node_modules');
 
-function runNpm(args, env = process.env) {
-  return spawnSync(npmBin, args, {
+function runPnpm(args, env = process.env) {
+  return spawnSync(pnpmBin, args, {
     cwd: process.cwd(),
     stdio: process.env.npm_config_json === 'true' ? ['inherit', 'ignore', 'inherit'] : 'inherit',
     env,
@@ -41,15 +41,14 @@ let shouldCleanupBootstrappedDependencies = false;
 
 if (!existsSync(tscBin)) {
   const hadNodeModules = existsSync(nodeModulesDir);
-  const installResult = runNpm(
+  const installResult = runPnpm(
     [
       'install',
-      '--global=false',
-      '--location=project',
+      '--config.global=false',
+      '--prod=false',
       '--include=dev',
       '--ignore-scripts',
-      '--no-audit',
-      '--no-progress',
+      '--reporter=silent',
     ],
     {
       ...process.env,
@@ -57,7 +56,7 @@ if (!existsSync(tscBin)) {
       npm_config_location: 'project',
     },
   );
-  exitOnFailure(installResult, 'npm dependency bootstrap');
+  exitOnFailure(installResult, 'pnpm dependency bootstrap');
   shouldCleanupBootstrappedDependencies = !hadNodeModules;
 }
 
@@ -66,12 +65,12 @@ const pathWithLocalBins = [
   process.env.PATH ?? '',
 ].filter(Boolean).join(delimiter);
 
-const buildResult = spawnSync(npmBin, ['run', 'build'], {
+const buildResult = spawnSync(pnpmBin, ['run', 'build'], {
   cwd: process.cwd(),
   stdio: process.env.npm_config_json === 'true' ? ['inherit', 'ignore', 'inherit'] : 'inherit',
   env: { ...process.env, PATH: pathWithLocalBins },
 });
-exitOnFailure(buildResult, 'npm build');
+exitOnFailure(buildResult, 'pnpm build');
 
 if (shouldCleanupBootstrappedDependencies) {
   try {

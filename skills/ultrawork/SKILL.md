@@ -98,7 +98,7 @@ Use the CLI-first state surface (`omx state ... --json`) for ultrawork lifecycle
 Two-track execution with acceptance criteria up front:
 ```
 Acceptance criteria:
-- `npm run build` passes
+- `pnpm run build` passes
 - `node --test dist/scripts/__tests__/codex-native-hook.test.js` passes
 - Manual QA: verify `$ultrawork` activation message still points to the session state file
 

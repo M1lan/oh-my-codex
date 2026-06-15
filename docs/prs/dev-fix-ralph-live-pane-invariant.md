@@ -24,8 +24,8 @@ On current `dev`, the pre-guard tmux-hook target drift path is already absent in
 - makes watcher recovery follow the same live-anchor contract as notify-hook / auto-nudge
 
 ## Validation
-- [x] `npx biome lint src/scripts/notify-hook/managed-tmux.ts src/scripts/notify-fallback-watcher.ts src/scripts/notify-hook/auto-nudge.ts src/hooks/__tests__/notify-hook-managed-tmux.test.ts src/hooks/__tests__/notify-hook-tmux-heal.test.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/hooks/__tests__/notify-hook-auto-nudge.test.ts docs/prs/dev-fix-ralph-live-pane-invariant.md`
-- [x] `npm run build`
+- [x] `pnpm dlx biome lint src/scripts/notify-hook/managed-tmux.ts src/scripts/notify-fallback-watcher.ts src/scripts/notify-hook/auto-nudge.ts src/hooks/__tests__/notify-hook-managed-tmux.test.ts src/hooks/__tests__/notify-hook-tmux-heal.test.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/hooks/__tests__/notify-hook-auto-nudge.test.ts docs/prs/dev-fix-ralph-live-pane-invariant.md`
+- [x] `pnpm run build`
 - [x] `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js dist/hooks/__tests__/notify-hook-auto-nudge.test.js dist/hooks/__tests__/notify-hook-managed-tmux.test.js dist/hooks/__tests__/notify-hook-tmux-heal.test.js`
 
 ## Related

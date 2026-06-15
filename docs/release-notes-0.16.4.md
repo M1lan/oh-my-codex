@@ -36,7 +36,7 @@
 
 ## Validation
 
-- Local release-review gates: `npm run build`, `npm run lint`, `npm run check:no-unused`, `node --test dist/cli/__tests__/version-sync-contract.test.js`, release-focused targeted Node suites, `cargo test`, `npm pack --dry-run`, and `git diff --check`.
+- Local release-review gates: `pnpm run build`, `pnpm run lint`, `pnpm run check:no-unused`, `node --test dist/cli/__tests__/version-sync-contract.test.js`, release-focused targeted Node suites, `cargo test`, `pnpm pack --dry-run`, and `git diff --check`.
 - Release body generation is a pending pre-tag gate tracked in `docs/qa/release-readiness-0.16.4.md`; run `generate-release-body.js` against the local annotated `v0.16.4` tag before pushing the tag.
 - GitHub CI and publication evidence are tracked in `docs/qa/release-readiness-0.16.4.md`; pending gates must be filled after CI, tag workflow, GitHub release, and npm verification complete.
 

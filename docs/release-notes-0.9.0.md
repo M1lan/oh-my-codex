@@ -31,7 +31,7 @@ Representative changes:
 
 For `0.9.0`, the important distribution contract is:
 
-- users can install OMX normally with `npm install -g oh-my-codex`
+- users can install OMX normally with `pnpm add -g oh-my-codex`
 - the npm package intentionally does **not** bundle all native binaries directly
 - tagged releases publish cross-platform native archives for:
   - `omx-explore-harness`
@@ -97,7 +97,7 @@ omx setup --force --scope project
 ```
 
 - Expect `omx explore` and `omx sparkshell` packaged installs to rely on release-asset hydration when no explicit binary override or repo-local artifact is present.
-- `npm pack` intentionally does **not** ship staged native binaries; native archives are attached to the GitHub Release and consumed through the native-asset workflow.
+- `pnpm pack` intentionally does **not** ship staged native binaries; native archives are attached to the GitHub Release and consumed through the native-asset workflow.
 
 ## Compare stats
 

@@ -10,8 +10,8 @@ Describe the problem and why this change is needed.
 
 ## Validation
 
-- [ ] `npm run build`
-- [ ] `npm test`
+- [ ] `pnpm run build`
+- [ ] `pnpm test`
 - [ ] `omx doctor` (when setup/config behavior changes)
 
 ## Checklist

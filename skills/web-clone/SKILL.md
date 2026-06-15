@@ -41,7 +41,7 @@ Playwright MCP server must be available for browser automation.
 2. If no browser tools are found, instruct the user:
    ```
    Playwright MCP is required. Configure it:
-   codex mcp add playwright npx "@playwright/mcp@latest"
+   codex mcp add playwright pnpm dlx "@playwright/mcp@latest"
    ```
 3. Required tools: `browser_navigate`, `browser_snapshot`, `browser_take_screenshot`, `browser_evaluate`, `browser_wait_for`. Optional: `browser_click`, `browser_network_requests`.
 </Prerequisites>
@@ -217,9 +217,9 @@ Compare the clone against the original across three dimensions.
 
 1. **Serve the clone**: Start a local server for the generated project:
    ```bash
-   npx serve {output_dir} -l 3456 --no-clipboard
+   pnpm dlx serve {output_dir} -l 3456 --no-clipboard
    ```
-   If `npx serve` is unavailable, fall back to: `python3 -m http.server 3456 -d {output_dir}`.
+   If `pnpm dlx serve` is unavailable, fall back to: `python3 -m http.server 3456 -d {output_dir}`.
    The clone will be accessible at `http://localhost:3456`.
 2. **Visual verification**:
    - Navigate to the clone with Playwright: `browser_navigate` to clone URL.

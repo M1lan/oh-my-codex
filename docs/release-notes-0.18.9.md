@@ -42,7 +42,7 @@
 - `a7482450` — Correct final 0.18.8 sync evidence.
 - `dd7f369f` — Normalize 0.18.8 release readiness evidence.
 - `320fe769` — Document release publish fallback evidence.
-- `403e2549` — Unblock npm publish during Fulcio outage.
+- `403e2549` — Unblock pnpm publish during Fulcio outage.
 
 ## Issues
 
@@ -52,6 +52,6 @@ No separately closed GitHub issues were found for the `v0.18.8..HEAD` release ra
 
 Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.9.md`.
 
-Release gates included version sync, build, lint/no-unused, native-agent and plugin-bundle verification, catalog docs check, full tests, targeted compatibility/runtime tests, live OMX/Codex smoke where prerequisites were available, mandatory UltraQA, generated release body review, `git diff --check`, `npm pack --dry-run`, packed-install smoke, native asset/manifest verification evidence, and npm publication proof. The GitHub release includes `native-release-manifest.json`; npm provenance signing hit repeated Fulcio `ECONNRESET` failures, so the exact `v0.18.9` tag artifact was published with `npm publish --provenance=false` via temporary GitHub Actions fallback.
+Release gates included version sync, build, lint/no-unused, native-agent and plugin-bundle verification, catalog docs check, full tests, targeted compatibility/runtime tests, live OMX/Codex smoke where prerequisites were available, mandatory UltraQA, generated release body review, `git diff --check`, `pnpm pack --dry-run`, packed-install smoke, native asset/manifest verification evidence, and npm publication proof. The GitHub release includes `native-release-manifest.json`; npm provenance signing hit repeated Fulcio `ECONNRESET` failures, so the exact `v0.18.9` tag artifact was published with `pnpm publish --provenance=false` via temporary GitHub Actions fallback.
 
 **Full Changelog**: [`v0.18.8...v0.18.9`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.8...v0.18.9)

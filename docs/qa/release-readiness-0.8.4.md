@@ -16,9 +16,9 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Full test suite | `npm test` | PASS (`1940` pass / `0` fail, `duration_ms 206426.374278`) |
-| No-unused type gate | `npm run check:no-unused` | PASS |
+| Build | `pnpm run build` | PASS |
+| Full test suite | `pnpm test` | PASS (`1940` pass / `0` fail, `duration_ms 206426.374278`) |
+| No-unused type gate | `pnpm run check:no-unused` | PASS |
 | CLI help smoke | `node bin/omx.js --help` | PASS |
 | Version smoke | `node bin/omx.js version` | PASS (`oh-my-codex v0.8.4`) |
 | Doctor smoke | `node bin/omx.js doctor` | PASS (`9 passed, 0 warnings, 0 failed`) |

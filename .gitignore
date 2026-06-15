@@ -1,6 +1,11 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# pnpm-only: never let npm/yarn lockfiles come back
+package-lock.json
+npm-shrinkwrap.json
+yarn.lock
 .omc/state/
 .omc/prompts/
 .omc/logs/

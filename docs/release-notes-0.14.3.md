@@ -22,11 +22,11 @@
 
 ## Verification
 
-- `npm test` ✅ — 3910 tests passed, 0 failed; catalog check ok.
-- `npm run check:no-unused` ✅
+- `pnpm test` ✅ — 3910 tests passed, 0 failed; catalog check ok.
+- `pnpm run check:no-unused` ✅
 - `cargo test --workspace` ✅
-- `npm run lint` ✅
-- `npm run build` ✅
+- `pnpm run lint` ✅
+- `pnpm run build` ✅
 - Targeted changed-path Node suites for question/deep-interview/hooks/team/config/cleanup/HUD ✅
 
 Release verification evidence is recorded in `docs/qa/release-readiness-0.14.3.md`.

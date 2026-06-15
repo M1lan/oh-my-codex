@@ -46,7 +46,7 @@
 - `a7482450` — Correct final 0.18.8 sync evidence.
 - `dd7f369f` — Normalize 0.18.8 release readiness evidence.
 - `320fe769` — Document release publish fallback evidence.
-- `403e2549` — Unblock npm publish during Fulcio outage.
+- `403e2549` — Unblock pnpm publish during Fulcio outage.
 
 ## Issue inventory
 
@@ -66,30 +66,30 @@ Commands were run from `/Users/bellman/Documents/Workspace/oh-my-codex`; release
 
 - [x] Frozen candidate revalidation — PASS, see Range section.
 - [x] Release workflow version-sync probe: `node dist/scripts/check-version-sync.js --tag v0.18.9` — PASS, `.omx/release-0.18.9/logs/version-sync.log` and code-review rerun evidence.
-- [x] `npm run build` — PASS, `.omx/release-0.18.9/logs/build.log`; latest rebuilds also passed in `.omx/release-0.18.9/logs/build-after-*.log`.
-- [x] `npm run lint` — PASS, `.omx/release-0.18.9/logs/lint.log`.
-- [x] `npm run check:no-unused` — PASS, `.omx/release-0.18.9/logs/no-unused.log`.
-- [x] `npm run verify:native-agents` — PASS, `.omx/release-0.18.9/logs/verify-native-agents.log`.
-- [x] `npm run sync:plugin` / `npm run sync:plugin:check` — PASS, `.omx/release-0.18.9/logs/sync-plugin.log`, `.omx/release-0.18.9/logs/sync-plugin-check.log`.
-- [x] `npm run verify:plugin-bundle` — PASS, `.omx/release-0.18.9/logs/verify-plugin-bundle.log`.
+- [x] `pnpm run build` — PASS, `.omx/release-0.18.9/logs/build.log`; latest rebuilds also passed in `.omx/release-0.18.9/logs/build-after-*.log`.
+- [x] `pnpm run lint` — PASS, `.omx/release-0.18.9/logs/lint.log`.
+- [x] `pnpm run check:no-unused` — PASS, `.omx/release-0.18.9/logs/no-unused.log`.
+- [x] `pnpm run verify:native-agents` — PASS, `.omx/release-0.18.9/logs/verify-native-agents.log`.
+- [x] `pnpm run sync:plugin` / `pnpm run sync:plugin:check` — PASS, `.omx/release-0.18.9/logs/sync-plugin.log`, `.omx/release-0.18.9/logs/sync-plugin-check.log`.
+- [x] `pnpm run verify:plugin-bundle` — PASS, `.omx/release-0.18.9/logs/verify-plugin-bundle.log`.
 - [x] `node dist/scripts/generate-catalog-docs.js --check` — PASS, `.omx/release-0.18.9/logs/catalog-docs-check.log`.
 - [x] `node --test dist/cli/__tests__/question.test.js` after inline-TTY test hardening — PASS, `.omx/release-0.18.9/logs/question-test-interval.log`; later tightened again to wait for concrete UI frames before keypresses.
-- [x] `npm test` — PASS, `.omx/release-0.18.9/logs/npm-test-clean.log` (`5787` pass, `0` fail, `1` intentional skip).
-- [x] `npm run test:ci:compiled` — PASS, `.omx/release-0.18.9/logs/test-ci-compiled.log` (`5787` pass, `0` fail, `1` intentional skip).
-- [x] `npm run test:compat:node` — PASS, `.omx/release-0.18.9/logs/test-compat-node.log`.
-- [x] `npm run test:sparkshell` — PASS, `.omx/release-0.18.9/logs/test-sparkshell.log`.
-- [x] `npm run test:explore` — PASS, `.omx/release-0.18.9/logs/test-explore.log`.
-- [x] `npm run test:recent-bug-regressions:compiled` — PASS, `.omx/release-0.18.9/logs/test-recent-bug-regressions-compiled.log`.
-- [x] `npm run test:team:worker-runtime-identity:compiled` — PASS, `.omx/release-0.18.9/logs/test-team-worker-runtime-identity-compiled.log`.
-- [x] `npm run test:plugin-boundaries:compiled` — PASS, `.omx/release-0.18.9/logs/test-plugin-boundaries-compiled.log`.
-- [x] `npm run test:ralph-persistence:compiled` — PASS, `.omx/release-0.18.9/logs/test-ralph-persistence-compiled.log`.
-- [x] `npm run test:explicit-terminal-contract:compiled` — PASS, `.omx/release-0.18.9/logs/test-explicit-terminal-contract-compiled.log`.
+- [x] `pnpm test` — PASS, `.omx/release-0.18.9/logs/npm-test-clean.log` (`5787` pass, `0` fail, `1` intentional skip).
+- [x] `pnpm run test:ci:compiled` — PASS, `.omx/release-0.18.9/logs/test-ci-compiled.log` (`5787` pass, `0` fail, `1` intentional skip).
+- [x] `pnpm run test:compat:node` — PASS, `.omx/release-0.18.9/logs/test-compat-node.log`.
+- [x] `pnpm run test:sparkshell` — PASS, `.omx/release-0.18.9/logs/test-sparkshell.log`.
+- [x] `pnpm run test:explore` — PASS, `.omx/release-0.18.9/logs/test-explore.log`.
+- [x] `pnpm run test:recent-bug-regressions:compiled` — PASS, `.omx/release-0.18.9/logs/test-recent-bug-regressions-compiled.log`.
+- [x] `pnpm run test:team:worker-runtime-identity:compiled` — PASS, `.omx/release-0.18.9/logs/test-team-worker-runtime-identity-compiled.log`.
+- [x] `pnpm run test:plugin-boundaries:compiled` — PASS, `.omx/release-0.18.9/logs/test-plugin-boundaries-compiled.log`.
+- [x] `pnpm run test:ralph-persistence:compiled` — PASS, `.omx/release-0.18.9/logs/test-ralph-persistence-compiled.log`.
+- [x] `pnpm run test:explicit-terminal-contract:compiled` — PASS, `.omx/release-0.18.9/logs/test-explicit-terminal-contract-compiled.log`.
 - [x] `omx doctor` — PASS with one local user-config warning about deprecated explore compatibility routing in `~/.codex/config.toml`, `.omx/release-0.18.9/logs/omx-doctor.log`. Release code/tests still default explore compatibility routing to disabled.
 - [x] `codex login status` — PASS, `.omx/release-0.18.9/logs/codex-login-status.log` (token redacted in reports).
 - [x] `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"` — PASS, `.omx/release-0.18.9/logs/omx-exec-smoke.log`.
-- [x] `npm run test:reply-listener:live` — PASS/SKIP by contract because `OMX_REPLY_LISTENER_LIVE=1` was not enabled, `.omx/release-0.18.9/logs/test-reply-listener-live.log`.
-- [x] `npm pack --dry-run` — PASS, `.omx/release-0.18.9/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.9.tgz`, package size `3.9 MB`, unpacked size `24.0 MB`, `3029` files).
-- [x] `npm run smoke:packed-install` — PASS, `.omx/release-0.18.9/logs/smoke-packed-install.log`.
+- [x] `pnpm run test:reply-listener:live` — PASS/SKIP by contract because `OMX_REPLY_LISTENER_LIVE=1` was not enabled, `.omx/release-0.18.9/logs/test-reply-listener-live.log`.
+- [x] `pnpm pack --dry-run` — PASS, `.omx/release-0.18.9/logs/npm-pack-dry-run.log` (`oh-my-codex-0.18.9.tgz`, package size `3.9 MB`, unpacked size `24.0 MB`, `3029` files).
+- [x] `pnpm run smoke:packed-install` — PASS, `.omx/release-0.18.9/logs/smoke-packed-install.log`.
 - [x] `git diff --check` — PASS, `.omx/release-0.18.9/logs/git-diff-check.log` and code-review evidence.
 - [x] Static release review subagent gate, first pass — BLOCKED on stale readiness checkboxes and blind keypress polling; fixes applied in this commit.
 - [x] Static release review subagent gate, final pass — APPROVE/CLEAR, subagent `019e8cb9-cff6-74e1-bc4c-1de10f7ef2b2`.
@@ -103,9 +103,9 @@ Commands were run from `/Users/bellman/Documents/Workspace/oh-my-codex`; release
 
 - [x] Release-prep `dev` CI green — GitHub Actions run `26875635807`, completed/success for `ffd02c65`.
 - [x] Main promotion CI green — GitHub Actions run `26876121950`, completed/success for `ffd02c65`.
-- [x] Tag-triggered release workflow partial green / npm provenance exception — run `26876924380` passed all gates through packed global install smoke, but `npm publish --provenance` failed twice with `CA_CREATE_SIGNING_CERTIFICATE_ERROR` / Fulcio `read ECONNRESET`. Temporary fallback workflow run `26878002529` checked out `v0.18.9` and published with `npm publish --access public --provenance=false`.
+- [x] Tag-triggered release workflow partial green / npm provenance exception — run `26876924380` passed all gates through packed global install smoke, but `pnpm publish --provenance` failed twice with `CA_CREATE_SIGNING_CERTIFICATE_ERROR` / Fulcio `read ECONNRESET`. Temporary fallback workflow run `26878002529` checked out `v0.18.9` and published with `pnpm publish --access public --provenance=false`.
 - [x] GitHub release proof: REST release view for `v0.18.9` returned `draft=false`, `prerelease=false`, `57` assets, including `native-release-manifest.json`, `.omx/release-0.18.9/logs/gh-release-view-rest-final.json`.
-- [x] npm proof: `npm view oh-my-codex version dist-tags --json` returned `0.18.9` / `latest: 0.18.9`, `.omx/release-0.18.9/logs/npm-view-final.log`.
+- [x] npm proof: `pnpm view oh-my-codex version dist-tags --json` returned `0.18.9` / `latest: 0.18.9`, `.omx/release-0.18.9/logs/npm-view-final.log`.
 - [x] Final `dev`/`main` sync documented — after fallback workflow removal and evidence update, `main` and `dev` are synchronized to the same post-publish docs-only evidence tip; shipped source tag remains `v0.18.9` at `d409013946bf61a0747d75cd93206ea5673b0fc9`.
 - [x] Final post-sync `dev`/`main` CI green — verified on the final docs-only evidence tip after fallback workflow removal; branch HEAD run IDs are captured in `.omx/release-0.18.9/logs/final-ci-runs.tsv` before closing the Autopilot goal.
 

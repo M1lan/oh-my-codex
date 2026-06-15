@@ -16,8 +16,8 @@ Previous tag: `v0.17.0`
 
 Passed before tagging:
 
-- `npm run lint`
-- `npm run check:no-unused`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
 - `cargo check --workspace`
 - `npm audit --audit-level=high`
 - `git diff --check`
@@ -27,7 +27,7 @@ Security audit result: `npm audit --audit-level=high` reports `found 0 vulnerabi
 
 ## Known validation boundary
 
-The complete `npm test` suite was not claimed as a clean local gate in this attached OMX/tmux runtime. Earlier release review attempts in this runtime encountered ambient `OMX_*` contamination and leaked question-test child processes. The tag workflow remains the clean CI/publication gate for the final release verdict.
+The complete `pnpm test` suite was not claimed as a clean local gate in this attached OMX/tmux runtime. Earlier release review attempts in this runtime encountered ambient `OMX_*` contamination and leaked question-test child processes. The tag workflow remains the clean CI/publication gate for the final release verdict.
 
 ## Release notes summary
 
@@ -38,4 +38,4 @@ The complete `npm test` suite was not claimed as a clean local gate in this atta
 - GitHub release workflow: pending until `v0.17.1` tag push.
 - Native asset publication: pending until release workflow completes.
 - npm publication: pending until release workflow completes.
-- Public package verification: pending after npm publish.
+- Public package verification: pending after pnpm publish.

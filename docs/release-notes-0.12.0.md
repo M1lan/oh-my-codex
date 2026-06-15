@@ -25,14 +25,14 @@
 
 ### Release-focused verification suite
 
-- `npm ci` ✅
-- `npm run build` ✅
+- `pnpm install --frozen-lockfile` ✅
+- `pnpm run build` ✅
 - `node dist/cli/omx.js version` ✅ (`oh-my-codex v0.12.0`)
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
-- `npm run lint` ✅
-- `npm test` ✅
+- `pnpm run lint` ✅
+- `pnpm test` ✅
 - `cargo test -p omx-runtime-core` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run smoke:packed-install` ✅
 - `git diff --check origin/main...HEAD` ✅
 
 ## Remaining risk

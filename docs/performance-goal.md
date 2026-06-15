@@ -26,7 +26,7 @@ Each workflow is stored under:
 ```sh
 omx performance-goal create \
   --objective "Reduce startup latency by 20%" \
-  --evaluator-command "npm run perf:startup" \
+  --evaluator-command "pnpm run perf:startup" \
   --evaluator-contract "PASS when p95 latency improves by 20% and regression tests pass" \
   --slug startup-latency
 

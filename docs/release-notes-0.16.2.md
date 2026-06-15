@@ -24,8 +24,8 @@
 
 ## Validation
 
-- Local release-review gates: `npm run build`, `npm run check:no-unused`, targeted setup/config/uninstall/hook Node tests, `npm run verify:native-agents`, `npm run verify:plugin-bundle`, catalog-doc check, and `cargo test`.
+- Local release-review gates: `pnpm run build`, `pnpm run check:no-unused`, targeted setup/config/uninstall/hook Node tests, `pnpm run verify:native-agents`, `pnpm run verify:plugin-bundle`, catalog-doc check, and `cargo test`.
 - Changed-area PR gates included targeted `$ultragoal`, wiki/MCP/storage, state/session, native-hook, setup, lint, no-unused, and plugin-bundle checks.
-- GitHub CI passed on `dev` and `main`; the tag release workflow passed native builds, release-asset publishing, smoke verification, packed global install smoke, and npm publish.
+- GitHub CI passed on `dev` and `main`; the tag release workflow passed native builds, release-asset publishing, smoke verification, packed global install smoke, and pnpm publish.
 
 **Full Changelog**: [`v0.16.1...v0.16.2`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.16.1...v0.16.2)

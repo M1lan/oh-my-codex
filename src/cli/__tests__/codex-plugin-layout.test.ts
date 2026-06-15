@@ -1044,7 +1044,7 @@ process.stdin.on('end', () => {
     const combinedDocs = await Promise.all(docsToCheck.map((docPath) => readFile(join(root, docPath), 'utf-8')));
     const combined = combinedDocs.join('\n');
     assert.match(combined, /plugins\/cache\/\$MARKETPLACE_NAME\/oh-my-codex\/\$VERSION\//);
-    assert.match(combined, /not a replacement for `npm install -g oh-my-codex` plus `omx setup`/);
+    assert.match(combined, /not a replacement for `pnpm add -g oh-my-codex` plus `omx setup`/);
     assert.match(combined, /legacy setup mode installs native agents(?:\/| and )prompts|plugin setup mode archives stale legacy prompt\/native-agent files/);
     assert.match(combined, /plugin-scoped companion metadata for official Codex lifecycle hooks/i);
     assert.match(combined, /legacy\/fallback native Codex hook registrations|legacy setup mode installs prompts\/native agents and \.codex\/hooks\.json/i);

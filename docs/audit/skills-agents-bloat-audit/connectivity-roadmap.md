@@ -185,8 +185,8 @@ For each PR above, the minimum verification before landing:
 
 | PR | verification |
 |----|--------------|
-| PR-1 | `npm run lint:deps` (optional), `npm test -- src/catalog` (catalog tests), `npm test -- src/hooks/__tests__/skill-catalog-hygiene` to ensure the tombstone removal does not break the hygiene contract. |
-| PR-2 | `npm test -- src/agents`, `npm test -- src/cli/__tests__/setup-prompts-overwrite` (because that test enumerates expected prompt files), and a manual `omx setup --dry-run` if reachable. |
+| PR-1 | `pnpm run lint:deps` (optional), `pnpm test -- src/catalog` (catalog tests), `pnpm test -- src/hooks/__tests__/skill-catalog-hygiene` to ensure the tombstone removal does not break the hygiene contract. |
+| PR-2 | `pnpm test -- src/agents`, `pnpm test -- src/cli/__tests__/setup-prompts-overwrite` (because that test enumerates expected prompt files), and a manual `omx setup --dry-run` if reachable. |
 | PR-3 | If adding the row: re-run `src/catalog/__tests__/schema.test.ts`. If removing the dir: also re-run any `wiki` prompt enumeration test. |
 | PR-4 | Pure docs. CI should be a no-op other than markdown lint. |
 | PR-5..8 | Owner-routed; verification scope decided per PR. |

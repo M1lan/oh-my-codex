@@ -20,9 +20,9 @@
 
 ## Verification
 
-- `npm run build` ✅
+- `pnpm run build` ✅
 - Targeted Node suites for model/default changes ✅
-- `npm run lint`, `npm run check:no-unused`, and `cargo test --workspace` passed earlier on this branch ✅
-- Full `npm test` was intentionally not rerun after the final fast-path executor reasoning tweak.
+- `pnpm run lint`, `pnpm run check:no-unused`, and `cargo test --workspace` passed earlier on this branch ✅
+- Full `pnpm test` was intentionally not rerun after the final fast-path executor reasoning tweak.
 
 Release verification evidence is recorded in `docs/qa/release-readiness-0.14.4.md`.

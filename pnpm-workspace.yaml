@@ -1,0 +1,5 @@
+# pnpm settings home (pnpm 10+). Security pins for transitive deps live here;
+# the legacy package.json "overrides" field is npm-only and ignored by pnpm.
+overrides:
+  ajv: '>=8.18.0'
+  hono: '>=4.11.10'

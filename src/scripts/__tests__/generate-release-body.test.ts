@@ -34,7 +34,7 @@ Custom summary that must stay intact.
 
 ## Verification
 
-- npm test
+- pnpm test
 
 ## Contributors
 

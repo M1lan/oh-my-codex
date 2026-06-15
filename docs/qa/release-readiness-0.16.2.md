@@ -27,7 +27,7 @@ Release: https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.16.2
 | Main CI | PASS — run `25545439756` on `d1863f72` after rerun of transient `team-state-runtime` lane. |
 | Release workflow | PASS — run `25546037771` built native assets, published GitHub release assets, smoke verified archives/global install, and published npm. |
 | GitHub release | PASS — `v0.16.2`, non-draft, non-prerelease, 43 native assets. |
-| npm | PASS — `npm view oh-my-codex version` returned `0.16.2`. |
+| npm | PASS — `pnpm view oh-my-codex version` returned `0.16.2`. |
 
 ## Notes
 

@@ -17,18 +17,18 @@ type NpmPackDryRunFile = {
   path: string;
 };
 
-type NpmPackDryRunResult = {
+type PnpmPackDryRunResult = {
   files?: NpmPackDryRunFile[];
 };
 
 describe('sparkshell packaging scaffold', () => {
-  it('registers native helper scripts but keeps staged native artifacts out of npm releases', () => {
+  it('registers native helper scripts but keeps staged native artifacts out of packed releases', () => {
     const packageJsonPath = join(process.cwd(), 'package.json');
     const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as PackageJson;
     const binaryName = platform() === 'win32' ? 'omx-sparkshell.exe' : 'omx-sparkshell';
     const stagedRoot = mkdtempSync(join(tmpdir(), 'omx-sparkshell-stage-'));
     const fakeBin = mkdtempSync(join(tmpdir(), 'omx-sparkshell-cargo-'));
-    const npmCache = mkdtempSync(join(tmpdir(), 'omx-sparkshell-npm-cache-'));
+    const packStore = mkdtempSync(join(tmpdir(), 'omx-sparkshell-pack-store-'));
     const packagedBinaryRelativePath = join(`${platform()}-${arch()}`, binaryName);
     const packagedBinaryPath = join(stagedRoot, packagedBinaryRelativePath);
     const releaseBinaryPath = join(process.cwd(), 'target', 'release', binaryName);
@@ -97,18 +97,17 @@ describe('sparkshell packaging scaffold', () => {
       assert.equal(buildResult.status, 0, buildResult.stderr || buildResult.stdout);
       assert.equal(existsSync(packagedBinaryPath), true, `expected staged binary at ${packagedBinaryRelativePath}`);
 
-      const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+      const packed = spawnSync('pnpm', ['pack', '--dry-run', '--json', '--config.ignore-scripts=true', `--config.store-dir=${packStore}`], {
         cwd: process.cwd(),
         encoding: 'utf-8',
         env: {
           ...process.env,
-          npm_config_cache: npmCache,
         },
       });
       assert.equal(packed.status, 0, packed.stderr || packed.stdout);
 
-      const results = JSON.parse(packed.stdout) as NpmPackDryRunResult[];
-      const packedFiles = new Set((results[0]?.files ?? []).map((file) => file.path));
+      const result = JSON.parse(packed.stdout) as PnpmPackDryRunResult;
+      const packedFiles = new Set((result.files ?? []).map((file) => file.path));
 
       assert.equal(packedFiles.has('dist/scripts/build-sparkshell.js'), true);
       assert.equal(packedFiles.has('dist/scripts/test-sparkshell.js'), true);
@@ -116,7 +115,7 @@ describe('sparkshell packaging scaffold', () => {
     } finally {
       rmSync(stagedRoot, { force: true, recursive: true });
       rmSync(fakeBin, { force: true, recursive: true });
-      rmSync(npmCache, { force: true, recursive: true });
+      rmSync(packStore, { force: true, recursive: true });
       if (originalReleaseBinary) {
         writeFileSync(releaseBinaryPath, originalReleaseBinary);
         if (platform() !== 'win32') chmodSync(releaseBinaryPath, 0o755);

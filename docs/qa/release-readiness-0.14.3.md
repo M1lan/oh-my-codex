@@ -23,11 +23,11 @@ Candidate branch: `release/0.14.3`
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Full Node/build/catalog suite | `npm test` | PASS — 3910 tests, 0 failed; catalog check ok |
-| Type unused gate | `npm run check:no-unused` | PASS |
+| Full Node/build/catalog suite | `pnpm test` | PASS — 3910 tests, 0 failed; catalog check ok |
+| Type unused gate | `pnpm run check:no-unused` | PASS |
 | Rust workspace tests | `cargo test --workspace` | PASS |
-| Lint gate | `npm run lint` | PASS |
-| TypeScript build | `npm run build` | PASS |
+| Lint gate | `pnpm run lint` | PASS |
+| TypeScript build | `pnpm run build` | PASS |
 | Changed-path targeted suites | `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/explore.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/question.test.js dist/config/__tests__/generator-idempotent.test.js dist/hooks/__tests__/clawhip-event-contract.test.js dist/hooks/__tests__/deep-interview-contract.test.js dist/hooks/__tests__/keyword-detector.test.js dist/hooks/__tests__/skill-guidance-contract.test.js dist/hooks/extensibility/__tests__/events.test.js dist/hud/__tests__/reconcile.test.js dist/question/__tests__/deep-interview.test.js dist/question/__tests__/renderer.test.js dist/question/__tests__/state.test.js dist/question/__tests__/ui.test.js dist/scripts/__tests__/codex-native-hook.test.js dist/scripts/notify-hook/__tests__/operational-events.test.js dist/team/__tests__/events.test.js dist/team/__tests__/runtime.test.js dist/team/__tests__/tmux-session.test.js` | PASS |
 
 ## Known limits

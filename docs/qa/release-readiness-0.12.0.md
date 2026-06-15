@@ -44,7 +44,7 @@ Verdict: **GO** ✅
 
 | Module | Representative paths | Release-note focus | Verification emphasis |
 |---|---|---|---|
-| Native hook ownership + lifecycle | `src/scripts/codex-native-hook.ts`, `src/config/codex-hooks.ts`, `src/cli/setup.ts`, `src/cli/uninstall.ts`, `docs/codex-native-hooks.md` | repo-local native hook ownership; session-start/stop continuity | `npm run build`; `node --test dist/scripts/__tests__/codex-native-hook.test.js dist/config/__tests__/generator-idempotent.test.js dist/cli/__tests__/setup-scope.test.js dist/cli/__tests__/uninstall.test.js` |
+| Native hook ownership + lifecycle | `src/scripts/codex-native-hook.ts`, `src/config/codex-hooks.ts`, `src/cli/setup.ts`, `src/cli/uninstall.ts`, `docs/codex-native-hooks.md` | repo-local native hook ownership; session-start/stop continuity | `pnpm run build`; `node --test dist/scripts/__tests__/codex-native-hook.test.js dist/config/__tests__/generator-idempotent.test.js dist/cli/__tests__/setup-scope.test.js dist/cli/__tests__/uninstall.test.js` |
 | Native pre/post tool hooks | `src/scripts/codex-native-pre-post.ts`, `src/scripts/__tests__/codex-native-hook.test.ts`, `docs/codex-native-hooks.md` | first-party `PreToolUse` / `PostToolUse` Bash guidance | `node --test dist/scripts/__tests__/codex-native-hook.test.js` |
 | Team runtime / delivery contract | `src/team/**`, `src/scripts/notify-hook/team-dispatch.ts`, `src/scripts/notify-hook/team-leader-nudge.ts`, `docs/contracts/team-delivery-state-contract.md`, `docs/contracts/team-runtime-state-contract.md` | mailbox + dispatch integrity, pane-status visibility, worker/bootstrap reliability | `node dist/scripts/run-test-files.js dist/team/__tests__/delivery-e2e-smoke.test.js dist/team/__tests__/runtime.test.js dist/team/__tests__/state.test.js dist/team/__tests__/worker-bootstrap.test.js` |
 | Notify / reminder / session stability | `src/hooks/**`, `src/notifications/**`, `src/utils/platform-command.ts`, `src/scripts/notify-fallback-watcher.ts` | stale-log protection, nudge dedupe, same-thread continuity, Windows/tmux resilience | `node dist/scripts/run-test-files.js dist/hooks/__tests__/notify-hook-team-dispatch.test.js dist/hooks/__tests__/notify-hook-team-leader-nudge.test.js dist/hooks/__tests__/notify-hook-team-tmux-guard.test.js dist/hooks/__tests__/notify-hook-worker-idle.test.js dist/hooks/__tests__/notify-fallback-watcher.test.js dist/notifications/__tests__/idle-cooldown.test.js dist/utils/__tests__/platform-command.test.js` |
@@ -59,17 +59,17 @@ Verdict: **GO** ✅
 | Commit inventory | `git rev-list --count --no-merges v0.11.13..HEAD` + `git rev-list --count --merges v0.11.13..HEAD` | PASS (`65` non-merge / `26` merge) |
 | Version sync contract | `node --test dist/cli/__tests__/version-sync-contract.test.js` | PASS |
 | CLI version smoke | `node dist/cli/omx.js version` | PASS (`oh-my-codex v0.12.0`) |
-| Build | `npm run build` | PASS |
-| Lint | `npm run lint` | PASS |
-| Full Node suite | `npm test` | PASS (`2949` pass / `0` fail) |
+| Build | `pnpm run build` | PASS |
+| Lint | `pnpm run lint` | PASS |
+| Full Node suite | `pnpm test` | PASS (`2949` pass / `0` fail) |
 | Rust runtime core | `cargo test -p omx-runtime-core` | PASS (`54` pass / `0` fail) |
-| Packed install smoke | `npm run smoke:packed-install` | PASS |
+| Packed install smoke | `pnpm run smoke:packed-install` | PASS |
 | Working-tree whitespace check | `git diff --check origin/main...HEAD` | PASS |
 
 ## Notes from modular review
 
 - Initial team review surfaced a provisional NO-GO while detached worker environments had incomplete local package installs and while release collateral still targeted `0.11.13`.
-- After syncing root dependencies with `npm ci`, rerunning the root release gates, and refreshing collateral, the suspected watcher/team blockers did **not** reproduce in the release branch verification run.
+- After syncing root dependencies with `pnpm install --frozen-lockfile`, rerunning the root release gates, and refreshing collateral, the suspected watcher/team blockers did **not** reproduce in the release branch verification run.
 - Review-only findings still informed the shipped collateral: native hook ownership, pre/post guidance, runtime/team delivery hardening, Windows/tmux reliability, and docs/prompt guidance refresh are the main release-note themes.
 
 ## Final verdict

@@ -30,7 +30,7 @@
 
 ```bash
 codex --version
-npm install -g oh-my-codex
+pnpm add -g oh-my-codex
 omx setup
 omx --madmax --high
 ```
@@ -38,8 +38,8 @@ omx --madmax --high
 Αν το Codex CLI δεν είναι εγκατεστημένο και θέλετε να το διαχειρίζεται το npm:
 
 ```bash
-npm install -g @openai/codex
-npm install -g oh-my-codex
+pnpm add -g @openai/codex
+pnpm add -g oh-my-codex
 omx setup
 ```
 

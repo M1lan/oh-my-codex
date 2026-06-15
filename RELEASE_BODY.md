@@ -52,7 +52,7 @@ Primary merged PR and commit evidence in the current `origin/main..origin/dev` c
 
 Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.14.md`.
 
-Release-prep gates include version sync for `v0.18.14`, build, native-agent verification, plugin mirror/bundle checks, catalog docs check, dogfooding of built CLI surfaces, `npm pack --dry-run`, and `git diff --check`. Branch CI, dev/main promotion, tag-triggered release workflow, GitHub release proof, and npm publication proof remain publication-stage gates.
+Release-prep gates include version sync for `v0.18.14`, build, native-agent verification, plugin mirror/bundle checks, catalog docs check, dogfooding of built CLI surfaces, `pnpm pack --dry-run`, and `git diff --check`. Branch CI, dev/main promotion, tag-triggered release workflow, GitHub release proof, and npm publication proof remain publication-stage gates.
 
 The GitHub release workflow remains the authoritative cross-platform native asset gate after tag push, including the uploaded `native-release-manifest.json`.
 

@@ -234,9 +234,9 @@ oh-my-codex/
 ```bash
 git clone https://github.com/Yeachan-Heo/oh-my-codex.git
 cd oh-my-codex
-npm install
-npm run build
-npm test
+pnpm install
+pnpm run build
+pnpm test
 ```
 
 ## 文档

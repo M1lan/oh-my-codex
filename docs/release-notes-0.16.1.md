@@ -13,7 +13,7 @@ This release was built from `v0.16.0..v0.16.1` and includes 25 merged PRs plus f
 - **Team approved-handoff hardening** — approved Team execution preserves ambiguous bindings, binding transport, selected handoffs, invalid context-pack diagnostics, nonready repair-only behavior, DAG fallback status, and read-only context-pack status visibility.
 - **Goal-mode and interview flow** — planning handoffs steer toward goal-mode follow-ups, blocked `ultragoal` Codex goal handoffs are handled, and deep-interview routing separates facts from judgment.
 - **Plugin, launch, and platform fixes** — plugin MCP launch behavior is clearer, plugin skill cache refresh works, managed helpers use the current JS runtime, Windows OMX root launch paths are fixed, Darwin launch fallback worktree assertions are path-stable, and disposable launch worktree state remains durable.
-- **CI and release integrity** — CI critical-path latency was reduced while preserving release gates, Node jobs now prove clean lockfile installs with unconditional `npm ci`, version sync is verified across Node/Cargo/plugin metadata, and native release artifacts build through the tag workflow.
+- **CI and release integrity** — CI critical-path latency was reduced while preserving release gates, Node jobs now prove clean lockfile installs with unconditional `pnpm install --frozen-lockfile`, version sync is verified across Node/Cargo/plugin metadata, and native release artifacts build through the tag workflow.
 
 ## Merged PRs
 
@@ -71,14 +71,14 @@ This release was built from `v0.16.0..v0.16.1` and includes 25 merged PRs plus f
 
 - `omx explore` local fast-path file reads no longer follow symlinks; symlinked paths fall back to the harness path.
 - Local explore text search skips oversized files in the fast path and lets bounded fallback handling cover broader searches.
-- CI no longer restores/skips a cached `node_modules` tree; `npm ci` runs in each Node job to prove lockfile install integrity.
+- CI no longer restores/skips a cached `node_modules` tree; `pnpm install --frozen-lockfile` runs in each Node job to prove lockfile install integrity.
 
 ## Verification
 
 - Dev CI for `9e4d118b`: passed.
 - Main CI for `cfc29185`: passed.
 - Release tag workflow for `v0.16.1`: passed, including version sync, native artifact publication, native asset smoke verification, packed global install smoke test, and npm package publication.
-- Local release-prep gates included Rust workspace tests, TypeScript build, lint/no-unused checks, targeted Node tests, and `npm pack --dry-run`.
+- Local release-prep gates included Rust workspace tests, TypeScript build, lint/no-unused checks, targeted Node tests, and `pnpm pack --dry-run`.
 
 ## Contributors
 

@@ -22,8 +22,8 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Targeted lint | `npx biome lint src/cli/index.ts src/cli/__tests__/index.test.ts` | PASS |
+| Build | `pnpm run build` | PASS |
+| Targeted lint | `pnpm dlx biome lint src/cli/index.ts src/cli/__tests__/index.test.ts` | PASS |
 | Targeted regression tests | `node --test dist/cli/__tests__/index.test.js dist/cli/__tests__/launch-fallback.test.js` | PASS |
 
 ## Risk assessment

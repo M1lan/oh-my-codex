@@ -32,25 +32,25 @@ describe('install docs contract', () => {
     'docs/readme/README.vi.md',
   ];
 
-  it('does not recommend a combined Codex and OMX global npm install', () => {
+  it('does not recommend a combined Codex and OMX global pnpm install', () => {
     for (const surface of installSurfaces) {
       assert.doesNotMatch(
         read(surface),
-        /(^|\n)npm install -g @openai\/codex oh-my-codex(\n|$)/,
+        /(^|\n)pnpm add -g @openai\/codex oh-my-codex(\n|$)/,
         `${surface} must not show the combined install command as an executable shell line`,
       );
     }
   });
 
-  it('keeps existing-Codex and npm-managed-Codex install paths in separate executable blocks', () => {
+  it('keeps existing-Codex and pnpm-managed-Codex install paths in separate executable blocks', () => {
     for (const surface of installSurfaces) {
       for (const block of extractExecutableBlocks(read(surface))) {
         const verifiesExistingCodex = /(^|\n)codex --version(\n|$)/.test(block);
-        const installsCodexWithNpm = /(^|\n)npm install -g @openai\/codex(\n|$)/.test(block);
+        const installsCodexWithPnpm = /(^|\n)pnpm add -g @openai\/codex(\n|$)/.test(block);
 
         assert.ok(
-          !(verifiesExistingCodex && installsCodexWithNpm),
-          `${surface} must not put existing-Codex verification and npm Codex installation in one copy-pasteable block`,
+          !(verifiesExistingCodex && installsCodexWithPnpm),
+          `${surface} must not put existing-Codex verification and pnpm Codex installation in one copy-pasteable block`,
         );
       }
     }
@@ -61,7 +61,7 @@ describe('install docs contract', () => {
       const content = read(surface);
       assert.match(content, /Homebrew/i, `${surface} must mention Homebrew installs`);
       assert.match(content, /codex --version/, `${surface} must tell users to verify the existing Codex CLI`);
-      assert.match(content, /npm install -g oh-my-codex/, `${surface} must keep the OMX-only npm install command`);
+      assert.match(content, /pnpm add -g oh-my-codex/, `${surface} must keep the OMX-only pnpm install command`);
     }
   });
 
@@ -70,7 +70,7 @@ describe('install docs contract', () => {
       assert.match(
         read(surface),
         /EEXIST|\/opt\/homebrew\/bin\/codex/,
-        `${surface} must explain the npm binary conflict`,
+        `${surface} must explain the global binary conflict`,
       );
     }
   });

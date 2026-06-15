@@ -49,7 +49,7 @@ omx sparkshell --tmux-pane %12 --tail-lines 400
 
 ## Important Spark Initiative notes
 
-- Users can install OMX normally with `npm install -g oh-my-codex`.
+- Users can install OMX normally with `pnpm add -g oh-my-codex`.
 - The npm tarball intentionally excludes staged cross-platform native binaries.
 - Tagged releases publish verified native archives for `omx-explore-harness` and `omx-sparkshell`.
 - Packaged installs hydrate the matching native binary through `native-release-manifest.json`.
@@ -70,16 +70,16 @@ after upgrading so managed config/native-agent paths are refreshed.
 Validated locally on `dev` before tagging:
 
 - `node scripts/check-version-sync.mjs --tag v0.9.0`
-- `npm run lint`
-- `npx tsc --noEmit`
-- `npm run check:no-unused`
-- `npm test`
-- `npm run build:full`
-- `npm run test:explore`
-- `npm run test:sparkshell`
+- `pnpm run lint`
+- `pnpm dlx tsc --noEmit`
+- `pnpm run check:no-unused`
+- `pnpm test`
+- `pnpm run build:full`
+- `pnpm run test:explore`
+- `pnpm run test:sparkshell`
 - `node bin/omx.js doctor`
 - `node bin/omx.js setup --dry-run`
-- `npm pack --dry-run`
+- `pnpm pack --dry-run`
 
 ## Notable PRs
 

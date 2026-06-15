@@ -262,10 +262,10 @@ oh-my-codex/
 ```bash
 git clone https://github.com/Yeachan-Heo/oh-my-codex.git
 cd oh-my-codex
-npm install
-npm run lint
-npm run build
-npm test
+pnpm install
+pnpm run lint
+pnpm run build
+pnpm test
 ```
 
 ## 說明文件

@@ -40,9 +40,9 @@
 
 ## Verification evidence
 
-- `npm run build` ✅
-- `npx biome lint src/` ✅ (435 files clean)
-- `npm test` — 3068 of 3070 tests passing. The 2 failures (`dispatch request store keeps failed requests failed`, `sendWorkerMessage keeps failed hook receipts failed`) were introduced by commit `3a193cfb` which is present on `main` as well; they are **pre-existing contract-test failures**, not regressions introduced by this release.
+- `pnpm run build` ✅
+- `pnpm dlx biome lint src/` ✅ (435 files clean)
+- `pnpm test` — 3068 of 3070 tests passing. The 2 failures (`dispatch request store keeps failed requests failed`, `sendWorkerMessage keeps failed hook receipts failed`) were introduced by commit `3a193cfb` which is present on `main` as well; they are **pre-existing contract-test failures**, not regressions introduced by this release.
 
 ## Remaining risk
 

@@ -16,5 +16,5 @@ I plan to fix #715 via this PR.
 - add focused regression tests for role discovery and decomposition behavior
 
 ## Validation
-- [x] `npm run lint`
-- [x] `npm test`
+- [x] `pnpm run lint`
+- [x] `pnpm test`

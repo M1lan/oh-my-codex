@@ -26,7 +26,7 @@ Verify the post-fix CI speedups against the current workflow shape, keep require
 
 ### Local measurements in this worktree
 
-- `npm run build` → `7.47s`
+- `pnpm run build` → `7.47s`
 - compiled `team-state-runtime` lane  
   `node dist/scripts/run-test-files.js dist/team/__tests__ dist/state/__tests__ dist/ralph/__tests__ dist/ralplan/__tests__ dist/runtime/__tests__`  
   → `103.70s` (`exit 1`, existing suite failures preserved)
@@ -69,12 +69,12 @@ The local split-lane timings show that removing the in-lane rebuild does not mat
 
 ## Verification commands used
 
-- `npm run build`
-- `npx tsc --noEmit`
-- `npm run check:no-unused`
-- `npm run lint`
+- `pnpm run build`
+- `pnpm dlx tsc --noEmit`
+- `pnpm run check:no-unused`
+- `pnpm run lint`
 - `node --test dist/verification/__tests__/ci-rust-gates.test.js dist/verification/__tests__/ralph-persistence-gate.test.js dist/cli/__tests__/package-bin-contract.test.js`
-- `npm run test:ralph-persistence:compiled`
+- `pnpm run test:ralph-persistence:compiled`
 - timed grouped-lane commands listed above
 
 ## Outcome

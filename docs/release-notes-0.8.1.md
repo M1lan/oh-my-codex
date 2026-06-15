@@ -65,9 +65,9 @@ No breaking package-level API changes were introduced in this patch release.
 
 All release gates passed before publish:
 
-- ✅ `npm run build`
-- ✅ `npm test` (`1908` pass / `0` fail)
-- ✅ `npm run check:no-unused`
+- ✅ `pnpm run build`
+- ✅ `pnpm test` (`1908` pass / `0` fail)
+- ✅ `pnpm run check:no-unused`
 - ✅ CLI smoke checks (`--help`, `version`, `status`, `doctor`, `setup --dry-run`, `cancel`)
 
 ---

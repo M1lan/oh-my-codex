@@ -26,16 +26,16 @@ Release readiness evidence is recorded in `docs/qa/release-readiness-0.18.6.md`.
 Local gates completed before tagging:
 
 - release workflow version-sync probe
-- `npm run build`
+- `pnpm run build`
 - `node --test dist/hud/__tests__/render.test.js dist/hud/__tests__/index.test.js dist/hud/__tests__/reconcile.test.js dist/hud/__tests__/hud-tmux-injection.test.js`
-- `npm run lint`
-- `npm run check:no-unused`
-- `npm run verify:native-agents`
-- `npm run sync:plugin`
-- `npm run verify:plugin-bundle`
+- `pnpm run lint`
+- `pnpm run check:no-unused`
+- `pnpm run verify:native-agents`
+- `pnpm run sync:plugin`
+- `pnpm run verify:plugin-bundle`
 - `node dist/scripts/generate-catalog-docs.js --check`
 - `git diff --check`
-- `npm pack --dry-run`
+- `pnpm pack --dry-run`
 
 The GitHub release workflow remains the authoritative cross-platform native asset and npm publication gate after tag push.
 

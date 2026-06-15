@@ -21,12 +21,12 @@
 ### Release-focused verification suite
 
 - `cargo check --workspace` ✅
-- `npm run build` ✅
-- `npm run lint` ✅
+- `pnpm run build` ✅
+- `pnpm run lint` ✅
 - `node --test dist/cli/__tests__/version-sync-contract.test.js` ✅
 - release-workflow inline version-sync check from `.github/workflows/release.yml` ✅
-- `npm run test:node:cross-platform` ✅
-- `npm run smoke:packed-install` ✅
+- `pnpm run test:node:cross-platform` ✅
+- `pnpm run smoke:packed-install` ✅
 
 ## Remaining risk
 

@@ -28,14 +28,14 @@ Result:
 Command executed:
 
 ```bash
-npm test
+pnpm test
 ```
 
 Result:
 - PASS — `664` tests passed, `0` failed.
 
 Notes:
-- `npm run test:run` is referenced in the QA plan but is not a script in current `package.json`.
+- `pnpm run test:run` is referenced in the QA plan but is not a script in current `package.json`.
 
 ## Release-Metadata Checks
 

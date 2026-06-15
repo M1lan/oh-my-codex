@@ -18,12 +18,12 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Targeted lint | `npx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json` | PASS |
+| Build | `pnpm run build` | PASS |
+| Targeted lint | `pnpm dlx biome lint src/cli/index.ts src/cli/cleanup.ts src/cli/__tests__/index.test.ts src/cli/__tests__/cleanup.test.ts src/scripts/notify-fallback-watcher.ts src/hooks/__tests__/notify-fallback-watcher.test.ts src/team/runtime.ts src/team/state/mailbox.ts src/team/__tests__/runtime.test.ts src/team/__tests__/state.test.ts package.json` | PASS |
 | CLI regression suite | `node --test dist/cli/__tests__/cleanup.test.js dist/cli/__tests__/index.test.js dist/cli/__tests__/version-sync-contract.test.js` | PASS |
 | Notify fallback regression suite | `node --test dist/hooks/__tests__/notify-fallback-watcher.test.js` | PASS |
 | Team runtime/state regression suite | `node --test dist/team/__tests__/state.test.js dist/team/__tests__/runtime.test.js` | PASS |
-| Packed-install smoke | `npm run smoke:packed-install` | PASS |
+| Packed-install smoke | `pnpm run smoke:packed-install` | PASS |
 
 ## Final verdict
 

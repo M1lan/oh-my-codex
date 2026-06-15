@@ -14,18 +14,18 @@ Command sequence used from the repository root:
 
 ```bash
 unset OMX_TEAM_STATE_ROOT OMX_TEAM_WORKER OMX_TEAM_LEADER_CWD
-npm run build
-npm run lint
-npm test
+pnpm run build
+pnpm run lint
+pnpm test
 node --test dist/cli/__tests__/exec.test.js
 node --test dist/hooks/__tests__/codebase-map.test.js
 ```
 
 Observed status:
 
-- `npm run build` → **PASS**
-- `npm run lint` → **PASS**
-- `npm test` → **FAIL** (`2590` pass / `2` fail)
+- `pnpm run build` → **PASS**
+- `pnpm run lint` → **PASS**
+- `pnpm test` → **FAIL** (`2590` pass / `2` fail)
 - `node --test dist/cli/__tests__/exec.test.js` → **FAIL** (`1` failing test)
 - `node --test dist/hooks/__tests__/codebase-map.test.js` → **FAIL** (`1` failing test)
 
@@ -87,7 +87,7 @@ These two failures are the only remaining buckets seen in the fresh local suite 
 1. **worker-context contract drift** in `exec.test`
 2. **stale fixture path drift** in `codebase-map.test`
 
-No additional failure buckets were observed in the same `npm test` run.
+No additional failure buckets were observed in the same `pnpm test` run.
 
 ## Changed files
 

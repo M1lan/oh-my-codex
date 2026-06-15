@@ -311,12 +311,14 @@ jobs:
     if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run lint
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check:no-npm
+      - run: pnpm run lint
 
   typecheck:
     name: Typecheck
@@ -326,13 +328,14 @@ jobs:
     if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npm run check:no-unused
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm run check:no-unused
 
   build-dist:
     name: Build dist artifact
@@ -342,12 +345,13 @@ jobs:
     if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.native_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - name: Upload prebuilt dist artifact
         uses: actions/upload-artifact@v4
         with:
@@ -415,11 +419,12 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
@@ -439,7 +444,7 @@ jobs:
         run: node dist/scripts/generate-catalog-docs.js --check
       - name: Run cross-rebase smoke command
         if: matrix.lane == 'smoke'
-        run: npm run test:team:cross-rebase-smoke:compiled
+        run: pnpm run test:team:cross-rebase-smoke:compiled
       - name: Run remaining smoke suite
         if: matrix.lane == 'smoke'
         run: |
@@ -464,18 +469,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install test prerequisites
         run: .github/scripts/install-prereqs.sh tmux -- tmux
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
           path: dist
       - name: Run team/state coverage gate
-        run: npm run coverage:team-critical:compiled
+        run: pnpm run coverage:team-critical:compiled
       - name: Add coverage summary to job summary
         run: |
           node -e '
@@ -508,18 +514,19 @@ jobs:
     if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
           path: dist
       - name: Run Ralph persistence verification matrix
-        run: npm run test:ralph-persistence:compiled
+        run: pnpm run test:ralph-persistence:compiled
 
   build:
     name: Build (Full Source Build)
@@ -531,25 +538,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust build prerequisites
         run: .github/scripts/install-prereqs.sh build-essential -- cc
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@v2
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Download prebuilt dist artifact
         uses: actions/download-artifact@v8
         with:
           name: ci-dist-node20
           path: dist
-      - run: npm run build:explore:release
-      - run: npm run build:sparkshell
-      - run: npm run build:api
+      - run: pnpm run build:explore:release
+      - run: pnpm run build:sparkshell
+      - run: pnpm run build:api
 
   ci-status:
     name: CI Status

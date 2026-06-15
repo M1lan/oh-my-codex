@@ -41,17 +41,17 @@ Release: https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.16.4
 | Compare range ancestry | PASS — `git merge-base --is-ancestor v0.16.3 HEAD`. |
 | Version metadata sync | PASS — package, lockfile, Cargo workspace, and Cargo lockfile are aligned to `0.16.4`. |
 | Code review | PASS — `$code-review` final recheck approved the release-body evidence language and Ralph completion-audit hardening; architect re-review cleared symlink/path artifact handling and runtime-artifact cleanup. |
-| Local build/lint/no-unused | PASS — `npm run build`, `npm run lint`, and `npm run check:no-unused`. |
+| Local build/lint/no-unused | PASS — `pnpm run build`, `pnpm run lint`, and `pnpm run check:no-unused`. |
 | Targeted release tests | PASS — `node --test dist/cli/__tests__/version-sync-contract.test.js` plus release-focused setup/planning/Team/Ralph/Ultragoal/hook suites. |
 | Rust tests | PASS — `cargo test`. |
-| Package dry run | PASS — `npm pack --dry-run`. |
+| Package dry run | PASS — `pnpm pack --dry-run`. |
 | Release body generation | PASS — local pre-tag generation wrote `/tmp/RELEASE_BODY.v0.16.4.generated.md` with sha256 `a8e0d1812cf012ec62d8ccdb785a2fbb6f5a3f9d557a20f90a998aba70bb3c23`; release workflow `25648158495` also generated and attached the GitHub release body. |
 | Diff hygiene | PASS — `git diff --check`. |
 | Dev CI | PASS — GitHub Actions CI run `25647833872` on `dev` commit `0f77c608` completed successfully on 2026-05-11 before tag publication. |
 | Main CI | PASS — GitHub Actions CI run `25647985176` on `main` commit `0f77c608` completed successfully on 2026-05-11 before tag publication. |
 | Release workflow | PASS — tag-triggered Release run `25648158495` for `v0.16.4` completed successfully on 2026-05-11. |
 | GitHub release | PASS — `gh release view v0.16.4` reports non-draft, non-prerelease release at https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.16.4 with 43 native assets. |
-| npm | PASS — `npm view oh-my-codex version` returned `0.16.4` after workflow publication. |
+| npm | PASS — `pnpm view oh-my-codex version` returned `0.16.4` after workflow publication. |
 
 ## Known gaps / pending gates
 

@@ -206,7 +206,7 @@ Before opening a PR that changes prompt text, confirm all of the following:
 For prompt-guidance edits, run at least:
 
 ```bash
-npm run build
+pnpm run build
 node --test \
   dist/hooks/__tests__/prompt-guidance-contract.test.js \
   dist/hooks/__tests__/prompt-guidance-wave-two.test.js \
@@ -230,7 +230,7 @@ node --test \
 For broader prompt or skill changes, prefer the full suite:
 
 ```bash
-npm test
+pnpm test
 ```
 
 ## References

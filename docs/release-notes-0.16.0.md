@@ -24,7 +24,7 @@ This release is prepared from `v0.15.3..HEAD` with candidate SHA `e1349678633529
 - The plugin bundle no longer installs catalog-deprecated obsolete skill surfaces such as legacy split ask/review/helper entries. Prefer the unified `ask` workflow and the goal-mode workflow skills.
 - Deprecated root skill wrappers may remain for compatibility, but they should not be treated as active installable/plugin delivery surfaces.
 - Existing Team/Ralph users should see stricter completion behavior when a Codex goal is active: completion claims must match objective and status evidence.
-- No tag, npm publish, or GitHub release publication is performed by this local prep step.
+- No tag, pnpm publish, or GitHub release publication is performed by this local prep step.
 
 ## Verification
 

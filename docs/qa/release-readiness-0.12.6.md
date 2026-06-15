@@ -37,12 +37,12 @@ Verdict: **GO** ✅
 
 | Check | Command | Result |
 |---|---|---|
-| Build | `npm run build` | PASS |
-| Lint | `npm run lint` | PASS |
-| Full test suite | `npm test` | PASS |
-| Recent bug regression suite | `npm run test:recent-bug-regressions` | PASS |
+| Build | `pnpm run build` | PASS |
+| Lint | `pnpm run lint` | PASS |
+| Full test suite | `pnpm test` | PASS |
+| Recent bug regression suite | `pnpm run test:recent-bug-regressions` | PASS |
 | Version sync contract | `node --test dist/cli/__tests__/version-sync-contract.test.js` | PASS |
-| Packed-install smoke | `npm run smoke:packed-install` | PASS |
+| Packed-install smoke | `pnpm run smoke:packed-install` | PASS |
 
 ## Risk assessment
 
