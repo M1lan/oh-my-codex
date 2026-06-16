@@ -2708,6 +2708,44 @@ function readPreToolUsePathCandidates(payload: CodexHookPayload): string[] {
   return candidates.map((candidate) => safeString(candidate).trim()).filter(Boolean);
 }
 
+const APPLY_PATCH_TOOL_NAMES = new Set(["apply_patch", "ApplyPatch"]);
+
+function isApplyPatchToolName(toolName: string): boolean {
+  return APPLY_PATCH_TOOL_NAMES.has(toolName);
+}
+
+function readApplyPatchText(payload: CodexHookPayload): string {
+  const input = safeObject(payload.tool_input);
+  for (const key of ["input", "patch", "content", "text", "command"]) {
+    const value = safeString(input[key]).trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function extractApplyPatchTargetPaths(patchText: string): string[] {
+  if (!patchText) return [];
+  const paths: string[] = [];
+  for (const match of patchText.matchAll(/^\s*\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*$/gm)) {
+    const candidate = safeString(match[1]).trim();
+    if (candidate) paths.push(candidate);
+  }
+  for (const match of patchText.matchAll(/^\s*\*\*\*\s+Move\s+to:\s*(.+?)\s*$/gm)) {
+    const candidate = safeString(match[1]).trim();
+    if (candidate) paths.push(candidate);
+  }
+  return paths;
+}
+
+function collectImplementationToolPathCandidates(
+  payload: CodexHookPayload,
+  toolName: string,
+  structuredCandidates: string[],
+): string[] {
+  if (!isApplyPatchToolName(toolName)) return structuredCandidates;
+  return [...structuredCandidates, ...extractApplyPatchTargetPaths(readApplyPatchText(payload))];
+}
+
 function isNullDeviceRedirectTarget(target: string): boolean {
   const normalized = target.trim().replace(/^['"]|['"]$/g, "").toLowerCase();
   return normalized === "/dev/null" || normalized === "nul";
@@ -2753,21 +2791,46 @@ async function readActiveDeepInterviewStateForPreToolUse(
   sessionId: string,
   threadId: string,
 ): Promise<Record<string, unknown> | null> {
-  const modeState = sessionId
-    ? await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId, stateDir)
-    : await readJsonIfExists(join(stateDir, "deep-interview-state.json"));
-  if (!isActiveDeepInterviewPhase(modeState) || !modeState) return null;
-  if (!modeStateMatchesSkillStopContext(modeState, cwd, sessionId)) return null;
-
   const canonicalState = sessionId
     ? await readVisibleSkillActiveStateForStateDir(stateDir, sessionId)
     : await readSkillActiveState(join(stateDir, SKILL_ACTIVE_STATE_FILE));
   if (!canonicalState) return null;
-  const hasActiveDeepInterviewSkill = listActiveSkills(canonicalState).some((entry) => (
-    entry.skill === "deep-interview"
+
+  const modeState = sessionId
+    ? await readStopSessionPinnedState("deep-interview-state.json", cwd, sessionId, stateDir)
+    : await readJsonIfExists(join(stateDir, "deep-interview-state.json"));
+  if (isActiveDeepInterviewPhase(modeState) && modeState && modeStateMatchesSkillStopContext(modeState, cwd, sessionId)) {
+    const hasActiveDeepInterviewSkill = listActiveSkills(canonicalState).some((entry) => (
+      entry.skill === "deep-interview"
+      && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+    ));
+    if (hasActiveDeepInterviewSkill) return modeState;
+  }
+
+  const autopilotState = sessionId
+    ? await readStopSessionPinnedState("autopilot-state.json", cwd, sessionId, stateDir)
+    : await readJsonIfExists(join(stateDir, "autopilot-state.json"));
+  if (!autopilotState || autopilotState.active !== true) return null;
+  const autopilotMode = safeString(autopilotState.mode).trim();
+  if (autopilotMode && autopilotMode !== "autopilot") return null;
+  if (!modeStateMatchesSkillStopContext(autopilotState, cwd, sessionId)) return null;
+  const terminalAutopilotRunState = await readCanonicalTerminalRunStateForStop(cwd, sessionId, "autopilot");
+  if (terminalAutopilotRunState) return null;
+
+  const autopilotStatePhase = safeString(autopilotState.current_phase ?? autopilotState.currentPhase).trim().toLowerCase();
+  const autopilotIsDeepInterview = normalizeAutopilotPhase(autopilotStatePhase) === "deep-interview";
+  const hasDeepInterviewScopedAutopilotSkill = listActiveSkills(canonicalState).some((entry) => (
+    entry.skill === "autopilot"
+    && normalizeAutopilotPhase(safeString(entry.phase).trim().toLowerCase()) === "deep-interview"
     && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
   ));
-  return hasActiveDeepInterviewSkill ? modeState : null;
+  const hasActiveAutopilotSkill = listActiveSkills(canonicalState).some((entry) => (
+    entry.skill === "autopilot"
+    && matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+  ));
+  if (!hasActiveAutopilotSkill) return null;
+  if (!autopilotIsDeepInterview && !hasDeepInterviewScopedAutopilotSkill) return null;
+  return autopilotState;
 }
 
 async function readActiveRalplanStateForPreToolUse(
@@ -2840,12 +2903,28 @@ async function buildRalplanPreToolUseBoundaryOutput(
   const command = readPreToolUseCommand(payload);
   const pathCandidates = readPreToolUsePathCandidates(payload);
   let blocked = false;
+  let blockedDetail = "implementation/write tools are blocked until an explicit execution handoff workflow is activated";
 
   if (toolName === "Bash") {
     blocked = !isAllowedRalplanBashWrite(cwd, command);
+    if (blocked) {
+      const targets = extractDeepInterviewCommandWriteTargets(command);
+      const blockedTarget = targets.find((target) => !isAllowedRalplanArtifactPath(cwd, target));
+      blockedDetail = blockedTarget
+        ? `write target ${blockedTarget} is not under allowed planning artifact paths (${RALPLAN_ALLOWED_WRITE_PREFIXES.join(", ")})`
+        : "Bash write intent did not identify an allowed planning artifact path";
+    }
   } else if (PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
-    blocked = pathCandidates.length === 0
-      || !pathCandidates.every((candidate) => isAllowedRalplanArtifactPath(cwd, candidate));
+    if (pathCandidates.length === 0) {
+      blocked = true;
+      blockedDetail = `${toolName} did not include a file path; only planning artifact paths are allowed`;
+    } else {
+      const blockedPath = pathCandidates.find((candidate) => !isAllowedRalplanArtifactPath(cwd, candidate));
+      blocked = blockedPath !== undefined;
+      if (blockedPath !== undefined) {
+        blockedDetail = `path ${blockedPath} is not under allowed planning artifact paths (${RALPLAN_ALLOWED_WRITE_PREFIXES.join(", ")})`;
+      }
+    }
   }
 
   if (!blocked) return null;
@@ -2858,7 +2937,7 @@ async function buildRalplanPreToolUseBoundaryOutput(
     : "Ralplan is consensus-planning mode";
   return {
     decision: "block",
-    reason: `${planningModeLabel} is active (phase: ${phase}); implementation/write tools are blocked until an explicit execution handoff workflow is activated.`,
+    reason: `${planningModeLabel} is active (phase: ${phase}); implementation/write tools are blocked until an explicit execution handoff workflow is activated; ${blockedDetail}.`,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       additionalContext:
@@ -2889,8 +2968,9 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
   if (toolName === "Bash") {
     blocked = !isAllowedDeepInterviewBashWrite(cwd, command);
   } else if (DEEP_INTERVIEW_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
-    blocked = pathCandidates.length === 0
-      || !pathCandidates.every((candidate) => isAllowedDeepInterviewArtifactPath(cwd, candidate));
+    const candidates = collectImplementationToolPathCandidates(payload, toolName, pathCandidates);
+    blocked = candidates.length === 0
+      || !candidates.every((candidate) => isAllowedDeepInterviewArtifactPath(cwd, candidate));
   }
 
   if (!blocked) return null;

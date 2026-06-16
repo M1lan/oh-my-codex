@@ -132,6 +132,31 @@ export interface ManagedCodexHookOptions {
   codexHomeDir?: string;
   nodePath?: string;
   hookScriptPath?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
+
+/**
+ * Resolve an absolute path to Windows PowerShell. When PATH has been shortened
+ * (e.g. by a runtime shim that dropped System32), a bare `powershell.exe` fails
+ * to resolve, so prefer SystemRoot/windir and fall back to the well-known
+ * default install location.
+ */
+export function resolveWindowsPowerShellPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const systemRoot =
+    (typeof env.SystemRoot === "string" && env.SystemRoot.trim()) ||
+    (typeof env.windir === "string" && env.windir.trim()) ||
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
+  return win32.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
 }
 
 export function buildManagedCodexNativeHookWindowsShimPath(
@@ -149,7 +174,11 @@ export function buildManagedCodexNativeHookWindowsShimContent(
     win32.join(pkgRoot, "dist", "scripts", "codex-native-hook.js");
   const nodePath = options.nodePath ?? process.execPath;
 
-  return [
+  // Windows PowerShell 5.1 (powershell.exe) decodes BOM-less .ps1 files using
+  // the system ANSI codepage, which mojibakes non-ASCII install paths embedded
+  // below and breaks the native hook (Node MODULE_NOT_FOUND, exit 1). Prepend a
+  // UTF-8 BOM so the script is always read as UTF-8.
+  return "\uFEFF" + [
     "$ErrorActionPreference = 'Stop'",
     "$startInfo = [System.Diagnostics.ProcessStartInfo]::new()",
     `$startInfo.FileName = ${quotePowerShellLiteral(nodePath)}`,
@@ -189,7 +218,8 @@ export function buildManagedCodexNativeHookCommand(
   if (platform === "win32") {
     const codexHomeDir = options.codexHomeDir ?? dirname(pkgRoot);
     const shimPath = buildManagedCodexNativeHookWindowsShimPath(codexHomeDir);
-    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${quoteWindowsCommandPart(shimPath)}`;
+    const powerShellPath = resolveWindowsPowerShellPath(options.env);
+    return `${quoteWindowsCommandPart(powerShellPath)} -NoProfile -ExecutionPolicy Bypass -File ${quoteWindowsCommandPart(shimPath)}`;
   }
 
   return `${quoteCommandPart(process.execPath)} ${quoteCommandPart(hookScript)}`;

@@ -9,6 +9,7 @@ const hookDir = dirname(fileURLToPath(import.meta.url));
 const OMX_PLUGIN_HOOK_LAUNCHER_CONTRACT_MARKER = 'omx-plugin-hook-launcher:v1';
 const MAX_WRAPPER_STDIN_BYTES = 1024 * 1024;
 const RAW_EVENT_SCAN_BYTES = 64 * 1024;
+const MAX_STOP_STDOUT_BYTES = 1024 * 1024;
 const CODEX_HOOK_EVENT_NAMES = new Set([
   'SessionStart',
   'PreToolUse',
@@ -270,6 +271,19 @@ function hasActiveAutopilotStateForOversizedStop(input) {
   return shouldContinueAutopilotState(sessionState);
 }
 
+
+function parseSingleJsonObjectOutput(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function writeJsonNoop() {
   process.stdout.write(`${JSON.stringify({})}\n`);
   process.exitCode = 0;
@@ -310,13 +324,33 @@ async function main() {
     shell: process.platform === 'win32',
   });
 
+  const stdoutChunks = [];
   let stdoutBytes = 0;
+  let bufferedStopStdoutBytes = 0;
+  let stopStdoutOversized = false;
   let childSpawnError = null;
   let childStdinError = null;
 
   child.stdout.on('data', (chunk) => {
-    stdoutBytes += Buffer.byteLength(chunk);
-    process.stdout.write(chunk);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    stdoutBytes += buffer.byteLength;
+    if (isStop) {
+      if (!stopStdoutOversized) {
+        const remaining = MAX_STOP_STDOUT_BYTES - bufferedStopStdoutBytes;
+        if (remaining > 0) {
+          const slice = buffer.subarray(0, remaining);
+          stdoutChunks.push(slice);
+          bufferedStopStdoutBytes += slice.byteLength;
+        }
+        if (buffer.byteLength > remaining) {
+          stopStdoutOversized = true;
+          child.stdout.destroy();
+          child.kill();
+        }
+      }
+    } else {
+      process.stdout.write(chunk);
+    }
   });
   child.stderr.pipe(process.stderr);
   child.stdin.on('error', (error) => {
@@ -326,6 +360,23 @@ async function main() {
     childSpawnError = error;
   });
   child.on('close', (code, signal) => {
+    if (isStop && stopStdoutOversized) {
+      writeStopFallback('plugin_stop_hook_launcher_stdout_oversized', `codex-native-hook produced more than ${MAX_STOP_STDOUT_BYTES} bytes of Stop hook stdout`);
+      return;
+    }
+
+    if (isStop && stdoutBytes > 0) {
+      const stdoutText = Buffer.concat(stdoutChunks).toString('utf8');
+      const parsed = parseSingleJsonObjectOutput(stdoutText);
+      if (parsed) {
+        process.stdout.write(`${JSON.stringify(parsed)}\n`);
+        process.exitCode = 0;
+        return;
+      }
+      writeStopFallback('plugin_stop_hook_launcher_invalid_stdout', `codex-native-hook produced invalid Stop hook JSON stdout (${stdoutBytes} bytes)`);
+      return;
+    }
+
     if (isStop && stdoutBytes === 0) {
       if (childSpawnError) {
         writeStopFallback('plugin_stop_hook_launcher_spawn_error', `failed to launch ${command} codex-native-hook: ${childSpawnError.message}`);

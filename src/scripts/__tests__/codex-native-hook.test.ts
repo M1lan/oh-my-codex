@@ -5903,6 +5903,201 @@ exit 0
     }
   });
 
+  it("allows deep-interview apply_patch artifact writes from freeform patch text while blocking outside paths", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-apply-patch-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-di-apply-patch");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-di-apply-patch", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-di-apply-patch",
+        active_skills: [{ skill: "deep-interview", phase: "planning", active: true, session_id: "sess-di-apply-patch" }],
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-di-apply-patch",
+      });
+
+      const allowedAddFile = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "apply_patch",
+          tool_use_id: "tool-di-apply-patch-add",
+          tool_input: {
+            input: "*** Begin Patch\n*** Add File: .omx/context/findings.md\n+# Findings\n*** End Patch\n",
+          },
+        },
+        { cwd },
+      );
+      assert.equal(allowedAddFile.outputJson, null);
+
+      const allowedUpdateFile = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "ApplyPatch",
+          tool_use_id: "tool-di-apply-patch-update",
+          tool_input: {
+            input: "*** Begin Patch\n*** Update File: .omx/specs/deep-interview-demo.md\n@@\n-old\n+new\n*** End Patch\n",
+          },
+        },
+        { cwd },
+      );
+      assert.equal(allowedUpdateFile.outputJson, null);
+
+      const allowedStateWrite = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "apply_patch",
+          tool_use_id: "tool-di-apply-patch-state",
+          tool_input: {
+            input: "*** Begin Patch\n*** Add File: .omx/state/deep-interview-notes.json\n+{}\n*** End Patch\n",
+          },
+        },
+        { cwd },
+      );
+      assert.equal(allowedStateWrite.outputJson, null);
+
+      const blockedOutsidePath = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "apply_patch",
+          tool_use_id: "tool-di-apply-patch-outside",
+          tool_input: {
+            input: "*** Begin Patch\n*** Add File: src/implementation.ts\n+export const x = 1;\n*** End Patch\n",
+          },
+        },
+        { cwd },
+      );
+      assert.equal((blockedOutsidePath.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((blockedOutsidePath.outputJson as { reason?: string } | null)?.reason ?? ""), /Deep-interview is active/);
+
+      const blockedMixedPaths = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "apply_patch",
+          tool_use_id: "tool-di-apply-patch-mixed",
+          tool_input: {
+            input: "*** Begin Patch\n*** Add File: .omx/context/ok.md\n+ok\n*** Add File: src/leak.ts\n+leak\n*** End Patch\n",
+          },
+        },
+        { cwd },
+      );
+      assert.equal((blockedMixedPaths.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedUnparseablePatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-apply-patch",
+          tool_name: "apply_patch",
+          tool_use_id: "tool-di-apply-patch-empty",
+          tool_input: { input: "not a recognizable patch" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedUnparseablePatch.outputJson as { decision?: string } | null)?.decision, "block");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Autopilot ralplan planning artifacts while blocking implementation writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-autopilot-ralplan-artifact-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-autopilot-ralplan-artifact");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-autopilot-ralplan-artifact", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "autopilot",
+        phase: "ralplan",
+        session_id: "sess-autopilot-ralplan-artifact",
+        thread_id: "thread-autopilot-ralplan-artifact",
+        active_skills: [
+          {
+            skill: "autopilot",
+            phase: "ralplan",
+            active: true,
+            session_id: "sess-autopilot-ralplan-artifact",
+            thread_id: "thread-autopilot-ralplan-artifact",
+          },
+        ],
+      });
+      await writeJson(join(sessionDir, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "ralplan",
+        session_id: "sess-autopilot-ralplan-artifact",
+        thread_id: "thread-autopilot-ralplan-artifact",
+      });
+
+      const allowedPlanWrite = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-autopilot-ralplan-artifact",
+          thread_id: "thread-autopilot-ralplan-artifact",
+          tool_name: "Write",
+          tool_use_id: "tool-autopilot-ralplan-plan-write",
+          tool_input: { file_path: ".omx/plans/prd-omx-y7a.md", content: "# Plan" },
+        },
+        { cwd },
+      );
+      assert.equal(allowedPlanWrite.outputJson, null);
+
+      const allowedSpecEdit = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-autopilot-ralplan-artifact",
+          thread_id: "thread-autopilot-ralplan-artifact",
+          tool_name: "Edit",
+          tool_use_id: "tool-autopilot-ralplan-spec-edit",
+          tool_input: { file_path: ".omx/specs/omx-y7a.md", old_string: "old", new_string: "new" },
+        },
+        { cwd },
+      );
+      assert.equal(allowedSpecEdit.outputJson, null);
+
+      const blockedImplementationEdit = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-autopilot-ralplan-artifact",
+          thread_id: "thread-autopilot-ralplan-artifact",
+          tool_name: "Edit",
+          tool_use_id: "tool-autopilot-ralplan-src-edit",
+          tool_input: { file_path: "src/implementation.ts", old_string: "a", new_string: "b" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedImplementationEdit.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((blockedImplementationEdit.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/implementation\.ts/);
+      assert.match(String((blockedImplementationEdit.outputJson as { reason?: string } | null)?.reason ?? ""), /not under allowed planning artifact paths/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("allows null-device fd redirects while deep-interview blocks real Bash writes", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-null-redirect-"));
     try {
@@ -14115,6 +14310,63 @@ exit 0
       assert.match(
         String((result.outputJson?.hookSpecificOutput as { additionalContext?: string } | undefined)?.additionalContext ?? ""),
         /\$ultragoal.*\$team.*\$ralph/i,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks implementation writes while Autopilot is supervising deep-interview without a persisted phase transition", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-autopilot-deep-interview-pretool-block-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-autopilot-deep-interview-pretool-block";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeJson(join(stateDir, "sessions", sessionId, "skill-active-state.json"), {
+        active: true,
+        skill: "autopilot",
+        phase: "deep-interview",
+        session_id: sessionId,
+        active_skills: [{ skill: "autopilot", phase: "deep-interview", active: true, session_id: sessionId }],
+      });
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "deep-interview",
+        session_id: sessionId,
+        handoff_artifacts: {
+          deep_interview: null,
+          ralplan: null,
+          ultragoal: null,
+          code_review: null,
+          ultraqa: null,
+        },
+        ralplan_consensus_gate: {
+          ralplan_architect_review: null,
+          ralplan_critic_review: null,
+          complete: false,
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-autopilot-deep-interview-pretool-block",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts", old_string: "a", new_string: "b" },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson?.decision, "block");
+      assert.match(String(result.outputJson?.reason ?? ""), /Deep-interview is active .*implementation\/write tools are blocked/i);
+      assert.match(
+        String((result.outputJson?.hookSpecificOutput as { additionalContext?: string } | undefined)?.additionalContext ?? ""),
+        /To implement, first ask for or process an explicit transition/i,
       );
     } finally {
       await rm(cwd, { recursive: true, force: true });

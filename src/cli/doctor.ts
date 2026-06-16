@@ -105,7 +105,7 @@ type DoctorSetupScope = "user" | "project";
 
 interface DoctorScopeResolution {
 	scope: DoctorSetupScope;
-	source: "persisted" | "default";
+	source: "persisted" | "config" | "default";
 	installMode?: SetupInstallMode;
 	mcpMode?: SetupMcpMode;
 }
@@ -123,15 +123,72 @@ interface DoctorPaths {
 async function resolveDoctorScope(cwd: string): Promise<DoctorScopeResolution> {
 	const persisted = await readPersistedSetupPreferences(cwd);
 	if (persisted?.scope) {
+		const inferred = await inferPluginInstallModeFromConfigForScope(cwd, persisted.scope);
 		return {
 			scope: persisted.scope,
 			source: "persisted",
-			installMode: persisted.installMode,
-			mcpMode: persisted.mcpMode ?? "none",
+			installMode: persisted.installMode ?? inferred?.installMode,
+			mcpMode: persisted.mcpMode ?? inferred?.mcpMode ?? "none",
 		};
 	}
 
+	const inferredUser = await inferPluginInstallModeFromConfigForScope(cwd, "user");
+	if (inferredUser) return inferredUser;
+
+	const inferredProject = await inferPluginInstallModeFromConfigForScope(cwd, "project");
+	if (inferredProject) return inferredProject;
+
 	return { scope: "user", source: "default" };
+}
+
+async function inferPluginInstallModeFromConfigForScope(
+	cwd: string,
+	scope: DoctorSetupScope,
+): Promise<DoctorScopeResolution | null> {
+	const configPath =
+		scope === "project" ? join(cwd, ".codex", "config.toml") : codexConfigPath();
+	if (!existsSync(configPath)) return null;
+
+	try {
+		const configContent = await readFile(configPath, "utf-8");
+		if (!configEnablesPluginScopedHooks(configContent)) return null;
+
+		const { marketplace, plugin } = getParsedPluginMarketplaceConfig(configContent);
+		if (!marketplace || marketplace.source_type !== "local") return null;
+		if (!(await isTrustedOmxPluginMarketplaceSource(marketplace.source))) return null;
+		if (plugin?.enabled !== true) return null;
+
+		return {
+			scope,
+			source: "config",
+			installMode: "plugin",
+			mcpMode: inferPluginMcpModeFromConfig(configContent),
+		};
+	} catch {
+		return null;
+	}
+}
+
+async function isTrustedOmxPluginMarketplaceSource(source: unknown): Promise<boolean> {
+	if (source === getPackageRoot()) return true;
+	if (typeof source !== "string" || source.length === 0) return false;
+	try {
+		const packageJson = JSON.parse(
+			await readFile(join(source, "package.json"), "utf-8"),
+		) as { name?: unknown };
+		return packageJson.name === "oh-my-codex";
+	} catch {
+		return false;
+	}
+}
+
+function inferPluginMcpModeFromConfig(configContent: string): SetupMcpMode {
+	const states = OMX_FIRST_PARTY_MCP_SERVER_NAMES.map((serverName) =>
+		pluginMcpServerEnabled(configContent, serverName),
+	);
+	return states.length > 0 && states.every((state) => state === true)
+		? "compat"
+		: "none";
 }
 
 function resolveDoctorPaths(cwd: string, scope: DoctorSetupScope): DoctorPaths {
@@ -171,6 +228,8 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 	const scopeSourceMessage =
 		scopeResolution.source === "persisted"
 			? " (from .omx/setup-scope.json)"
+			: scopeResolution.source === "config"
+				? " (inferred from Codex plugin config)"
 			: "";
 
 	console.log("oh-my-codex doctor");
@@ -2116,18 +2175,28 @@ function checkAgentsMd(
 		`OMX AGENTS contract markers missing; file may have been overwritten by another tool. ` +
 		`Run "omx setup ${scopeFlag} --merge-agents" to preserve local guidance while restoring OMX-managed sections, ` +
 		`or "omx setup ${scopeFlag} --force" to replace it after backup.`;
+	const pluginMissingAgentsRepairMessage =
+		`persistent AGENTS.md is missing in plugin mode; session-scoped AGENTS.md can carry runtime overlay only, ` +
+		`so durable orchestration guidance is degraded. Run "omx setup ${scopeFlag} --force" and accept AGENTS.md defaults`;
 
 	if (scope === "user") {
 		const userAgentsMd = join(codexHomeDir, "AGENTS.md");
 		if (existsSync(userAgentsMd)) {
+			const content = readFileSync(userAgentsMd, "utf-8");
 			if (installMode === "plugin") {
+				if (!hasOmxAgentsContract(content)) {
+					return {
+						name: "AGENTS.md",
+						status: "warn",
+						message: `${repairMessage} Path: ${userAgentsMd}`,
+					};
+				}
 				return {
 					name: "AGENTS.md",
 					status: "pass",
-					message: `optional plugin-mode AGENTS.md defaults found in ${userAgentsMd}; contract validation skipped`,
+					message: `persistent plugin-mode AGENTS.md found in ${userAgentsMd}`,
 				};
 			}
-			const content = readFileSync(userAgentsMd, "utf-8");
 			if (!hasOmxAgentsContract(content)) {
 				return {
 					name: "AGENTS.md",
@@ -2144,8 +2213,8 @@ function checkAgentsMd(
 		if (installMode === "plugin") {
 			return {
 				name: "AGENTS.md",
-				status: "pass",
-				message: `optional plugin-mode AGENTS.md defaults not installed in ${userAgentsMd}`,
+				status: "fail",
+				message: `${pluginMissingAgentsRepairMessage}. Path: ${userAgentsMd}`,
 			};
 		}
 		return {
@@ -2157,15 +2226,21 @@ function checkAgentsMd(
 
 	const projectAgentsMd = join(process.cwd(), "AGENTS.md");
 	if (existsSync(projectAgentsMd)) {
+		const content = readFileSync(projectAgentsMd, "utf-8");
 		if (installMode === "plugin") {
+			if (!hasOmxAgentsContract(content)) {
+				return {
+					name: "AGENTS.md",
+					status: "warn",
+					message: `${repairMessage} Path: ${projectAgentsMd}`,
+				};
+			}
 			return {
 				name: "AGENTS.md",
 				status: "pass",
-				message:
-					"optional plugin-mode AGENTS.md defaults found in project root; contract validation skipped",
+				message: "persistent plugin-mode AGENTS.md found in project root",
 			};
 		}
-		const content = readFileSync(projectAgentsMd, "utf-8");
 		if (!hasOmxAgentsContract(content)) {
 			return {
 				name: "AGENTS.md",
@@ -2182,9 +2257,8 @@ function checkAgentsMd(
 	if (installMode === "plugin") {
 		return {
 			name: "AGENTS.md",
-			status: "pass",
-			message:
-				"optional plugin-mode AGENTS.md defaults not installed in project root",
+			status: "fail",
+			message: `${pluginMissingAgentsRepairMessage}. Path: ${projectAgentsMd}`,
 		};
 	}
 	return {

@@ -439,6 +439,130 @@ describe('maybeCheckAndPromptUpdate', () => {
     }
   });
 
+  it('treats a current dev install dev_base_version as the launch update baseline', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-dev-baseline-'));
+    let promptCalls = 0;
+    let updateAttempts = 0;
+
+    try {
+      await withInteractiveTty(async () => {
+        await maybeCheckAndPromptUpdate(cwd, {
+          getCurrentVersion: async () => '0.18.10',
+          fetchLatestVersion: async () => '0.18.11',
+          readUserInstallStamp: async () => ({
+            installed_version: '0.18.10',
+            setup_completed_version: '0.18.10',
+            install_channel: 'dev',
+            install_source: 'github:Yeachan-Heo/oh-my-codex#dev',
+            install_revision: '8214377e3c1d',
+            dev_base_version: '0.18.11',
+            updated_at: '2026-06-09T20:21:24.070Z',
+          }),
+          askYesNo: async () => {
+            promptCalls += 1;
+            return true;
+          },
+          runDeferredGlobalUpdate: () => {
+            updateAttempts += 1;
+            return { ok: true, stderr: '', logPath: join(cwd, '.omx', 'logs', 'update-test.log') };
+          },
+        });
+      });
+
+      assert.equal(promptCalls, 0);
+      assert.equal(updateAttempts, 0);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('does not infer a dev_base_version from launch-time latest alone', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-dev-baseline-missing-'));
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = join(cwd, '.codex');
+    const stampPath = join(codexHome, '.omx', 'install-state.json');
+    let promptCalls = 0;
+    let updateAttempts = 0;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await mkdir(join(codexHome, '.omx'), { recursive: true });
+      await writeFile(stampPath, JSON.stringify({
+        installed_version: '0.18.10',
+        setup_completed_version: '0.18.10',
+        install_channel: 'dev',
+        install_source: 'github:Yeachan-Heo/oh-my-codex#dev',
+        install_revision: '8214377e3c1d',
+        updated_at: '2026-06-09T20:21:24.070Z',
+      }, null, 2));
+
+      await withInteractiveTty(async () => {
+        await maybeCheckAndPromptUpdate(cwd, {
+          getCurrentVersion: async () => '0.18.10',
+          fetchLatestVersion: async () => '0.18.11',
+          askYesNo: async () => {
+            promptCalls += 1;
+            return false;
+          },
+          runDeferredGlobalUpdate: () => {
+            updateAttempts += 1;
+            return { ok: true, stderr: '', logPath: join(cwd, '.omx', 'logs', 'update-test.log') };
+          },
+        });
+      });
+
+      const unchangedStamp = JSON.parse(await readFile(stampPath, 'utf-8')) as { dev_base_version?: string };
+      assert.equal(promptCalls, 1);
+      assert.equal(updateAttempts, 0);
+      assert.equal(unchangedStamp.dev_base_version, undefined);
+    } finally {
+      if (typeof originalCodexHome === 'string') {
+        process.env.CODEX_HOME = originalCodexHome;
+      } else {
+        delete process.env.CODEX_HOME;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the artifact version when it is newer than the stamped dev baseline', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-dev-baseline-outrun-'));
+    let promptCalls = 0;
+    let updateAttempts = 0;
+
+    try {
+      await withInteractiveTty(async () => {
+        await maybeCheckAndPromptUpdate(cwd, {
+          getCurrentVersion: async () => '0.18.12',
+          fetchLatestVersion: async () => '0.18.13',
+          readUserInstallStamp: async () => ({
+            installed_version: '0.18.12',
+            setup_completed_version: '0.18.12',
+            install_channel: 'dev',
+            install_source: 'github:Yeachan-Heo/oh-my-codex#dev',
+            install_revision: '8214377e3c1d',
+            dev_base_version: '0.18.11',
+            updated_at: '2026-06-09T20:21:24.070Z',
+          }),
+          askYesNo: async (question) => {
+            promptCalls += 1;
+            assert.match(question, /v0\.18\.12 → v0\.18\.13/);
+            return false;
+          },
+          runDeferredGlobalUpdate: () => {
+            updateAttempts += 1;
+            return { ok: true, stderr: '', logPath: join(cwd, '.omx', 'logs', 'update-test.log') };
+          },
+        });
+      });
+
+      assert.equal(promptCalls, 1);
+      assert.equal(updateAttempts, 0);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('respects the passive launch-time cadence before checking the registry', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-'));
     const statePath = join(cwd, '.omx', 'state', 'update-check.json');
@@ -468,9 +592,9 @@ describe('maybeCheckAndPromptUpdate', () => {
   });
 });
 
-describe('direct pnpm spawn fallback', () => {
+describe('direct npm spawn fallback', () => {
   function enoentResult() {
-    const error = Object.assign(new Error('spawnSync pnpm ENOENT'), { code: 'ENOENT' });
+    const error = Object.assign(new Error('spawnSync npm ENOENT'), { code: 'ENOENT' });
     return { status: null, signal: null, error, stdout: '', stderr: '', output: [null, '', ''], pid: 0 };
   }
 
@@ -478,24 +602,24 @@ describe('direct pnpm spawn fallback', () => {
     return { status: 0, signal: null, error: undefined, stdout, stderr: '', output: [null, stdout, ''], pid: 0 };
   }
 
-  it('falls back to pnpm.cmd for win32 global installs when direct pnpm spawn returns ENOENT', () => {
+  it('falls back to npm.cmd for win32 global installs when direct npm spawn returns ENOENT', () => {
     const calls: Array<{ command: string; args: string[] }> = [];
 
     const result = runGlobalUpdate(
       ((command: string, args: readonly string[]) => {
         calls.push({ command, args: args as string[] });
-        return command === 'pnpm' ? enoentResult() : okResult();
+        return command === 'npm' ? enoentResult() : okResult();
       }) as unknown as typeof import('node:child_process').spawnSync,
       'win32',
     );
 
     assert.equal(result.ok, true);
-    assert.deepEqual(calls.map((call) => call.command), ['pnpm', 'pnpm.cmd']);
-    assert.deepEqual(calls[0].args, ['add', '-g', 'oh-my-codex@latest']);
-    assert.deepEqual(calls[1].args, ['add', '-g', 'oh-my-codex@latest']);
+    assert.deepEqual(calls.map((call) => call.command), ['npm', 'npm.cmd']);
+    assert.deepEqual(calls[0].args, ['install', '-g', 'oh-my-codex@latest']);
+    assert.deepEqual(calls[1].args, ['install', '-g', 'oh-my-codex@latest']);
   });
 
-  it('does not fall back to pnpm.cmd for non-Windows ENOENT failures', () => {
+  it('does not fall back to npm.cmd for non-Windows ENOENT failures', () => {
     const calls: string[] = [];
 
     const result = runGlobalUpdate(
@@ -508,7 +632,7 @@ describe('direct pnpm spawn fallback', () => {
 
     assert.equal(result.ok, false);
     assert.match(result.stderr, /ENOENT/);
-    assert.deepEqual(calls, ['pnpm']);
+    assert.deepEqual(calls, ['npm']);
   });
 
 
@@ -529,9 +653,9 @@ describe('direct pnpm spawn fallback', () => {
           if (command === 'git' && args[0] === 'rev-parse') {
             return okResult('1234567890abcdef\n');
           }
-          if (command === 'pnpm' && args[0] === 'pack') {
+          if (command === 'npm' && args[0] === 'pack') {
             writeFileSync(join(options?.cwd ?? process.cwd(), 'oh-my-codex-0.18.9.tgz'), 'packed');
-            return okResult('oh-my-codex-0.18.9.tgz\n');
+            return okResult(JSON.stringify([{ filename: 'oh-my-codex-0.18.9.tgz' }]));
           }
           return okResult();
         }) as unknown as typeof import('node:child_process').spawnSync,
@@ -542,12 +666,12 @@ describe('direct pnpm spawn fallback', () => {
       assert.deepEqual(calls.map((call) => [call.command, ...call.args.slice(0, 3)]), [
         ['git', 'clone', '--depth', '1'],
         ['git', 'rev-parse', 'HEAD'],
-        ['pnpm', 'install', '--config.global=false', '--prod=false'],
-        ['pnpm', 'run', 'prepack'],
-        ['pnpm', 'pack'],
-        ['pnpm', 'add', '-g', join(calls[2].cwd ?? '', 'oh-my-codex-0.18.9.tgz')],
+        ['npm', 'install', '--global=false', '--location=project'],
+        ['npm', 'run', 'prepack'],
+        ['npm', 'pack', '--ignore-scripts', '--json'],
+        ['npm', 'install', '-g', join(calls[2].cwd ?? '', 'oh-my-codex-0.18.9.tgz')],
       ]);
-      const dependencyInstall = calls.find((call) => call.command === 'pnpm' && call.args[0] === 'install' && call.args.includes('--prod=false'));
+      const dependencyInstall = calls.find((call) => call.command === 'npm' && call.args[0] === 'install' && call.args.includes('--include=dev'));
       assert.equal(dependencyInstall?.env?.npm_config_global, 'false');
       assert.equal(dependencyInstall?.env?.npm_config_location, 'project');
       assert.equal(calls.some((call) => call.args.includes('github:Yeachan-Heo/oh-my-codex#dev')), false);
@@ -560,19 +684,19 @@ describe('direct pnpm spawn fallback', () => {
     }
   });
 
-  it('falls back to pnpm.cmd for win32 global-root lookup when direct pnpm spawn returns ENOENT', () => {
+  it('falls back to npm.cmd for win32 global-root lookup when direct npm spawn returns ENOENT', () => {
     const calls: Array<{ command: string; args: string[] }> = [];
 
     const root = resolveGlobalInstallRoot(
       ((command: string, args: readonly string[]) => {
         calls.push({ command, args: args as string[] });
-        return command === 'pnpm' ? enoentResult() : okResult('C:\\Users\\alice\\AppData\\Local\\pnpm\\global\\5\\node_modules\r\n');
+        return command === 'npm' ? enoentResult() : okResult('C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\r\n');
       }) as unknown as typeof import('node:child_process').spawnSync,
       'win32',
     );
 
-    assert.equal(root, 'C:\\Users\\alice\\AppData\\Local\\pnpm\\global\\5\\node_modules');
-    assert.deepEqual(calls.map((call) => call.command), ['pnpm', 'pnpm.cmd']);
+    assert.equal(root, 'C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules');
+    assert.deepEqual(calls.map((call) => call.command), ['npm', 'npm.cmd']);
     assert.deepEqual(calls[0].args, ['root', '-g']);
     assert.deepEqual(calls[1].args, ['root', '-g']);
   });
@@ -631,7 +755,7 @@ describe('runImmediateUpdate', () => {
       assert.deepEqual(refreshCwds, [cwd]);
       assert.match(logs.join('\n'), /Selected update channel: stable/);
       assert.match(logs.join('\n'), /Install source: oh-my-codex@latest/);
-      assert.match(logs.join('\n'), /Running: pnpm add -g oh-my-codex@latest/);
+      assert.match(logs.join('\n'), /Running: npm install -g oh-my-codex@latest/);
       assert.match(logs.join('\n'), /Updated stable channel to v0\.14\.1/);
 
       const stamp = JSON.parse(await readFile(stampPath, 'utf-8')) as {
@@ -698,7 +822,7 @@ describe('runImmediateUpdate', () => {
       assert.equal(refreshCalls, 1);
       assert.deepEqual(installSources, [`${PACKAGE_NAME}@latest`]);
       assert.match(logs.join('\n'), /Selected update channel: stable/);
-      assert.match(logs.join('\n'), /Running: pnpm add -g oh-my-codex@latest/);
+      assert.match(logs.join('\n'), /Running: npm install -g oh-my-codex@latest/);
     } finally {
       console.log = originalLog;
       if (typeof originalCodexHome === 'string') {
@@ -788,7 +912,7 @@ describe('runImmediateUpdate', () => {
     }
   });
 
-  it('installs the upstream dev branch without implying registry latest', async () => {
+  it('installs the upstream dev branch without implying npm latest', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-dev-'));
     const stampPath = join(cwd, '.codex', '.omx', 'install-state.json');
     const originalCodexHome = process.env.CODEX_HOME;
@@ -823,12 +947,12 @@ describe('runImmediateUpdate', () => {
       }, { channel: 'dev' });
 
       assert.equal(result.status, 'updated');
-      assert.equal(latestCalls, 0);
+      assert.equal(latestCalls, 1);
       assert.equal(refreshCalls, 1);
       assert.deepEqual(installSources, ['github:Yeachan-Heo/oh-my-codex#dev']);
       assert.match(logs.join('\n'), /Selected update channel: dev/);
       assert.match(logs.join('\n'), /Install source: github:Yeachan-Heo\/oh-my-codex#dev/);
-      assert.match(logs.join('\n'), /Running: clone dev branch, run prepack, then pnpm add -g the packed tarball/);
+      assert.match(logs.join('\n'), /Running: clone dev branch, run prepack, then npm install -g the packed tarball/);
       assert.doesNotMatch(logs.join('\n'), /dev.*oh-my-codex@latest/i);
 
       const stamp = JSON.parse(await readFile(stampPath, 'utf-8')) as {
@@ -837,14 +961,56 @@ describe('runImmediateUpdate', () => {
         install_channel: string;
         install_source: string;
         install_revision: string;
+        dev_base_version: string;
       };
       assert.equal(stamp.installed_version, '0.15.0');
       assert.equal(stamp.setup_completed_version, '0.15.0');
       assert.equal(stamp.install_channel, 'dev');
       assert.equal(stamp.install_source, 'github:Yeachan-Heo/oh-my-codex#dev');
       assert.equal(stamp.install_revision, '1234567890ab');
+      assert.equal(stamp.dev_base_version, '0.15.0');
     } finally {
       console.log = originalLog;
+      if (typeof originalCodexHome === 'string') {
+        process.env.CODEX_HOME = originalCodexHome;
+      } else {
+        delete process.env.CODEX_HOME;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+
+  it('records the latest release as dev display baseline when dev package.json lags behind', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-dev-baseline-'));
+    const stampPath = join(cwd, '.codex', '.omx', 'install-state.json');
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = join(cwd, '.codex');
+
+    try {
+      const result = await runImmediateUpdate(cwd, {
+        getCurrentVersion: async () => '0.18.10',
+        fetchLatestVersion: async () => '0.18.11',
+        runGlobalUpdate: () => ({ ok: true, stderr: '', revision: '4dd0f6455772' }),
+        runSetupRefresh: async () => ({ ok: true, stderr: '' }),
+        getInstalledVersionAfterUpdate: async () => '0.18.10',
+        getInstalledRevisionAfterUpdate: async () => null,
+      }, { channel: 'dev' });
+
+      assert.equal(result.status, 'updated');
+      const stamp = JSON.parse(await readFile(stampPath, 'utf-8')) as {
+        installed_version: string;
+        setup_completed_version: string;
+        install_channel: string;
+        install_revision: string;
+        dev_base_version: string;
+      };
+      assert.equal(stamp.installed_version, '0.18.10');
+      assert.equal(stamp.setup_completed_version, '0.18.10');
+      assert.equal(stamp.install_channel, 'dev');
+      assert.equal(stamp.install_revision, '4dd0f6455772');
+      assert.equal(stamp.dev_base_version, '0.18.11');
+    } finally {
       if (typeof originalCodexHome === 'string') {
         process.env.CODEX_HOME = originalCodexHome;
       } else {
@@ -941,7 +1107,7 @@ describe('runImmediateUpdate', () => {
 });
 
 describe('runImmediateUpdate failure diagnostics', () => {
-  it('reports pnpm stderr when explicit update fails', async () => {
+  it('reports npm stderr when explicit update fails', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-update-now-'));
     const originalLog = console.log;
     const logs: string[] = [];
@@ -964,9 +1130,9 @@ describe('runImmediateUpdate failure diagnostics', () => {
 
       assert.equal(result.status, 'failed');
       assert.equal(refreshCalls, 0);
-      assert.match(logs.join('\n'), /Update failed while running pnpm add -g oh-my-codex@latest/);
-      assert.match(logs.join('\n'), /pnpm stderr: EPERM: file is locked/);
-      assert.match(logs.join('\n'), /pnpm add -g oh-my-codex@latest && omx setup/);
+      assert.match(logs.join('\n'), /Update failed while running npm install -g oh-my-codex@latest/);
+      assert.match(logs.join('\n'), /npm stderr: EPERM: file is locked/);
+      assert.match(logs.join('\n'), /npm install -g oh-my-codex@latest && omx setup/);
     } finally {
       console.log = originalLog;
       await rm(cwd, { recursive: true, force: true });
@@ -976,7 +1142,7 @@ describe('runImmediateUpdate failure diagnostics', () => {
 
 
 describe('runDeferredGlobalUpdate', () => {
-  it('launches a detached Windows PowerShell updater that waits for the parent and runs setup after pnpm', async () => {
+  it('launches a detached Windows PowerShell updater that waits for the parent and runs setup after npm', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-deferred-update-'));
     const calls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
     const listeners: string[] = [];
@@ -1011,7 +1177,7 @@ describe('runDeferredGlobalUpdate', () => {
       assert.equal((calls[0].options.env as NodeJS.ProcessEnv | undefined)?.OMX_DEFERRED_UPDATE_PARENT_PID, '12345');
       assert.equal((calls[0].options.env as NodeJS.ProcessEnv | undefined)?.OMX_DEFERRED_UPDATE_LOG, result.logPath);
       assert.match(calls[0].args[4], /Get-Process -Id \$parentPid/);
-      assert.match(calls[0].args[4], /pnpm add -g oh-my-codex@latest/);
+      assert.match(calls[0].args[4], /npm install -g oh-my-codex@latest/);
       assert.match(calls[0].args[4], /& 'omx' 'setup'/);
     } finally {
       await rm(cwd, { recursive: true, force: true });

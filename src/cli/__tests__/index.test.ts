@@ -3457,6 +3457,92 @@ exit 0
     }
   });
 
+  it("creates a Windows omx.cmd runtime shim with cmd batch content on win32", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-runtime-command-shim-win-"));
+    try {
+      const shimDir = ensureOmxRuntimeCommandShim(
+        cwd,
+        "C:\\repo\\dist\\cli\\omx.js",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "win32",
+      );
+      const shimPath = omxRuntimeCommandShimPath(cwd, "win32");
+
+      assert.equal(shimDir, dirname(shimPath));
+      assert.equal(shimPath.endsWith("omx.cmd"), true);
+      assert.equal(existsSync(shimPath), true);
+      assert.equal(await readFile(shimPath, "utf-8"), [
+        "@echo off",
+        `"C:\\Program Files\\nodejs\\node.exe" "C:\\repo\\dist\\cli\\omx.js" %*`,
+        "",
+      ].join("\r\n"));
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an inherited Windows Path key when prepending the shim dir", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-runtime-command-shim-winpath-"));
+    try {
+      const env = prependOmxRuntimeCommandShimToEnv(
+        cwd,
+        { Path: "C:\\Windows\\System32;C:\\Windows" },
+        "C:\\repo\\dist\\cli\\omx.js",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "win32",
+      );
+      const shimDir = dirname(omxRuntimeCommandShimPath(cwd, "win32"));
+
+      assert.equal(env.Path, `${shimDir};C:\\Windows\\System32;C:\\Windows`);
+      assert.equal(env.PATH, undefined);
+      assert.equal(env.OMX_ENTRY_PATH, "C:\\repo\\dist\\cli\\omx.js");
+      assert.equal(env.OMX_STARTUP_CWD, cwd);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("collapses duplicate Windows PATH/Path variants to a single Path key", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-runtime-command-shim-windup-"));
+    try {
+      const env = prependOmxRuntimeCommandShimToEnv(
+        cwd,
+        { PATH: "", Path: "C:\\Windows\\System32" },
+        "C:\\repo\\dist\\cli\\omx.js",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "win32",
+      );
+      const shimDir = dirname(omxRuntimeCommandShimPath(cwd, "win32"));
+      const pathKeys = Object.keys(env).filter(
+        (key) => key.toLowerCase() === "path",
+      );
+
+      assert.deepEqual(pathKeys, ["Path"]);
+      assert.equal(env.Path, `${shimDir};C:\\Windows\\System32`);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("seeds a Windows Path entry from the shim dir when none is inherited", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-runtime-command-shim-winempty-"));
+    try {
+      const env = prependOmxRuntimeCommandShimToEnv(
+        cwd,
+        {},
+        "C:\\repo\\dist\\cli\\omx.js",
+        "C:\\Program Files\\nodejs\\node.exe",
+        "win32",
+      );
+      const shimDir = dirname(omxRuntimeCommandShimPath(cwd, "win32"));
+
+      assert.equal(env.Path, shimDir);
+      assert.equal(env.PATH, undefined);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps detached tmux bootstrap bounded when no interactive parent env file is requested", () => {
     const steps = buildDetachedSessionBootstrapSteps(
       "omx-demo",
@@ -4740,8 +4826,25 @@ exit 0
     assert.match(historyHook.args[3] || "", /^client-detached\[[0-9]+\]$/);
     assert.equal(
       historyHook.args[4],
-      "if-shell -F '#{==:#{session_attached},0}' 'clear-history -t %leader'",
+      `if-shell -F '#{==:#{session_attached},0}' 'run-shell -b "tmux clear-history -t %leader >/dev/null 2>&1 || true"'`,
     );
+  });
+
+  it("detached history prune hook tolerates a dead leader pane", () => {
+    const steps = buildDetachedSessionFinalizeSteps(
+      "omx-demo",
+      "%12",
+      "3",
+      true,
+      false,
+      true,
+      "%leader",
+    );
+    const historyHook = steps.find((step) => step.name === "register-detached-history-prune-hook");
+    assert.ok(historyHook);
+    const hookCommand = historyHook.args[4] || "";
+    assert.match(hookCommand, /run-shell -b/);
+    assert.match(hookCommand, />\/dev\/null 2>&1 \|\| true/);
   });
 
   it("buildDetachedSessionFinalizeSteps skips attach for Hermes MCP bridge launches", () => {

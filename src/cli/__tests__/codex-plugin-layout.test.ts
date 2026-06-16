@@ -521,7 +521,7 @@ describe('official Codex plugin layout', () => {
     });
   });
 
-  it('does not append fallback Stop JSON after partial child stdout', async () => {
+  it('replaces partial Stop child stdout with fallback Stop JSON', async () => {
     await withPluginCacheCopy(async (cachePluginRoot, cacheRoot) => {
       const commandPath = join(cacheRoot, process.platform === 'win32' ? 'partial.cmd' : 'partial.sh');
       if (process.platform === 'win32') {
@@ -537,9 +537,64 @@ describe('official Codex plugin layout', () => {
         { OMX_NATIVE_HOOK_COMMAND: commandPath },
       );
 
-      assert.equal(result.status, 2, result.stderr || result.stdout);
-      assert.equal(result.stdout, 'PARTIAL');
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.doesNotMatch(result.stdout, /PARTIAL/);
+      const output = parseSingleJsonStdout(result.stdout);
+      assert.equal(output.decision, 'block');
+      assert.equal(output.stopReason, 'plugin_stop_hook_launcher_invalid_stdout');
+    });
+  });
+
+  it('preserves valid Stop child JSON even when the child exits nonzero', async () => {
+    await withPluginCacheCopy(async (cachePluginRoot, cacheRoot) => {
+      const commandPath = join(cacheRoot, process.platform === 'win32' ? 'valid-json-exit.cmd' : 'valid-json-exit.sh');
+      if (process.platform === 'win32') {
+        await writeFile(commandPath, '@echo off\r\necho {"decision":"block","stopReason":"child_valid_json"}\r\nexit /b 7\r\n', 'utf-8');
+      } else {
+        await writeFile(commandPath, `#!/bin/sh
+printf '{"decision":"block","stopReason":"child_valid_json"}\n'
+exit 7
+`, 'utf-8');
+        await chmod(commandPath, 0o755);
+      }
+
+      const result = runPluginNativeHook(
+        cachePluginRoot,
+        JSON.stringify({ hook_event_name: 'Stop', session_id: 'sess-plugin-valid-json-exit-stop' }),
+        { OMX_NATIVE_HOOK_COMMAND: commandPath },
+      );
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const output = parseSingleJsonStdout(result.stdout);
+      assert.equal(output.decision, 'block');
+      assert.equal(output.stopReason, 'child_valid_json');
       assert.doesNotMatch(result.stdout, /plugin_stop_hook_launcher/);
+    });
+  });
+
+  it('replaces oversized Stop child stdout with fallback Stop JSON', async () => {
+    await withPluginCacheCopy(async (cachePluginRoot, cacheRoot) => {
+      const commandPath = join(cacheRoot, process.platform === 'win32' ? 'oversized-stop-stdout.cmd' : 'oversized-stop-stdout.sh');
+      if (process.platform === 'win32') {
+        await writeFile(commandPath, '@echo off\r\nfor /L %%i in (1,1,1100000) do <nul set /p=x\r\n', 'utf-8');
+      } else {
+        await writeFile(commandPath, `#!/bin/sh
+head -c 1100000 /dev/zero | tr '\0' x
+`, 'utf-8');
+        await chmod(commandPath, 0o755);
+      }
+
+      const result = runPluginNativeHook(
+        cachePluginRoot,
+        JSON.stringify({ hook_event_name: 'Stop', session_id: 'sess-plugin-oversized-stdout-stop' }),
+        { OMX_NATIVE_HOOK_COMMAND: commandPath },
+      );
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.ok(result.stdout.length < 2000, 'oversized child stdout should not leak to Stop stdout');
+      const output = parseSingleJsonStdout(result.stdout);
+      assert.equal(output.decision, 'block');
+      assert.equal(output.stopReason, 'plugin_stop_hook_launcher_stdout_oversized');
     });
   });
 

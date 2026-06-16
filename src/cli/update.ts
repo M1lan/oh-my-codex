@@ -27,6 +27,7 @@ export interface UserInstallStamp {
   install_channel?: UpdateChannel;
   install_source?: string;
   install_revision?: string;
+  dev_base_version?: string;
   updated_at: string;
 }
 
@@ -580,6 +581,7 @@ async function writeSuccessfulInstallStamp(
     channel?: UpdateChannel;
     source?: string;
     revision?: string | null;
+    devBaseVersion?: string | null;
   } = {},
 ): Promise<void> {
   await writeUserInstallStamp({
@@ -588,6 +590,7 @@ async function writeSuccessfulInstallStamp(
     ...(metadata.channel ? { install_channel: metadata.channel } : {}),
     ...(metadata.source ? { install_source: metadata.source } : {}),
     ...(metadata.revision ? { install_revision: metadata.revision } : {}),
+    ...(metadata.devBaseVersion ? { dev_base_version: stripLeadingV(metadata.devBaseVersion) } : {}),
     updated_at: new Date().toISOString(),
   });
 }
@@ -615,6 +618,9 @@ export async function readUserInstallStamp(
         : {}),
       ...(typeof parsed.install_revision === 'string'
         ? { install_revision: parsed.install_revision }
+        : {}),
+      ...(typeof parsed.dev_base_version === 'string'
+        ? { dev_base_version: parsed.dev_base_version }
         : {}),
       updated_at: parsed.updated_at,
     };
@@ -645,6 +651,30 @@ function doesSetupStampMatchVersion(
   stamp: UserInstallStamp | null,
 ): boolean {
   return stripLeadingV(stamp?.setup_completed_version ?? '') === stripLeadingV(currentVersion);
+}
+
+function resolveUpdateCheckBaseline(
+  currentVersion: string | null,
+  stamp: UserInstallStamp | null,
+): string | null {
+  if (!currentVersion) return null;
+  const current = stripLeadingV(currentVersion);
+  const stampVersion = stripLeadingV(stamp?.setup_completed_version ?? stamp?.installed_version ?? '');
+  const devBaseVersion = stripLeadingV(stamp?.dev_base_version ?? '');
+
+  // Launch-time update checks must not synthesize dev_base_version from npm
+  // latest alone. A dev baseline is install metadata, so only a matching dev
+  // stamp written by a successful dev update can raise the comparison baseline.
+  if (
+    stamp?.install_channel === 'dev' &&
+    stampVersion === current &&
+    devBaseVersion &&
+    isNewerVersion(current, devBaseVersion)
+  ) {
+    return devBaseVersion;
+  }
+
+  return currentVersion;
 }
 
 export function resolveGlobalInstallRoot(
@@ -797,8 +827,12 @@ async function executeUpdate(
   const channelConfig = resolveUpdateChannelConfig(channel);
   const [current, latest] = await Promise.all([
     dependencies.getCurrentVersion(),
-    channel === 'stable' || !forceInstall ? dependencies.fetchLatestVersion() : Promise.resolve(null),
+    channel === 'stable' || !forceInstall || channel === 'dev' ? dependencies.fetchLatestVersion() : Promise.resolve(null),
   ]);
+  const installStamp = await dependencies.readUserInstallStamp();
+  const updateCheckBaseline = !forceInstall
+    ? resolveUpdateCheckBaseline(current, installStamp)
+    : current;
 
   try {
     await dependencies.writeUpdateState(cwd, {
@@ -810,19 +844,18 @@ async function executeUpdate(
     // just because the current working directory is read-only or unavailable.
   }
 
-  if (!forceInstall && (!current || !latest)) {
+  if (!forceInstall && (!updateCheckBaseline || !latest)) {
     if (immediate) {
       console.log('[omx] Unable to determine the latest oh-my-codex version. Try again later.');
     }
     return { status: 'unavailable', currentVersion: current, latestVersion: latest };
   }
 
-  if (!forceInstall && current && latest && !isNewerVersion(current, latest)) {
+  if (!forceInstall && updateCheckBaseline && latest && !isNewerVersion(updateCheckBaseline, latest)) {
     if (immediate) {
-      const installStamp = await dependencies.readUserInstallStamp();
-      if (!doesSetupStampMatchVersion(current, installStamp)) {
+      if (current && !doesSetupStampMatchVersion(current, installStamp)) {
         console.log(
-          `[omx] oh-my-codex is already up to date (v${current}). Running setup refresh...`,
+          `[omx] oh-my-codex is already up to date (v${updateCheckBaseline}). Running setup refresh...`,
         );
         const setupRefreshResult = await dependencies.runSetupRefresh(cwd);
         if (!setupRefreshResult.ok) {
@@ -832,13 +865,13 @@ async function executeUpdate(
           return { status: 'failed', currentVersion: current, latestVersion: latest };
         }
         await writeSuccessfulInstallStamp(current);
-        console.log(`[omx] Setup refresh completed for v${current}. Restart to use current code.`);
+        console.log(`[omx] Setup refresh completed for v${updateCheckBaseline}. Restart to use current code.`);
         return { status: 'up-to-date', currentVersion: current, latestVersion: latest };
       }
     }
 
     if (immediate) {
-      console.log(`[omx] oh-my-codex is already up to date (v${current}).`);
+      console.log(`[omx] oh-my-codex is already up to date (v${updateCheckBaseline}).`);
     }
     return { status: 'up-to-date', currentVersion: current, latestVersion: latest };
   }
@@ -846,8 +879,8 @@ async function executeUpdate(
   if (prompt) {
     const approved = await dependencies.askYesNo(
       immediate
-        ? `[omx] Update available: v${current} → v${latest}. Update now? [Y/n] `
-        : `[omx] Update available: v${current} → v${latest}. Update after this session exits? [Y/n] `,
+        ? `[omx] Update available: v${updateCheckBaseline} → v${latest}. Update now? [Y/n] `
+        : `[omx] Update available: v${updateCheckBaseline} → v${latest}. Update after this session exits? [Y/n] `,
     );
     if (!approved) {
       return { status: 'declined', currentVersion: current, latestVersion: latest };
@@ -893,6 +926,11 @@ async function executeUpdate(
   const installedRevision = channelConfig.channel === 'dev'
     ? ((await dependencies.getInstalledRevisionAfterUpdate()) ?? result.revision ?? null)
     : null;
+  const devBaseVersion = channelConfig.channel === 'dev'
+    ? (latest && installedVersion
+        ? (isNewerVersion(latest, installedVersion) ? installedVersion : latest)
+        : latest)
+    : null;
   const stampVersion = channelConfig.channel === 'stable'
     ? (latest ?? installedVersion ?? current)
     : installedVersion;
@@ -901,6 +939,7 @@ async function executeUpdate(
       channel: channelConfig.channel,
       source: channelConfig.installSource,
       revision: channelConfig.channel === 'dev' ? installedRevision : null,
+      devBaseVersion,
     });
   } else if (channelConfig.channel === 'dev') {
     console.log(
