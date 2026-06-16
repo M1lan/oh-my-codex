@@ -44,8 +44,8 @@ describe('package bin contract', () => {
     assert.match(pkg.scripts?.postinstall ?? '', /existsSync/);
     assert.equal(pkg.scripts?.postpack, 'pnpm run clean:native-package-assets');
     assert.equal(pkg.scripts?.['test:explore'], 'cargo test -p omx-explore-harness && node --test dist/cli/__tests__/explore.test.js dist/hooks/__tests__/explore-routing.test.js dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js');
-    const packagedHarnessPath = process.platform === 'win32' ? 'bin/omx-explore-harness.exe' : 'bin/omx-explore-harness';
-
+    assert.equal(pkg.scripts?.['test:team:cross-rebase-smoke:compiled'], 'node dist/scripts/run-test-files.js dist/team/__tests__/cross-rebase-smoke.test.js');
+    assert.equal(pkg.scripts?.['test:node'], 'node dist/scripts/run-test-files.js dist');
     assert.equal(pkg.scripts?.test, 'pnpm run build && pnpm run verify:native-agents && pnpm run verify:plugin-bundle && pnpm run test:node && node dist/scripts/generate-catalog-docs.js --check');
     assert.equal(pkg.scripts?.['test:ci:compiled'], 'pnpm run verify:native-agents && pnpm run verify:plugin-bundle && pnpm run test:node && node dist/scripts/generate-catalog-docs.js --check');
     assert.equal(
@@ -240,5 +240,5 @@ describe('package bin contract', () => {
       || path === 'plugins/oh-my-codex/.codex/hooks.json'
       || path === 'plugins/oh-my-codex/.codex-plugin/hooks.json'
       || path.startsWith('plugins/oh-my-codex/.omx/hooks/')), false, 'did not expect setup-owned hook assets inside the installable plugin bundle');
-
+  });
 });
