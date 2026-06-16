@@ -8,6 +8,7 @@ import { CLAUDE_SKIP_PERMISSIONS_FLAG } from '../cli/constants.js';
 const PROVIDER_BINARIES: Record<string, string> = {
   claude: 'claude',
   gemini: 'gemini',
+  gjc: 'gjc',
 };
 const ASK_ORIGINAL_TASK_ENV = 'OMX_ASK_ORIGINAL_TASK';
 const ISSUE_WORK_PROMPT_PATTERNS = [
@@ -84,6 +85,10 @@ function shouldUseClaudeIssuePermissionsBypass(provider: string, prompt: string)
 }
 
 function buildProviderLaunchArgs(provider: string, prompt: string, originalTask: string): string[] {
+  if (provider === 'gjc') {
+    // gjc -p takes the prompt as a positional arg; same pattern as gemini.
+    return ['-p', prompt];
+  }
   const promptArgs = provider === 'claude'
     ? ['-p', '--', prompt]
     : ['-p', prompt];
