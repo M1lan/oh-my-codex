@@ -190,6 +190,8 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
 
     if (shouldReturnToRalplan) {
       reviewCycle += 1;
+      artifacts.current_phase = 'ralplan';
+      artifacts.review_cycle = reviewCycle;
     }
 
     const handoffArtifacts = normalizeHandoffArtifactKeys(handoffArtifactsByStage);
@@ -277,7 +279,12 @@ export async function runPipeline(config: PipelineConfig): Promise<PipelineResul
     active: false,
     current_phase: 'complete',
     completed_at: new Date().toISOString(),
-  }, cwd, undefined, { trustedPipelineProgress: true });
+    review_verdict: artifacts.review_verdict ?? null,
+    qa_verdict: artifacts.qa_verdict ?? null,
+    return_to_ralplan_reason: null,
+    handoff_artifacts: normalizeHandoffArtifactKeys(handoffArtifactsByStage),
+    pipeline_stage_results: { ...stageResults },
+  } as Partial<PipelineModeStateExtension>, cwd, undefined, { trustedPipelineProgress: true });
 
   return {
     status: 'completed',

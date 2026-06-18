@@ -1464,6 +1464,156 @@ describe("codex native hook dispatch", () => {
     }
   });
 
+  it("suppresses child-agent SessionStart and Stop before the canonical leader session is reconciled (#2831)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-no-canonical-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "session",
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
+      const stateDir = join(cwd, ".omx", "state");
+      const leaderNativeSessionId = "codex-leader-thread-no-canonical";
+      const childNativeSessionId = "codex-child-thread-no-canonical";
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
+      const transcriptPath = join(cwd, "no-canonical-subagent-rollout.jsonl");
+      await writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: childNativeSessionId,
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: leaderNativeSessionId,
+                  agent_role: "explorer",
+                },
+              },
+            },
+          },
+        })}\n`,
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: childNativeSessionId,
+          transcript_path: transcriptPath,
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      assert.equal(
+        existsSync(join(cwd, "hook-events.jsonl")),
+        false,
+        "child SessionStart must be suppressed even before the canonical leader session is reconciled",
+      );
+      assert.equal(
+        existsSync(join(stateDir, "session.json")),
+        false,
+        "child SessionStart must not be promoted into a root/leader session",
+      );
+
+      const tracking = JSON.parse(
+        await readFile(join(stateDir, "subagent-tracking.json"), "utf-8"),
+      ) as {
+        sessions?: Record<string, {
+          leader_thread_id?: string;
+          threads?: Record<string, { kind?: string; mode?: string }>;
+        }>;
+      };
+      assert.equal(tracking.sessions?.[leaderNativeSessionId]?.leader_thread_id, leaderNativeSessionId);
+      assert.equal(tracking.sessions?.[leaderNativeSessionId]?.threads?.[childNativeSessionId]?.kind, "subagent");
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: childNativeSessionId,
+          thread_id: childNativeSessionId,
+          turn_id: "no-canonical-child-stop-turn",
+        },
+        { cwd },
+      );
+
+      assert.equal(
+        existsSync(join(cwd, "hook-events.jsonl")),
+        false,
+        "child Stop must be suppressed when the start was recognized as subagent-scoped",
+      );
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves root/leader SessionStart dispatch at session verbosity (#2831)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-root-session-start-preserved-"));
+    const originalCodexHome = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = join(cwd, "codex-home");
+      await writeJson(join(process.env.CODEX_HOME, ".omx-config.json"), {
+        notifications: {
+          enabled: true,
+          verbosity: "session",
+          telegram: { enabled: true, botToken: "123:abc", chatId: "456" },
+        },
+      });
+      await mkdir(join(cwd, ".omx", "hooks"), { recursive: true });
+      await writeFile(
+        join(cwd, ".omx", "hooks", "record-lifecycle.mjs"),
+        [
+          "import { appendFileSync } from 'node:fs';",
+          "export async function onHookEvent(event) {",
+          "  appendFileSync('hook-events.jsonl', `${JSON.stringify({ event: event.event })}\\n`);",
+          "}",
+        ].join("\n"),
+      );
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "codex-root-thread-preserved",
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      const hookEvents = await readFile(join(cwd, "hook-events.jsonl"), "utf-8");
+      assert.match(
+        hookEvents,
+        /"event":"session-start"/,
+        "root/leader SessionStart must still dispatch at session verbosity",
+      );
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a self-parented native role thread as subagent evidence", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-self-parented-subagent-"));
     try {
@@ -5898,6 +6048,219 @@ exit 0
         { cwd },
       );
       assert.equal((blockedBash.outputJson as { decision?: string } | null)?.decision, "block");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows read-only diagnostics mentioning apply_patch while deep-interview blocks real apply_patch invocations", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-grep-apply-patch-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-di-grep");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-di-grep", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-di-grep",
+        active_skills: [{ skill: "deep-interview", phase: "planning", active: true, session_id: "sess-di-grep" }],
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-di-grep",
+      });
+
+      const allowedGrep = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep",
+          tool_input: { command: 'grep -n "apply_patch" dist/scripts/codex-native-hook.js' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedGrep.outputJson, null);
+
+      const allowedSubshellGrep = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep-subshell",
+          tool_input: { command: '(grep -n "apply_patch" dist/scripts/codex-native-hook.js)' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedSubshellGrep.outputJson, null);
+
+      // Double-quoted spans that merely mention the literal token, expand a
+      // parameter, or run a substitution that is not `apply_patch` stay allowed
+      // — the quoted-substitution fix must not over-block read-only diagnostics.
+      const allowedQuotedMention = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-grep-quoted-mention",
+          tool_input: { command: 'echo "${apply_patch} $(echo apply_patch)"' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedQuotedMention.outputJson, null);
+
+      const blockedApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-invoke",
+          tool_input: { command: "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvAssignmentApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-env-assignment",
+          tool_input: { command: "FOO=bar apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvAssignmentApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvWrapperApplyPatch = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-grep",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-apply-patch-env-wrapper",
+          tool_input: { command: "env FOO=bar apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvWrapperApplyPatch.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const heredocBody = "\n*** Begin Patch\n*** Add File: src/leak.ts\n+export const x = 1;\n*** End Patch\nEOF";
+      const blockedRealApplyPatchForms: Array<{ id: string; command: string }> = [
+        { id: "tool-di-apply-patch-env-i", command: `env -i apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-env-unset", command: `env -u FOO apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-env-i-assignment", command: `env -i FOO=bar apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-assignment-env", command: `FOO=bar env apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-exec-env-assignment", command: `exec env FOO=bar apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-absolute-path", command: `/usr/bin/apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-relative-path", command: `./apply_patch <<'EOF'${heredocBody}` },
+        { id: "tool-di-apply-patch-subshell", command: `(apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-subshell-spaced", command: `( apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-double-subshell", command: `((apply_patch <<'EOF'${heredocBody}\n))` },
+        { id: "tool-di-apply-patch-pipe-subshell", command: `true | (apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-subshell-env", command: `(env apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-command-substitution", command: `x=$(apply_patch <<'EOF'${heredocBody}\n)` },
+        { id: "tool-di-apply-patch-brace-group", command: `{ apply_patch <<'EOF'${heredocBody}\n}` },
+        // Command substitution runs even inside double quotes, so quoting the
+        // already-blocked `$(…)` / `` `…` `` form must not bypass the guard.
+        { id: "tool-di-apply-patch-quoted-command-substitution", command: `echo "$(apply_patch <<'EOF'${heredocBody}\n)"` },
+        { id: "tool-di-apply-patch-quoted-backtick", command: `echo "\`apply_patch <<'EOF'${heredocBody}\`"` },
+        { id: "tool-di-apply-patch-quoted-command-substitution-prefixed", command: `echo "patched: $(apply_patch <<'EOF'${heredocBody}\n) done"` },
+      ];
+      for (const form of blockedRealApplyPatchForms) {
+        const blockedForm = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: "sess-di-grep",
+            tool_name: "Bash",
+            tool_use_id: form.id,
+            tool_input: { command: form.command },
+          },
+          { cwd },
+        );
+        assert.equal(
+          (blockedForm.outputJson as { decision?: string } | null)?.decision,
+          "block",
+          `expected deep-interview to block real apply_patch form: ${form.command}`,
+        );
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows deep-interview same-command literal variable redirects to artifacts while blocking variable redirects outside them", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-pretool-deep-interview-var-redirect-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionDir = join(stateDir, "sessions", "sess-di-var-redirect");
+      await mkdir(sessionDir, { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-di-var-redirect", cwd });
+      await writeJson(join(sessionDir, "skill-active-state.json"), {
+        version: 1,
+        active: true,
+        skill: "deep-interview",
+        phase: "planning",
+        session_id: "sess-di-var-redirect",
+        active_skills: [{ skill: "deep-interview", phase: "planning", active: true, session_id: "sess-di-var-redirect" }],
+      });
+      await writeJson(join(sessionDir, "deep-interview-state.json"), {
+        active: true,
+        mode: "deep-interview",
+        current_phase: "intent-first",
+        session_id: "sess-di-var-redirect",
+      });
+
+      const allowedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-allow",
+          tool_input: { command: 'SNAP=".omx/context/example.md"\ncat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal(allowedVarRedirect.outputJson, null);
+
+      const blockedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-block",
+          tool_input: { command: 'SNAP="src/leak.ts"\ncat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal((blockedVarRedirect.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedUnresolvedVarRedirect = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-var-redirect",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-var-redirect-unresolved",
+          tool_input: { command: 'cat > "$SNAP" <<\'EOF\'\ncontent\nEOF' },
+        },
+        { cwd },
+      );
+      assert.equal((blockedUnresolvedVarRedirect.outputJson as { decision?: string } | null)?.decision, "block");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

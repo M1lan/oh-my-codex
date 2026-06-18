@@ -61,6 +61,7 @@ import {
   SLOPPY_FALLBACK_PHRASE_PATTERNS,
   buildNativePostToolUseOutput,
   buildNativePreToolUseOutput,
+  commandInvokesApplyPatch,
   detectMcpTransportFailure,
   hasAnyPattern,
 } from "./codex-native-pre-post.js";
@@ -2751,6 +2752,31 @@ function isNullDeviceRedirectTarget(target: string): boolean {
   return normalized === "/dev/null" || normalized === "nul";
 }
 
+// Collects same-command literal variable assignments (`NAME="value"`), skipping
+// any value that involves expansion (`$`, backticks) so unresolved/dynamic
+// targets stay conservatively blocked.
+function extractCommandLiteralAssignments(command: string): Map<string, string> {
+  const assignments = new Map<string, string>();
+  const pattern = /(?:^|[\n;&|(]|&&|\|\|)\s*([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"$`]*)"|'([^']*)'|([^\s"'$`;&|<>]+))/g;
+  for (const match of command.matchAll(pattern)) {
+    const name = safeString(match[1]).trim();
+    if (!name) continue;
+    const value = match[2] ?? match[3] ?? match[4] ?? "";
+    assignments.set(name, value);
+  }
+  return assignments;
+}
+
+// Resolves a redirect/tee target of the form `$NAME`/`${NAME}` against
+// same-command literal assignments; non-variable or unresolved targets are
+// returned unchanged so they remain subject to the allowed-path check.
+function resolveCommandRedirectTarget(target: string, assignments: Map<string, string>): string {
+  const variableMatch = target.match(/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/);
+  if (!variableMatch) return target;
+  const resolved = assignments.get(safeString(variableMatch[1]));
+  return resolved !== undefined ? resolved : target;
+}
+
 function extractDeepInterviewCommandRedirectTargets(command: string): string[] {
   const targets: string[] = [];
   for (const match of command.matchAll(/(?:^|[^>])>{1,2}\s*(["']?)([^\s&|;<>]+)\1/g)) {
@@ -2761,7 +2787,7 @@ function extractDeepInterviewCommandRedirectTargets(command: string): string[] {
 }
 
 function commandHasDeepInterviewWriteIntent(command: string): boolean {
-  return /\bapply_patch\b/.test(command)
+  return commandInvokesApplyPatch(command)
     || extractDeepInterviewCommandRedirectTargets(command).length > 0
     || /\btee\s+(?:-a\s+)?[^\s&|;]+/.test(command)
     || /\bsed\s+(?:[^\n;&|]*\s)?-i(?:\b|['"])/.test(command)
@@ -2770,10 +2796,12 @@ function commandHasDeepInterviewWriteIntent(command: string): boolean {
 }
 
 function extractDeepInterviewCommandWriteTargets(command: string): string[] {
-  const targets = extractDeepInterviewCommandRedirectTargets(command);
+  const assignments = extractCommandLiteralAssignments(command);
+  const targets = extractDeepInterviewCommandRedirectTargets(command)
+    .map((target) => resolveCommandRedirectTarget(target, assignments));
   for (const match of command.matchAll(/\btee\s+(?:-a\s+)?(["']?)([^\s&|;<>]+)\1/g)) {
     const candidate = safeString(match[2]).trim();
-    if (candidate) targets.push(candidate);
+    if (candidate) targets.push(resolveCommandRedirectTarget(candidate, assignments));
   }
   return targets;
 }
@@ -4221,28 +4249,50 @@ export async function dispatchCodexNativeHook(
   if (hookEventName === "SessionStart" && nativeSessionId) {
     const transcriptPath = safeString(payload.transcript_path ?? payload.transcriptPath).trim();
     const subagentSessionStart = readNativeSubagentSessionStartMetadata(transcriptPath);
-    if (subagentSessionStart && canonicalSessionId) {
+    if (subagentSessionStart) {
+      // A native child/subagent SessionStart carries a parent_thread_id in its
+      // transcript session_meta. Treat it as a child-agent lifecycle event for
+      // notification suppression and subagent tracking even when the canonical
+      // leader session has not been reconciled yet (#2831). A child start must
+      // never promote itself into a root/leader session or emit an independent
+      // session-start notification at session/minimal verbosity.
       isSubagentSessionStart = true;
-      const belongsToCanonicalSession = await nativeSubagentSessionStartBelongsToCanonicalSession(
-        cwd,
-        canonicalSessionId,
-        currentSessionState,
-        subagentSessionStart,
-      );
-      if (belongsToCanonicalSession) {
-        resolvedNativeSessionId = nativeSessionId;
-        await recordNativeSubagentSessionStart(
+      if (canonicalSessionId) {
+        const belongsToCanonicalSession = await nativeSubagentSessionStartBelongsToCanonicalSession(
           cwd,
           canonicalSessionId,
-          nativeSessionId,
+          currentSessionState,
           subagentSessionStart,
-          transcriptPath,
         );
+        if (belongsToCanonicalSession) {
+          resolvedNativeSessionId = nativeSessionId;
+          await recordNativeSubagentSessionStart(
+            cwd,
+            canonicalSessionId,
+            nativeSessionId,
+            subagentSessionStart,
+            transcriptPath,
+          );
+        } else {
+          skipCanonicalSessionStartContext = true;
+          resolvedNativeSessionId =
+            safeString(currentSessionState?.native_session_id).trim() || nativeSessionId;
+          await recordIgnoredNativeSubagentSessionStart(
+            cwd,
+            canonicalSessionId,
+            nativeSessionId,
+            subagentSessionStart,
+            transcriptPath,
+          );
+        }
       } else {
+        // No canonical leader session is resolved in this worktree yet. Still
+        // register the child thread under its parent so its later Stop is
+        // recognized as subagent-scoped, skip leader SessionStart context, and
+        // do not reconcile the child as a new root session.
         skipCanonicalSessionStartContext = true;
-        resolvedNativeSessionId =
-          safeString(currentSessionState?.native_session_id).trim() || nativeSessionId;
-        await recordIgnoredNativeSubagentSessionStart(
+        resolvedNativeSessionId = nativeSessionId;
+        await recordNativeSubagentSessionStart(
           cwd,
           canonicalSessionId,
           nativeSessionId,
