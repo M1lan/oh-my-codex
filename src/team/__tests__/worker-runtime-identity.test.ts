@@ -191,7 +191,7 @@ process.on('SIGTERM', () => process.exit(0));
   it('scaleUp preserves low-complexity assigned roles as outer runtime identities', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-identity-scale-'));
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-runtime-identity-scale-bin-'));
-    const tmuxStubPath = join(fakeBinDir, 'tmux');
+    const tmuxStubPath = join(fakeBinDir, 'rmux');
     const tmuxLogPath = join(fakeBinDir, 'tmux.log');
     const previousPath = process.env.PATH;
 

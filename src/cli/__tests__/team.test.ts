@@ -1592,7 +1592,7 @@ describe('teamCommand shutdown --force parsing', () => {
     const wd = await mkdtemp(join(tmpdir(), 'omx-team-shutdown-shared-cli-'));
     const binDir = join(wd, 'bin');
     const tmuxLogPath = join(wd, 'tmux.log');
-    const tmuxPath = join(binDir, 'tmux');
+    const tmuxPath = join(binDir, 'rmux');
     const previousPath = process.env.PATH;
 
     await mkdir(binDir, { recursive: true });

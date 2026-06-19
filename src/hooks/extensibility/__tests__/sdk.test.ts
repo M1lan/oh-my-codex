@@ -219,7 +219,7 @@ describe('createHookPluginSdk', () => {
     it('prefers non-HUD codex pane when targeting a tmux session', async () => {
       const cwd = await mkdtemp(join(tmpdir(), 'omx-sdk-'));
       const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-sdk-bin-'));
-      const fakeTmuxPath = join(fakeBinDir, 'tmux');
+      const fakeTmuxPath = join(fakeBinDir, 'rmux');
       const previousPath = process.env.PATH;
       try {
         await writeFile(fakeTmuxPath, `#!/usr/bin/env bash

@@ -410,7 +410,7 @@ describe('omx question CLI', () => {
     const cwd = await makeRepo();
     const fakeBinDir = join(cwd, 'fake-bin');
     await mkdir(fakeBinDir, { recursive: true });
-    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+    await writeFile(join(fakeBinDir, 'rmux'), `#!/bin/sh
 printf '%s\\n' "$*" >> "${join(cwd, 'tmux.log')}"
 case "$1" in
   split-window)
@@ -486,7 +486,7 @@ esac
     const tmuxLogPath = join(cwd, 'tmux.log');
     const countPath = join(cwd, 'list-panes-count');
     await mkdir(fakeBinDir, { recursive: true });
-    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+    await writeFile(join(fakeBinDir, 'rmux'), `#!/bin/sh
 printf '%s\n' "$*" >> "${tmuxLogPath}"
 case "$1" in
   display-message)
@@ -602,7 +602,7 @@ esac
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     await mkdir(fakeBinDir, { recursive: true });
-    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+    await writeFile(join(fakeBinDir, 'rmux'), `#!/bin/sh
 printf '%s\\n' "$*" >> "${tmuxLogPath}"
 exit 0
 `, { mode: 0o755 });
@@ -670,7 +670,7 @@ exit 0
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     await mkdir(fakeBinDir, { recursive: true });
-    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+    await writeFile(join(fakeBinDir, 'rmux'), `#!/bin/sh
 printf '%s\n' "$*" >> "${tmuxLogPath}"
 case "$1" in
   display-message)
@@ -739,7 +739,7 @@ exit 0
     const fakeBinDir = join(cwd, 'fake-bin');
     const tmuxLogPath = join(cwd, 'tmux.log');
     await mkdir(fakeBinDir, { recursive: true });
-    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+    await writeFile(join(fakeBinDir, 'rmux'), `#!/bin/sh
 printf '%s\n' "$*" >> "${tmuxLogPath}"
 case "$1" in
   display-message)

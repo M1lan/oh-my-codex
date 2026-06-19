@@ -21,7 +21,7 @@ function writeNotificationConfig(codexHome: string): void {
 }
 
 function writeFakeTmux(fakeBinDir: string, output: string): void {
-  const tmuxPath = join(fakeBinDir, 'tmux');
+  const tmuxPath = join(fakeBinDir, 'rmux');
   writeFileSync(tmuxPath, `#!/usr/bin/env bash
 set -eu
 if [[ "$1" == "list-panes" ]]; then

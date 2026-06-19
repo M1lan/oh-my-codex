@@ -196,8 +196,13 @@ async function withFakeTmux<T>(cwd: string, fn: (tmuxLogPath: string) => Promise
   const tmuxLogPath = join(cwd, 'tmux.log');
   const previousPath = process.env.PATH;
   await mkdir(fakeBinDir, { recursive: true });
-  await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
-  await chmod(join(fakeBinDir, 'tmux'), 0o755);
+  // Provide both `rmux` (preferred by resolveTmuxBinaryForPlatform on the
+  // resolver-based launch paths) and `tmux` (still spawned literally by the
+  // notify-fallback-watcher path) so either resolution hits the stub.
+  for (const name of ['rmux', 'tmux']) {
+    await writeFile(join(fakeBinDir, name), buildFakeTmux(tmuxLogPath));
+    await chmod(join(fakeBinDir, name), 0o755);
+  }
   process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
   try {
     return await fn(tmuxLogPath);

@@ -400,7 +400,7 @@ describe('resolveCodexPane', () => {
     const { join } = await import('node:path');
 
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-resolve-codex-pane-'));
-    const fakeTmuxPath = join(fakeBinDir, 'tmux');
+    const fakeTmuxPath = join(fakeBinDir, 'rmux');
     const previousPath = process.env.PATH;
     const previousTmuxPane = process.env.TMUX_PANE;
 

@@ -470,7 +470,7 @@ async function withMockTmuxFixture<T>(
 ): Promise<T> {
   const fakeBinDir = await mkdtemp(join(tmpdir(), options.dirPrefix));
   const tmuxLogPath = join(fakeBinDir, 'tmux.log');
-  const tmuxStubPath = join(fakeBinDir, 'tmux');
+  const tmuxStubPath = join(fakeBinDir, 'rmux');
   const previousPath = process.env.PATH;
   const previousEnv = new Map<string, string | undefined>();
   const envOverrides = {
