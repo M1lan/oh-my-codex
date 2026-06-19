@@ -27,6 +27,9 @@ bin/omx-explore-harness
 bin/omx-explore-harness.exe
 bin/omx-explore-harness.meta.json
 
+# Justfile bootstrap runtime state (logs/stats); helpers stay committed
+.just/state/
+
 # Local runtime bridge artifacts (generated)
 authority.json
 backlog.json
