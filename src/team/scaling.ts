@@ -28,6 +28,7 @@ import {
   tagPaneTeamOwner,
 } from './tmux-session.js';
 import { execFileSync, spawnSync } from 'child_process';
+import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 import {
   teamReadConfig as readTeamConfig,
   teamSaveConfig as saveTeamConfig,
@@ -339,7 +340,7 @@ export async function scaleUp(
         }
         try {
           if (w.pane_id) {
-            execFileSync('tmux', ['kill-pane', '-t', w.pane_id], { stdio: 'pipe',
+            execFileSync(resolveTmuxBinaryForPlatform() || 'tmux', ['kill-pane', '-t', w.pane_id], { stdio: 'pipe',
       windowsHide: true,
     });
           }
@@ -364,7 +365,7 @@ export async function scaleUp(
 
       if (context.paneId) {
         try {
-          execFileSync('tmux', ['kill-pane', '-t', context.paneId], { stdio: 'pipe',
+          execFileSync(resolveTmuxBinaryForPlatform() || 'tmux', ['kill-pane', '-t', context.paneId], { stdio: 'pipe',
       windowsHide: true,
     });
         } catch {}
@@ -499,7 +500,7 @@ export async function scaleUp(
         : (config.leader_pane_id ?? '');
       const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
 
-      const result = spawnSync('tmux', [
+      const result = spawnSync(resolveTmuxBinaryForPlatform() || 'tmux', [
         'split-window', splitDirection, '-t', splitTarget, '-d', '-P', '-F', '#{pane_id}', '-c', workerCwd, cmd,
       ], { encoding: 'utf-8' });
 

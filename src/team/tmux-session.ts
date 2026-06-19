@@ -28,6 +28,7 @@ import {
   buildPlatformCommandSpec,
   classifySpawnError,
   resolveCommandPathForPlatform,
+  resolveTmuxBinaryForPlatform,
   spawnPlatformCommandSync,
 } from '../utils/platform-command.js';
 import { resolveOmxCliEntryPath } from '../utils/paths.js';
@@ -158,7 +159,7 @@ interface TmuxPaneInfo {
 type SpawnSyncLike = typeof spawnSync;
 
 function runTmux(args: string[]): { ok: true; stdout: string } | { ok: false; stderr: string } {
-  const { result } = spawnPlatformCommandSync('tmux', args, { encoding: 'utf-8' });
+  const { result } = spawnPlatformCommandSync(resolveTmuxBinaryForPlatform() || 'tmux', args, { encoding: 'utf-8' });
   if (result.error) {
     return { ok: false, stderr: result.error.message };
   }
@@ -440,7 +441,7 @@ export function sleepFractionalSeconds(
 
 async function runTmuxAsync(args: string[]): Promise<{ok: true; stdout: string} | {ok: false; stderr: string}> {
   try {
-    const { stdout } = await execFileAsync('tmux', args, { encoding: 'utf-8' });
+    const { stdout } = await execFileAsync(resolveTmuxBinaryForPlatform() || 'tmux', args, { encoding: 'utf-8' });
     return { ok: true, stdout: (stdout || '').trim() };
   } catch (error: unknown) {
     const err = error as { stderr?: string; message?: string };
@@ -1387,7 +1388,7 @@ export function isNativeWindows(): boolean {
 
 // Check if tmux is available
 export function isTmuxAvailable(): boolean {
-  const { result } = spawnPlatformCommandSync('tmux', ['-V'], { encoding: 'utf-8' });
+  const { result } = spawnPlatformCommandSync(resolveTmuxBinaryForPlatform() || 'tmux', ['-V'], { encoding: 'utf-8' });
   if (result.error) return false;
   return result.status === 0;
 }

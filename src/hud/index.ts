@@ -19,6 +19,7 @@ import { HUD_TMUX_HEIGHT_LINES } from './constants.js';
 import { sleep } from '../utils/sleep.js';
 import { runHudAuthorityTick } from './authority.js';
 import { resolveOmxCliEntryPath } from '../utils/paths.js';
+import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 import {
   killTmuxPane,
   listCurrentWindowHudPaneIds,
@@ -467,7 +468,7 @@ async function launchTmuxPane(cwd: string, flags: HudFlags): Promise<void> {
   try {
     // Split bottom pane at the shared HUD height, running omx hud --watch.
     // execFileSync bypasses the shell – cwd and omxBin cannot inject commands.
-    execFileSync('tmux', args, { stdio: 'inherit' });
+    execFileSync(resolveTmuxBinaryForPlatform() || 'tmux', args, { stdio: 'inherit' });
     console.log('HUD launched in tmux pane below. Close with: Ctrl+C in that pane, or `tmux kill-pane -t bottom`');
   } catch {
     console.error('Failed to create tmux split. Ensure tmux is available.');

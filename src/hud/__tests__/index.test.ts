@@ -622,7 +622,7 @@ describe('hudCommand --tmux', () => {
     const logPath = join(tmp, 'tmux.log');
     const fakeBin = join(tmp, 'bin');
     await mkdir(fakeBin);
-    const tmuxPath = join(fakeBin, 'tmux');
+    const tmuxPath = join(fakeBin, 'rmux');
     await writeFile(tmuxPath, `#!/usr/bin/env bash
 printf '%s\n' "$*" >> ${JSON.stringify(logPath)}
 if [[ "$1" == "display-message" && "$*" == *'#{session_id}'* ]]; then
@@ -686,7 +686,7 @@ exit 0
     const logPath = join(tmp, 'tmux.log');
     const fakeBin = join(tmp, 'bin');
     await mkdir(fakeBin);
-    const tmuxPath = join(fakeBin, 'tmux');
+    const tmuxPath = join(fakeBin, 'rmux');
     await writeFile(tmuxPath, `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> ${JSON.stringify(logPath)}
 if [[ "$1" == "display-message" && "$*" == *'#{pane_id}'* ]]; then

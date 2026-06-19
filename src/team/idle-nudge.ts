@@ -13,6 +13,7 @@
 
 import { execFile } from 'child_process';
 import { buildCapturePaneArgv } from '../scripts/tmux-hook-engine.js';
+import { resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
 import { paneLooksReady, paneHasActiveTask, sendToWorker } from './tmux-session.js';
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ export const DEFAULT_NUDGE_CONFIG: NudgeConfig = {
 /** Capture the last 80 lines of a tmux pane. Returns '' on error. */
 export function capturePane(paneId: string): Promise<string> {
   return new Promise((resolve) => {
-    execFile('tmux', buildCapturePaneArgv(paneId, 80), (err, stdout) => {
+    execFile(resolveTmuxBinaryForPlatform() || 'tmux', buildCapturePaneArgv(paneId, 80), (err, stdout) => {
       if (err) resolve('');
       else resolve(stdout ?? '');
     });
