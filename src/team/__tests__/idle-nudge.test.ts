@@ -73,7 +73,7 @@ async function withFakeTmux(run: (ctx: {
 }) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'omx-idle-nudge-test-'));
   const binDir = join(root, 'bin');
-  const tmuxPath = join(binDir, 'tmux');
+  const tmuxPath = join(binDir, 'rmux');
   const tmuxLogPath = join(root, 'tmux.log');
   const captureSeqPath = join(root, 'capture-seq.txt');
 

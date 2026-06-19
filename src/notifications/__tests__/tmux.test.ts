@@ -161,7 +161,10 @@ describe('getTeamTmuxSessions - session matching', () => {
   function makeFakeTmux(sessions: string[]): void {
     const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-team-test-'));
     tmpDirs.push(fakeBinDir);
-    const tmuxPath = join(fakeBinDir, 'tmux');
+    // Project prefers rmux over tmux; the resolver picks rmux first, so the
+    // fake multiplexer must be named `rmux` to be selected ahead of any real
+    // rmux/tmux on PATH.
+    const tmuxPath = join(fakeBinDir, 'rmux');
     const lines = sessions.length > 0
       ? sessions.map(s => `printf '%s\\n' '${s}'`).join('\n')
       : 'true';
@@ -231,7 +234,7 @@ describe('captureTmuxPane', () => {
     const livePid = process.pid;
     const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-test-'));
     tmpDirs.push(fakeBinDir);
-    const tmuxPath = join(fakeBinDir, 'tmux');
+    const tmuxPath = join(fakeBinDir, 'rmux');
     writeFileSync(
       tmuxPath,
       [
@@ -263,7 +266,7 @@ describe('captureTmuxPane', () => {
   it('suppresses capture when the target pane is already dead', () => {
     const fakeBinDir = mkdtempSync(join(tmpdir(), 'omx-tmux-dead-pane-test-'));
     tmpDirs.push(fakeBinDir);
-    const tmuxPath = join(fakeBinDir, 'tmux');
+    const tmuxPath = join(fakeBinDir, 'rmux');
     writeFileSync(
       tmuxPath,
       [
