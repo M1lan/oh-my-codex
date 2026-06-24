@@ -84,10 +84,7 @@ import { readSessionState, isSessionStale } from "../hooks/session.js";
 import { getCatalogHeadlineCounts } from "./catalog-contract.js";
 import { tryReadCatalogManifest } from "../catalog/reader.js";
 import { DEFAULT_FRONTIER_MODEL } from "../config/models.js";
-import {
-	teamModeEnabled,
-	type SetupTeamMode,
-} from "../config/team-mode.js";
+import { teamModeEnabled, type SetupTeamMode } from "../config/team-mode.js";
 import {
 	addGeneratedAgentsMarker,
 	hasOmxAgentsContract,
@@ -300,7 +297,7 @@ function applyPluginModeWordingToAgentsTemplate(
 	return scopedContent.replace(
 		/Role prompts under `prompts\/\*\.md` are narrower execution surfaces\. They must follow this file, not override it\.\nWhen OMX is installed, load the installed prompt\/skill\/agent surfaces from [^\n]+active\)\./,
 		`Registered Codex plugin marketplace surfaces supply OMX workflows and plugin-scoped companion resources when the plugin is installed. Native agent roles are installed as setup-owned Codex agent TOML files in plugin mode so agent_type routing works. They must follow this file, not override it.\nUser-installed skills may still live under ${userSkillPath}.`,
-		);
+	);
 }
 
 function stripNamedXmlSection(content: string, sectionName: string): string {
@@ -310,11 +307,18 @@ function stripNamedXmlSection(content: string, sectionName: string): string {
 	);
 }
 
-function applyTeamModeToAgentsTemplate(content: string, teamMode: SetupTeamMode): string {
+function applyTeamModeToAgentsTemplate(
+	content: string,
+	teamMode: SetupTeamMode,
+): string {
 	if (teamModeEnabled(teamMode)) return content;
 
 	let next = content;
-	for (const section of ["team_compositions", "team_pipeline", "team_model_resolution"]) {
+	for (const section of [
+		"team_compositions",
+		"team_pipeline",
+		"team_model_resolution",
+	]) {
 		next = stripNamedXmlSection(next, section);
 	}
 
@@ -431,14 +435,18 @@ function escapeTomlBasicString(value: string): string {
 	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function renderHooksJsonTrustStateToml(content: string | null | undefined): string {
+function renderHooksJsonTrustStateToml(
+	content: string | null | undefined,
+): string {
 	const trustState = extractCodexHooksJsonTrustState(content);
 	return Object.entries(trustState)
 		.sort(([left], [right]) => left.localeCompare(right))
 		.flatMap(([key, state]) => [
 			`[hooks.state."${escapeTomlBasicString(key)}"]`,
 			`trusted_hash = "${escapeTomlBasicString(state.trusted_hash)}"`,
-			...(typeof state.enabled === "boolean" ? [`enabled = ${state.enabled}`] : []),
+			...(typeof state.enabled === "boolean"
+				? [`enabled = ${state.enabled}`]
+				: []),
 			"",
 		])
 		.join("\n")
@@ -475,7 +483,9 @@ function appendHooksJsonTrustStateToConfig(
 		"# Migrated from legacy hooks.json state; kept in Codex config.toml because Codex 0.140 rejects top-level hooks.json state.",
 		trustToml,
 		"",
-	].filter((line): line is string => line !== null).join("\n");
+	]
+		.filter((line): line is string => line !== null)
+		.join("\n");
 }
 
 async function migrateLegacyHooksJsonTrustStateToConfig(
@@ -488,10 +498,18 @@ async function migrateLegacyHooksJsonTrustStateToConfig(
 	const existingConfig = existsSync(configPath)
 		? await readFile(configPath, "utf-8")
 		: "";
-	const nextConfig = appendHooksJsonTrustStateToConfig(existingConfig, hooksContent);
+	const nextConfig = appendHooksJsonTrustStateToConfig(
+		existingConfig,
+		hooksContent,
+	);
 	if (nextConfig === existingConfig) return;
 	if (
-		await ensureBackup(configPath, existsSync(configPath), backupContext, options)
+		await ensureBackup(
+			configPath,
+			existsSync(configPath),
+			backupContext,
+			options,
+		)
 	) {
 		summary.backedUp += 1;
 	}
@@ -842,7 +860,9 @@ async function promptForFirstPartyMcpRemoval(
 function hasPersistedSetupPreferences(
 	preferences: Partial<PersistedSetupScope> | undefined,
 ): preferences is Partial<PersistedSetupScope> {
-	return Boolean(preferences?.scope || preferences?.installMode || preferences?.teamMode);
+	return Boolean(
+		preferences?.scope || preferences?.installMode || preferences?.teamMode,
+	);
 }
 
 function formatPersistedSetupPreferenceSummary(
@@ -990,7 +1010,8 @@ function classifyPluginDeveloperInstructions(
 		return "current";
 	}
 	if (
-		normalized === normalizeDeveloperInstructionsText(OMX_DEVELOPER_INSTRUCTIONS)
+		normalized ===
+		normalizeDeveloperInstructionsText(OMX_DEVELOPER_INSTRUCTIONS)
 	) {
 		return "historical";
 	}
@@ -1097,19 +1118,19 @@ async function resolvePluginDeveloperInstructionsDecision(
 					await options.pluginDeveloperInstructionsPrompt(configPath),
 					state,
 				)
-			: await askYesNoDefaultYes(
-					`Plugin mode: update OMX developer_instructions bootstrap at "${configPath}"? [Y/n]: `,
-				)
-				? {
+			: (await askYesNoDefaultYes(
+						`Plugin mode: update OMX developer_instructions bootstrap at "${configPath}"? [Y/n]: `,
+					))
+				? ({
 						action: "update",
 						state,
 						reason: "recognized historical OMX developer_instructions",
-					} satisfies PluginDeveloperInstructionsDecision
-				: {
+					} satisfies PluginDeveloperInstructionsDecision)
+				: ({
 						action: "preserve",
 						state,
 						reason: "historical OMX developer_instructions preserved",
-					} satisfies PluginDeveloperInstructionsDecision;
+					} satisfies PluginDeveloperInstructionsDecision);
 		const update = updateDecision.action === "update";
 		return update
 			? {
@@ -1288,8 +1309,8 @@ async function refreshOmxPluginDiscoveryCache(
 	}
 
 	const [pkg, expectedSkillNames, cachedDirs] = await Promise.all([
-		readFile(join(pkgRoot, "package.json"), "utf-8").then((raw) =>
-			JSON.parse(raw) as { version?: unknown },
+		readFile(join(pkgRoot, "package.json"), "utf-8").then(
+			(raw) => JSON.parse(raw) as { version?: unknown },
 		),
 		listChildDirectoryNames(join(packagedMarketplace.pluginRoot, "skills")),
 		discoverOmxPluginCacheDirs(join(codexHomeDir, "plugins", "cache")),
@@ -1303,16 +1324,20 @@ async function refreshOmxPluginDiscoveryCache(
 		);
 		if (manifest?.name !== "oh-my-codex") continue;
 
-		const cachedSkillNames = await listChildDirectoryNames(join(cacheDir, "skills"));
+		const cachedSkillNames = await listChildDirectoryNames(
+			join(cacheDir, "skills"),
+		);
 		const versionChanged =
 			expectedVersion !== null && manifest.version !== expectedVersion;
 		const skillsPointerChanged = manifest.skills !== "./skills/";
 		const hooksPointerChanged = manifest.hooks !== "./hooks/hooks.json";
-		const hookFilesMissing = !existsSync(join(cacheDir, "hooks", "hooks.json"))
-			|| !existsSync(join(cacheDir, "hooks", "codex-native-hook.mjs"))
-			|| !existsSync(join(cacheDir, "hooks", "omx-command.json"));
-		const hookFilesChanged = !hookFilesMissing
-			&& !(await pluginHookCacheMatchesPackaged(cacheDir, packagedMarketplace));
+		const hookFilesMissing =
+			!existsSync(join(cacheDir, "hooks", "hooks.json")) ||
+			!existsSync(join(cacheDir, "hooks", "codex-native-hook.mjs")) ||
+			!existsSync(join(cacheDir, "hooks", "omx-command.json"));
+		const hookFilesChanged =
+			!hookFilesMissing &&
+			!(await pluginHookCacheMatchesPackaged(cacheDir, packagedMarketplace));
 		const skillListChanged =
 			expectedSkillNames !== null &&
 			cachedSkillNames !== null &&
@@ -1325,7 +1350,8 @@ async function refreshOmxPluginDiscoveryCache(
 			!hookFilesMissing &&
 			!hookFilesChanged &&
 			!skillListChanged
-		) continue;
+		)
+			continue;
 
 		staleDirs.push(cacheDir);
 		if (!options.dryRun) {
@@ -1357,7 +1383,6 @@ async function refreshOmxPluginDiscoveryCache(
 		staleDirs,
 	};
 }
-
 
 function resolveSetupMcpMode(
 	scope: SetupScope,
@@ -1715,7 +1740,10 @@ function findRootTomlKeyRange(
 			}
 			continue;
 		}
-		if (tablePattern.test(trimmedLine) || nextRootKeyPattern.test(trimmedLine)) {
+		if (
+			tablePattern.test(trimmedLine) ||
+			nextRootKeyPattern.test(trimmedLine)
+		) {
 			found.end = lineStart;
 			return found;
 		}
@@ -1850,12 +1878,10 @@ async function applyPluginModeHooksConfig(
 	);
 	const nextConfig = options.pluginScopedHooks
 		? nextConfigBase
-		: upsertManagedCodexHookTrustState(
-			nextConfigBase,
-			pkgRoot,
-			hooksPath,
-			{ platform: process.platform, codexHomeDir },
-		);
+		: upsertManagedCodexHookTrustState(nextConfigBase, pkgRoot, hooksPath, {
+				platform: process.platform,
+				codexHomeDir,
+			});
 	if (nextConfig !== existingConfig) {
 		if (
 			await ensureBackup(
@@ -2084,7 +2110,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			persistedPreferences.scope === effectiveScopeForInstallMode);
 	const shouldReviewPersistedSetup =
 		hasPersistedSetupPreferences(persistedPreferences) &&
-		(wouldUsePersistedScope || wouldUsePersistedInstallMode || wouldUsePersistedMcpMode || wouldUsePersistedTeamMode) &&
+		(wouldUsePersistedScope ||
+			wouldUsePersistedInstallMode ||
+			wouldUsePersistedMcpMode ||
+			wouldUsePersistedTeamMode) &&
 		(typeof persistedSetupReviewPrompt === "function" ||
 			(process.stdin.isTTY && process.stdout.isTTY));
 	if (shouldReviewPersistedSetup) {
@@ -2117,14 +2146,13 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		persistedPreferences,
 	);
 	const resolvedTeamMode: SetupTeamMode =
-		requestedTeamMode
-		?? (
-			persistedReviewDecision !== "reset" &&
-			(!persistedPreferences?.scope || persistedPreferences.scope === resolvedScope.scope)
-				? persistedPreferences?.teamMode
-				: undefined
-		)
-		?? "enabled";
+		requestedTeamMode ??
+		(persistedReviewDecision !== "reset" &&
+		(!persistedPreferences?.scope ||
+			persistedPreferences.scope === resolvedScope.scope)
+			? persistedPreferences?.teamMode
+			: undefined) ??
+		"enabled";
 	const isTeamModeEnabled = teamModeEnabled(resolvedTeamMode);
 	const skipNativeAgentRefresh =
 		requestedSkipNativeAgentRefresh ||
@@ -2262,7 +2290,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	const setupPreferencesToPersist: PersistedSetupScope = {
 		scope: resolvedScope.scope,
 		mcpMode: resolvedMcpMode.mcpMode,
-		...(requestedTeamMode || persistedPreferences?.teamMode || resolvedTeamMode === "disabled"
+		...(requestedTeamMode ||
+		persistedPreferences?.teamMode ||
+		resolvedTeamMode === "disabled"
 			? { teamMode: resolvedTeamMode }
 			: {}),
 		...(resolvedInstallMode &&
@@ -2462,11 +2492,13 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	const shouldSyncSharedMcpRegistry = resolvedMcpMode.mcpMode === "compat";
 	const registryCandidates = getUnifiedMcpRegistryCandidates();
 	const defaultRegistryCandidates = registryCandidates.slice(0, 1);
-	const sharedMcpRegistry: UnifiedMcpRegistryLoadResult = shouldSyncSharedMcpRegistry
-		? await loadUnifiedMcpRegistry({
-				candidates: options.mcpRegistryCandidates ?? defaultRegistryCandidates,
-			})
-		: { servers: [], warnings: [] };
+	const sharedMcpRegistry: UnifiedMcpRegistryLoadResult =
+		shouldSyncSharedMcpRegistry
+			? await loadUnifiedMcpRegistry({
+					candidates:
+						options.mcpRegistryCandidates ?? defaultRegistryCandidates,
+				})
+			: { servers: [], warnings: [] };
 	const legacyRegistryCandidate = getLegacyUnifiedMcpRegistryCandidate();
 	if (
 		shouldSyncSharedMcpRegistry &&
@@ -2495,8 +2527,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				dryRun,
 				verbose,
 				preserveFirstPartyMcp:
-					shouldOfferFirstPartyMcpRemoval &&
-					!removeFirstPartyMcpRegistrations,
+					shouldOfferFirstPartyMcpRemoval && !removeFirstPartyMcpRegistrations,
 				developerInstructionsDecision: pluginDeveloperInstructionsDecision,
 			},
 		);
@@ -2557,7 +2588,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				`  ${dryRun ? "Would invalidate" : "Invalidated"} ${pluginCacheRefresh.staleDirs.length} stale Codex plugin discovery cache entr${pluginCacheRefresh.staleDirs.length === 1 ? "y" : "ies"} so plugin skills refresh from the packaged manifest.`,
 			);
 		} else if (pluginCacheRefresh.status === "unchanged") {
-			console.log("  Codex plugin discovery cache already matches packaged plugin metadata.");
+			console.log(
+				"  Codex plugin discovery cache already matches packaged plugin metadata.",
+			);
 		}
 		const pluginCacheMaterialize = await materializePackagedOmxPluginCache(
 			scopeDirs.codexHomeDir,
@@ -2569,10 +2602,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				`  ${dryRun ? "Would install" : "Installed"} local Codex plugin cache for ${OMX_LOCAL_MARKETPLACE_NAME}/${OMX_PLUGIN_NAME} at ${pluginCacheMaterialize.cacheDir}.`,
 			);
 		} else if (pluginCacheMaterialize.status === "unchanged") {
-			console.log("  Local Codex plugin cache already exposes packaged OMX skills.");
+			console.log(
+				"  Local Codex plugin cache already exposes packaged OMX skills.",
+			);
 		}
-		if (pluginCacheMaterialize.status === "materialized" || pluginCacheMaterialize.status === "unchanged") {
-			console.log("  Start a new Codex session if /skills still shows stale OMX plugin skill metadata; the current session may keep its in-memory plugin registry until restart.");
+		if (
+			pluginCacheMaterialize.status === "materialized" ||
+			pluginCacheMaterialize.status === "unchanged"
+		) {
+			console.log(
+				"  Start a new Codex session if /skills still shows stale OMX plugin skill metadata; the current session may keep its in-memory plugin registry until restart.",
+			);
 		}
 		if (shouldSyncSharedMcpRegistry) {
 			resolvedConfig = await syncSharedMcpRegistryIntoConfig(
@@ -2734,12 +2774,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		const pluginAgentsMdExists = pluginAgentsMdPathExists;
 		if (existsSync(agentsMdSrc)) {
 			const content = await readFile(agentsMdSrc, "utf-8");
-			const modelTableContext = resolveAgentsModelTableContext(
-				resolvedConfig,
-				{
-					codexHomeOverride: scopeDirs.codexHomeDir,
-				},
-			);
+			const modelTableContext = resolveAgentsModelTableContext(resolvedConfig, {
+				codexHomeOverride: scopeDirs.codexHomeDir,
+			});
 			const modelTableDefinitions =
 				getAgentsModelTableDefinitionsForTeamMode(resolvedTeamMode);
 			const rewritten = upsertAgentsModelTable(
@@ -2764,7 +2801,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 					);
 				} else {
 					const existing = await readFile(pluginAgentsMdDst, "utf-8");
-					const mergedAgentsContent = upsertManagedAgentsBlock(existing, rewritten);
+					const mergedAgentsContent = upsertManagedAgentsBlock(
+						existing,
+						rewritten,
+					);
 					const canApplyManagedAgentsMerge = mergedAgentsContent !== existing;
 					if (
 						resolvedScope.scope === "project" &&
@@ -2843,17 +2883,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 						},
 					);
 					if (result === "updated") {
-					console.log(
-						resolvedScope.scope === "project"
-							? "  Generated plugin-mode AGENTS.md defaults in project root."
-							: `  Generated plugin-mode AGENTS.md defaults in ${scopeDirs.codexHomeDir}.`,
-					);
-				} else if (result === "unchanged") {
-					console.log(
-						resolvedScope.scope === "project"
-							? "  Plugin-mode AGENTS.md defaults already up to date in project root."
-							: `  Plugin-mode AGENTS.md defaults already up to date in ${scopeDirs.codexHomeDir}.`,
-					);
+						console.log(
+							resolvedScope.scope === "project"
+								? "  Generated plugin-mode AGENTS.md defaults in project root."
+								: `  Generated plugin-mode AGENTS.md defaults in ${scopeDirs.codexHomeDir}.`,
+						);
+					} else if (result === "unchanged") {
+						console.log(
+							resolvedScope.scope === "project"
+								? "  Plugin-mode AGENTS.md defaults already up to date in project root."
+								: `  Plugin-mode AGENTS.md defaults already up to date in ${scopeDirs.codexHomeDir}.`,
+						);
 					} else {
 						console.log(
 							`  Skipped plugin-mode AGENTS.md defaults for ${pluginAgentsMdDst}.`,
@@ -2891,7 +2931,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			const rewritten = upsertAgentsModelTable(
 				addGeneratedAgentsMarker(
 					applyTeamModeToAgentsTemplate(
-						applyScopePathRewritesToAgentsTemplate(content, resolvedScope.scope),
+						applyScopePathRewritesToAgentsTemplate(
+							content,
+							resolvedScope.scope,
+						),
 						resolvedTeamMode,
 					),
 				),
@@ -2910,7 +2953,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				changed = existing !== rewritten;
 				if (!hasOmxAgentsContract(existing)) {
 					const scopeFlag =
-						resolvedScope.scope === "project" ? "--scope project" : "--scope user";
+						resolvedScope.scope === "project"
+							? "--scope project"
+							: "--scope user";
 					console.log(
 						`  WARNING: Existing AGENTS.md at ${agentsMdDst} lacks OMX contract markers; it may have been overwritten by another tool.`,
 					);
@@ -2923,14 +2968,15 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 					canApplyManagedAgentsMerge = mergedAgentsContent !== existing;
 				} else {
 					if (hasOmxManagedAgentsSections(existing)) {
-						const existingIsGeneratedAgentsMd = isOmxGeneratedAgentsMd(existing);
+						const existingIsGeneratedAgentsMd =
+							isOmxGeneratedAgentsMd(existing);
 						managedRefreshContent = teamModeEnabled(resolvedTeamMode)
 							? upsertAgentsModelTable(
-								existing,
-								modelTableContext,
-								modelTableDefinitions,
-								{ codexHomeOverride: scopeDirs.codexHomeDir },
-							)
+									existing,
+									modelTableContext,
+									modelTableDefinitions,
+									{ codexHomeOverride: scopeDirs.codexHomeDir },
+								)
 							: existingIsGeneratedAgentsMd
 								? rewritten
 								: upsertManagedAgentsBlock(existing, rewritten);
@@ -2947,7 +2993,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				resolvedScope.scope === "project" &&
 				sessionIsActive &&
 				agentsMdExists &&
-				(changed || canApplyManagedAgentsMerge || canApplyManagedModelRefresh) &&
+				(changed ||
+					canApplyManagedAgentsMerge ||
+					canApplyManagedModelRefresh) &&
 				!canApplyManagedRefreshDuringActiveSession
 			) {
 				summary.agentsMd.skipped += 1;
@@ -3510,7 +3558,10 @@ async function installPrompts(
 	for (const file of files) {
 		if (!file.endsWith(".md")) continue;
 		const promptName = file.slice(0, -3);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_PROMPT_NAMES.has(promptName)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_PROMPT_NAMES.has(promptName)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped ${file} (Team mode disabled)`);
@@ -3548,8 +3599,11 @@ async function installPrompts(
 			if (!file.endsWith(".md")) continue;
 			const promptName = file.slice(0, -3);
 			const status = agentStatusByName?.get(promptName);
-			const disabledTeamPrompt = !teamModeEnabled(options.teamMode) && TEAM_MODE_PROMPT_NAMES.has(promptName);
-			if (isSetupPromptAssetName(promptName, manifest) && !disabledTeamPrompt) continue;
+			const disabledTeamPrompt =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_PROMPT_NAMES.has(promptName);
+			if (isSetupPromptAssetName(promptName, manifest) && !disabledTeamPrompt)
+				continue;
 			if (!options.force && !disabledTeamPrompt) continue;
 
 			const stalePromptPath = join(dstDir, file);
@@ -3672,7 +3726,10 @@ async function refreshNativeAgentConfigs(
 
 	for (const name of nativeAgentNames) {
 		staleCandidateNativeAgentNames.add(name);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_NATIVE_AGENT_NAMES.has(name)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_NATIVE_AGENT_NAMES.has(name)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped native agent ${name}.toml (Team mode disabled)`);
@@ -3732,8 +3789,11 @@ async function refreshNativeAgentConfigs(
 			if (!file.endsWith(".toml")) continue;
 			const agentName = file.slice(0, -5);
 			const agentStatus = agentStatusByName?.get(agentName);
-			const disabledTeamAgent = !teamModeEnabled(options.teamMode) && TEAM_MODE_NATIVE_AGENT_NAMES.has(agentName);
-			if (isNativeAgentInstallableStatus(agentStatus) && !disabledTeamAgent) continue;
+			const disabledTeamAgent =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_NATIVE_AGENT_NAMES.has(agentName);
+			if (isNativeAgentInstallableStatus(agentStatus) && !disabledTeamAgent)
+				continue;
 			if (!options.force && !disabledTeamAgent) continue;
 			if (
 				!staleCandidateNativeAgentNames.has(agentName) &&
@@ -3856,7 +3916,10 @@ export async function installSkills(
 	for (const entry of entries) {
 		if (!entry.isDirectory()) continue;
 		staleCandidateSkillNames.add(entry.name);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_SKILL_NAMES.has(entry.name)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_SKILL_NAMES.has(entry.name)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped ${entry.name}/ (Team mode disabled)`);
@@ -3932,8 +3995,11 @@ export async function installSkills(
 	if (manifest && existsSync(dstDir)) {
 		for (const staleSkill of staleCandidateSkillNames) {
 			const status = skillStatusByName?.get(staleSkill);
-			const disabledTeamSkill = !teamModeEnabled(options.teamMode) && TEAM_MODE_SKILL_NAMES.has(staleSkill);
-			if (isSetupInstallableSkill(staleSkill, status) && !disabledTeamSkill) continue;
+			const disabledTeamSkill =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_SKILL_NAMES.has(staleSkill);
+			if (isSetupInstallableSkill(staleSkill, status) && !disabledTeamSkill)
+				continue;
 			const hardDeprecated = HARD_DEPRECATED_SKILL_NAMES.has(staleSkill);
 			if (!options.force && !hardDeprecated && !disabledTeamSkill) continue;
 
@@ -3951,7 +4017,9 @@ export async function installSkills(
 				const label = status ?? "unlisted";
 				const reason = disabledTeamSkill
 					? ", Team mode disabled"
-					: hardDeprecated ? ", hard-deprecated" : "";
+					: hardDeprecated
+						? ", hard-deprecated"
+						: "";
 				console.log(`  ${prefix} ${staleSkill}/ (status: ${label}${reason})`);
 			}
 		}
@@ -4072,7 +4140,10 @@ async function buildNotifyMergePlan(
 		return { notifyCommand: false };
 	}
 
-	const omxNotify = ["node", join(pkgRoot, "dist", "scripts", "notify-hook.js")];
+	const omxNotify = [
+		"node",
+		join(pkgRoot, "dist", "scripts", "notify-hook.js"),
+	];
 	const metadataPath = getNotifyMetadataPath(codexHomeDir);
 	const dispatcherNotify = [
 		"node",

@@ -15,11 +15,11 @@ import { requestJson } from "../notifications/http-client.js";
 import { runProcessTreeWithTimeout } from "../runtime/process-tree.js";
 
 import type {
-  OpenClawCommandGatewayConfig,
-  OpenClawGatewayConfig,
-  OpenClawHttpGatewayConfig,
-  OpenClawPayload,
-  OpenClawResult,
+	OpenClawCommandGatewayConfig,
+	OpenClawGatewayConfig,
+	OpenClawHttpGatewayConfig,
+	OpenClawPayload,
+	OpenClawResult,
 } from "./types.js";
 
 /** Default per-request timeout for HTTP gateways */
@@ -44,23 +44,23 @@ const SHELL_METACHAR_RE = /[|&;><`$()]/;
  * which allows HTTP for local development.
  */
 export function validateGatewayUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === "https:") return true;
-    if (
-      parsed.protocol === "http:" &&
-      (parsed.hostname === "localhost" ||
-        parsed.hostname === "127.0.0.1" ||
-        parsed.hostname === "::1" ||
-        parsed.hostname === "[::1]")
-    ) {
-      return true;
-    }
-    return false;
-  } catch (err) {
-    process.stderr.write(`[openclaw-dispatcher] operation failed: ${err}\n`);
-    return false;
-  }
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol === "https:") return true;
+		if (
+			parsed.protocol === "http:" &&
+			(parsed.hostname === "localhost" ||
+				parsed.hostname === "127.0.0.1" ||
+				parsed.hostname === "::1" ||
+				parsed.hostname === "[::1]")
+		) {
+			return true;
+		}
+		return false;
+	} catch (err) {
+		process.stderr.write(`[openclaw-dispatcher] operation failed: ${err}\n`);
+		return false;
+	}
 }
 
 /**
@@ -83,21 +83,21 @@ export function validateGatewayUrl(url: string): boolean {
  * Unresolved variables are replaced with empty string.
  */
 export function interpolateInstruction(
-  template: string,
-  variables: Record<string, string | undefined>,
+	template: string,
+	variables: Record<string, string | undefined>,
 ): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
-    return variables[key] ?? "";
-  });
+	return template.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
+		return variables[key] ?? "";
+	});
 }
 
 /**
  * Type guard: is this gateway config a command gateway?
  */
 export function isCommandGateway(
-  config: OpenClawGatewayConfig,
+	config: OpenClawGatewayConfig,
 ): config is OpenClawCommandGatewayConfig {
-  return (config as OpenClawCommandGatewayConfig).type === "command";
+	return (config as OpenClawCommandGatewayConfig).type === "command";
 }
 
 /**
@@ -105,7 +105,7 @@ export function isCommandGateway(
  * Uses single-quote wrapping with internal quote escaping.
  */
 export function shellEscapeArg(value: string): string {
-  return "'" + value.replace(/'/g, "'\\''") + "'";
+	return "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
 /**
@@ -113,76 +113,80 @@ export function shellEscapeArg(value: string): string {
  * gateway timeout > OMX_OPENCLAW_COMMAND_TIMEOUT_MS > default.
  */
 export function resolveCommandTimeoutMs(
-  gatewayTimeout?: number,
-  envTimeoutRaw: string | undefined = process.env.OMX_OPENCLAW_COMMAND_TIMEOUT_MS,
+	gatewayTimeout?: number,
+	envTimeoutRaw: string | undefined = process.env
+		.OMX_OPENCLAW_COMMAND_TIMEOUT_MS,
 ): number {
-  const parseFinite = (value: unknown): number | undefined => {
-    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-    return value;
-  };
+	const parseFinite = (value: unknown): number | undefined => {
+		if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+		return value;
+	};
 
-  const parseEnv = (value: string | undefined): number | undefined => {
-    if (!value) return undefined;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  };
+	const parseEnv = (value: string | undefined): number | undefined => {
+		if (!value) return undefined;
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : undefined;
+	};
 
-  const rawTimeout =
-    parseFinite(gatewayTimeout) ??
-    parseEnv(envTimeoutRaw) ??
-    DEFAULT_COMMAND_TIMEOUT_MS;
+	const rawTimeout =
+		parseFinite(gatewayTimeout) ??
+		parseEnv(envTimeoutRaw) ??
+		DEFAULT_COMMAND_TIMEOUT_MS;
 
-  return Math.min(MAX_COMMAND_TIMEOUT_MS, Math.max(MIN_COMMAND_TIMEOUT_MS, Math.trunc(rawTimeout)));
+	return Math.min(
+		MAX_COMMAND_TIMEOUT_MS,
+		Math.max(MIN_COMMAND_TIMEOUT_MS, Math.trunc(rawTimeout)),
+	);
 }
 
 /**
  * Wake an HTTP-type OpenClaw gateway with the given payload.
  */
 export async function wakeGateway(
-  gatewayName: string,
-  gatewayConfig: OpenClawHttpGatewayConfig,
-  payload: OpenClawPayload,
+	gatewayName: string,
+	gatewayConfig: OpenClawHttpGatewayConfig,
+	payload: OpenClawPayload,
 ): Promise<OpenClawResult> {
-  if (!validateGatewayUrl(gatewayConfig.url)) {
-    return {
-      gateway: gatewayName,
-      success: false,
-      error: "Invalid URL (HTTPS required)",
-    };
-  }
+	if (!validateGatewayUrl(gatewayConfig.url)) {
+		return {
+			gateway: gatewayName,
+			success: false,
+			error: "Invalid URL (HTTPS required)",
+		};
+	}
 
-  try {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...gatewayConfig.headers,
-    };
+	try {
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+			...gatewayConfig.headers,
+		};
 
-    const timeout = gatewayConfig.timeout ?? DEFAULT_HTTP_TIMEOUT_MS;
+		const timeout = gatewayConfig.timeout ?? DEFAULT_HTTP_TIMEOUT_MS;
 
-    const response = await requestJson(gatewayConfig.url, {
-      method: gatewayConfig.method || "POST",
-      headers,
-      body: JSON.stringify(payload),
-      timeoutMs: timeout,
-    });
+		const response = await requestJson(gatewayConfig.url, {
+			method: gatewayConfig.method || "POST",
+			headers,
+			body: JSON.stringify(payload),
+			timeoutMs: timeout,
+		});
 
-    if (!response.ok) {
-      return {
-        gateway: gatewayName,
-        success: false,
-        error: `HTTP ${response.status}`,
-        statusCode: response.status,
-      };
-    }
+		if (!response.ok) {
+			return {
+				gateway: gatewayName,
+				success: false,
+				error: `HTTP ${response.status}`,
+				statusCode: response.status,
+			};
+		}
 
-    return { gateway: gatewayName, success: true, statusCode: response.status };
-  } catch (error) {
-    return {
-      gateway: gatewayName,
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
+		return { gateway: gatewayName, success: true, statusCode: response.status };
+	} catch (error) {
+		return {
+			gateway: gatewayName,
+			success: false,
+			error: error instanceof Error ? error.message : "Unknown error",
+		};
+	}
 }
 
 /**
@@ -203,68 +207,76 @@ export async function wakeGateway(
  * values are shell-escaped before interpolation to prevent injection.
  */
 export async function wakeCommandGateway(
-  gatewayName: string,
-  gatewayConfig: OpenClawCommandGatewayConfig,
-  variables: Record<string, string | undefined>,
+	gatewayName: string,
+	gatewayConfig: OpenClawCommandGatewayConfig,
+	variables: Record<string, string | undefined>,
 ): Promise<OpenClawResult> {
-  // Separate command gateway opt-in gate
-  if (process.env.OMX_OPENCLAW_COMMAND !== "1") {
-    return {
-      gateway: gatewayName,
-      success: false,
-      error: "Command gateway disabled (set OMX_OPENCLAW_COMMAND=1 to enable)",
-    };
-  }
+	// Separate command gateway opt-in gate
+	if (process.env.OMX_OPENCLAW_COMMAND !== "1") {
+		return {
+			gateway: gatewayName,
+			success: false,
+			error: "Command gateway disabled (set OMX_OPENCLAW_COMMAND=1 to enable)",
+		};
+	}
 
-  try {
-    const timeout = resolveCommandTimeoutMs(gatewayConfig.timeout);
+	try {
+		const timeout = resolveCommandTimeoutMs(gatewayConfig.timeout);
 
-    // Interpolate variables with shell escaping
-    const interpolated = gatewayConfig.command.replace(
-      /\{\{(\w+)\}\}/g,
-      (match, key: string) => {
-        const value = variables[key];
-        if (value === undefined) return match;
-        return shellEscapeArg(value);
-      },
-    );
+		// Interpolate variables with shell escaping
+		const interpolated = gatewayConfig.command.replace(
+			/\{\{(\w+)\}\}/g,
+			(match, key: string) => {
+				const value = variables[key];
+				if (value === undefined) return match;
+				return shellEscapeArg(value);
+			},
+		);
 
-    // Detect whether the interpolated command contains shell metacharacters
-    const hasMetachars = SHELL_METACHAR_RE.test(interpolated);
+		// Detect whether the interpolated command contains shell metacharacters
+		const hasMetachars = SHELL_METACHAR_RE.test(interpolated);
 
-    const commandParts = hasMetachars
-      ? { command: "sh", args: ["-c", interpolated] }
-      : (() => {
-          const parts = interpolated.split(/\s+/).filter(Boolean);
-          return { command: parts[0] ?? "", args: parts.slice(1) };
-        })();
-    if (!commandParts.command) {
-      return { gateway: gatewayName, success: false, error: "Command is empty" };
-    }
+		const commandParts = hasMetachars
+			? { command: "sh", args: ["-c", interpolated] }
+			: (() => {
+					const parts = interpolated.split(/\s+/).filter(Boolean);
+					return { command: parts[0] ?? "", args: parts.slice(1) };
+				})();
+		if (!commandParts.command) {
+			return {
+				gateway: gatewayName,
+				success: false,
+				error: "Command is empty",
+			};
+		}
 
-    const result = await runProcessTreeWithTimeout(
-      commandParts.command,
-      commandParts.args,
-      {
-        timeoutMs: timeout,
-        env: { ...process.env },
-        cleanupOnParentExit: true,
-      },
-    );
+		const result = await runProcessTreeWithTimeout(
+			commandParts.command,
+			commandParts.args,
+			{
+				timeoutMs: timeout,
+				env: { ...process.env },
+				cleanupOnParentExit: true,
+			},
+		);
 
-    if (result.error) throw result.error;
-    if (result.timedOut) throw new Error("Command timed out");
-    if (result.outputLimitExceeded) throw new Error("Command output limit exceeded");
-    if (result.processLimitExceeded) throw new Error("Command process limit exceeded");
-    if (result.signal) throw new Error(`Command killed by signal ${result.signal}`);
-    if (result.status !== 0) throw new Error(`Command exited with code ${result.status}`);
+		if (result.error) throw result.error;
+		if (result.timedOut) throw new Error("Command timed out");
+		if (result.outputLimitExceeded)
+			throw new Error("Command output limit exceeded");
+		if (result.processLimitExceeded)
+			throw new Error("Command process limit exceeded");
+		if (result.signal)
+			throw new Error(`Command killed by signal ${result.signal}`);
+		if (result.status !== 0)
+			throw new Error(`Command exited with code ${result.status}`);
 
-    return { gateway: gatewayName, success: true };
-  } catch (error) {
-    return {
-      gateway: gatewayName,
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
+		return { gateway: gatewayName, success: true };
+	} catch (error) {
+		return {
+			gateway: gatewayName,
+			success: false,
+			error: error instanceof Error ? error.message : "Unknown error",
+		};
+	}
 }

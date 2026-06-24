@@ -85,16 +85,35 @@ export function buildStateServerTools() {
 					completed_at: { type: "string" },
 					run_outcome: {
 						type: "string",
-						enum: ["continue", "finish", "blocked_on_user", "failed", "cancelled"],
+						enum: [
+							"continue",
+							"finish",
+							"blocked_on_user",
+							"failed",
+							"cancelled",
+						],
 					},
 					lifecycle_outcome: {
 						type: "string",
-						enum: ["finished", "blocked", "failed", "userinterlude", "askuserQuestion"],
+						enum: [
+							"finished",
+							"blocked",
+							"failed",
+							"userinterlude",
+							"askuserQuestion",
+						],
 					},
 					terminal_outcome: {
 						type: "string",
-						enum: ["finished", "blocked", "failed", "userinterlude", "askuserQuestion"],
-						description: "Legacy alias for lifecycle_outcome; canonical writes should prefer lifecycle_outcome.",
+						enum: [
+							"finished",
+							"blocked",
+							"failed",
+							"userinterlude",
+							"askuserQuestion",
+						],
+						description:
+							"Legacy alias for lifecycle_outcome; canonical writes should prefer lifecycle_outcome.",
 					},
 					error: { type: "string" },
 					state: { type: "object", description: "Additional custom fields" },

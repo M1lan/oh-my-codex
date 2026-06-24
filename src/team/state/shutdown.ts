@@ -1,5 +1,5 @@
 export {
-  writeShutdownRequest,
-  readShutdownAck,
-  cleanupTeamState,
-} from '../state.js';
+	writeShutdownRequest,
+	readShutdownAck,
+	cleanupTeamState,
+} from "../state.js";

@@ -1,5 +1,14 @@
 import { existsSync } from "fs";
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "fs/promises";
+import {
+	cp,
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	rename,
+	rm,
+	writeFile,
+} from "fs/promises";
 import { join, resolve } from "path";
 import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../config/omx-first-party-mcp.js";
 import { teamModeEnabled, type SetupTeamMode } from "../config/team-mode.js";
@@ -108,7 +117,9 @@ async function listChildDirectoryNames(dir: string): Promise<string[] | null> {
 export async function packagedOmxPluginVersion(
 	packagedMarketplace: PackagedOmxMarketplace,
 ): Promise<string | null> {
-	const manifest = await readPluginManifest(packagedMarketplace.pluginManifestPath);
+	const manifest = await readPluginManifest(
+		packagedMarketplace.pluginManifestPath,
+	);
 	return typeof manifest?.version === "string" && manifest.version.trim()
 		? manifest.version.trim()
 		: null;
@@ -118,11 +129,15 @@ export async function expectedPackagedOmxSkillNames(
 	packagedMarketplace: PackagedOmxMarketplace,
 	options: { teamMode?: SetupTeamMode } = {},
 ): Promise<string[] | null> {
-	const skillNames = await listChildDirectoryNames(join(packagedMarketplace.pluginRoot, "skills"));
+	const skillNames = await listChildDirectoryNames(
+		join(packagedMarketplace.pluginRoot, "skills"),
+	);
 	if (!skillNames) return null;
-	return skillNames.filter((name) => (
-		teamModeEnabled(options.teamMode) || !TEAM_MODE_PLUGIN_SKILL_NAMES.has(name)
-	));
+	return skillNames.filter(
+		(name) =>
+			teamModeEnabled(options.teamMode) ||
+			!TEAM_MODE_PLUGIN_SKILL_NAMES.has(name),
+	);
 }
 
 export function omxPluginCacheBase(codexHomeDir: string): string {
@@ -239,7 +254,10 @@ export async function hasExpectedOmxPluginCache(
 	return pluginHookCacheMatchesPackaged(state.cacheDir, packagedMarketplace);
 }
 
-async function fileContentsEqual(leftPath: string, rightPath: string): Promise<boolean> {
+async function fileContentsEqual(
+	leftPath: string,
+	rightPath: string,
+): Promise<boolean> {
 	try {
 		const [left, right] = await Promise.all([
 			readFile(leftPath),
@@ -260,15 +278,16 @@ export async function pluginHookCacheMatchesPackaged(
 	cacheDir: string,
 	packagedMarketplace: PackagedOmxMarketplace,
 ): Promise<boolean> {
-	return await fileContentsEqual(
-		join(cacheDir, "hooks", "hooks.json"),
-		join(packagedMarketplace.pluginRoot, "hooks", "hooks.json"),
-	) && await fileContentsEqual(
-		join(cacheDir, "hooks", "codex-native-hook.mjs"),
-		join(packagedMarketplace.pluginRoot, "hooks", "codex-native-hook.mjs"),
-	) && await pinnedHookLauncherMatchesPackaged(
-		cacheDir,
-		packagedMarketplace,
+	return (
+		(await fileContentsEqual(
+			join(cacheDir, "hooks", "hooks.json"),
+			join(packagedMarketplace.pluginRoot, "hooks", "hooks.json"),
+		)) &&
+		(await fileContentsEqual(
+			join(cacheDir, "hooks", "codex-native-hook.mjs"),
+			join(packagedMarketplace.pluginRoot, "hooks", "codex-native-hook.mjs"),
+		)) &&
+		(await pinnedHookLauncherMatchesPackaged(cacheDir, packagedMarketplace))
 	);
 }
 
@@ -278,7 +297,9 @@ function buildPinnedHookLauncherContent(
 	return `${JSON.stringify(
 		{
 			command: process.execPath,
-			argsPrefix: [join(packagedMarketplace.packageRoot, "dist", "cli", "omx.js")],
+			argsPrefix: [
+				join(packagedMarketplace.packageRoot, "dist", "cli", "omx.js"),
+			],
 		},
 		null,
 		2,
@@ -290,10 +311,12 @@ async function pinnedHookLauncherMatchesPackaged(
 	packagedMarketplace: PackagedOmxMarketplace,
 ): Promise<boolean> {
 	try {
-		return await readFile(
-			join(cacheDir, "hooks", OMX_PLUGIN_HOOK_LAUNCHER_FILE),
-			"utf-8",
-		) === buildPinnedHookLauncherContent(packagedMarketplace);
+		return (
+			(await readFile(
+				join(cacheDir, "hooks", OMX_PLUGIN_HOOK_LAUNCHER_FILE),
+				"utf-8",
+			)) === buildPinnedHookLauncherContent(packagedMarketplace)
+		);
 	} catch {
 		return false;
 	}
@@ -317,7 +340,10 @@ async function pathIsDirectory(path: string): Promise<boolean> {
 	}
 }
 
-async function copyFileAtomically(sourcePath: string, destinationPath: string): Promise<void> {
+async function copyFileAtomically(
+	sourcePath: string,
+	destinationPath: string,
+): Promise<void> {
 	const tempPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 	try {
 		await cp(sourcePath, tempPath, { force: true });
@@ -335,7 +361,11 @@ interface OverlayDirectoryOptions {
 	onDestinationRootReady?: (destinationDir: string) => void | Promise<void>;
 }
 
-async function overlayDirectoryKeepingRootPresent(sourceDir: string, destinationDir: string, options: OverlayDirectoryOptions = {}): Promise<void> {
+async function overlayDirectoryKeepingRootPresent(
+	sourceDir: string,
+	destinationDir: string,
+	options: OverlayDirectoryOptions = {},
+): Promise<void> {
 	await mkdir(destinationDir, { recursive: true });
 	await options.onDestinationRootReady?.(destinationDir);
 	const sourceEntries = await readdir(sourceDir, { withFileTypes: true });
@@ -345,7 +375,10 @@ async function overlayDirectoryKeepingRootPresent(sourceDir: string, destination
 		const sourcePath = join(sourceDir, entry.name);
 		const destinationPath = join(destinationDir, entry.name);
 		if (entry.isDirectory()) {
-			if (existsSync(destinationPath) && !(await pathIsDirectory(destinationPath))) {
+			if (
+				existsSync(destinationPath) &&
+				!(await pathIsDirectory(destinationPath))
+			) {
 				await rm(destinationPath, { recursive: true, force: true });
 			}
 			await overlayDirectoryKeepingRootPresent(sourcePath, destinationPath);
@@ -363,7 +396,9 @@ async function overlayDirectoryKeepingRootPresent(sourceDir: string, destination
 	await Promise.all(
 		destinationEntries
 			.filter((entry) => !sourceNames.has(entry.name))
-			.map((entry) => rm(join(destinationDir, entry.name), { recursive: true, force: true })),
+			.map((entry) =>
+				rm(join(destinationDir, entry.name), { recursive: true, force: true }),
+			),
 	);
 }
 
@@ -373,7 +408,10 @@ async function applyTeamModeToPluginCache(
 ): Promise<void> {
 	if (teamModeEnabled(teamMode)) return;
 	for (const skillName of TEAM_MODE_PLUGIN_SKILL_NAMES) {
-		await rm(join(cacheDir, "skills", skillName), { recursive: true, force: true });
+		await rm(join(cacheDir, "skills", skillName), {
+			recursive: true,
+			force: true,
+		});
 	}
 }
 
@@ -386,19 +424,28 @@ export interface OmxPluginCacheMaterializeResult {
 export async function materializePackagedOmxPluginCache(
 	codexHomeDir: string,
 	packagedMarketplace: PackagedOmxMarketplace | null,
-	options: { dryRun?: boolean; teamMode?: SetupTeamMode; onCacheDirPrepared?: (cacheDir: string) => void | Promise<void> } = {},
+	options: {
+		dryRun?: boolean;
+		teamMode?: SetupTeamMode;
+		onCacheDirPrepared?: (cacheDir: string) => void | Promise<void>;
+	} = {},
 ): Promise<OmxPluginCacheMaterializeResult> {
 	if (!packagedMarketplace) return { status: "unavailable" };
 	const version = await packagedOmxPluginVersion(packagedMarketplace);
 	if (!version) return { status: "unavailable" };
 	const cacheDir = join(omxPluginCacheBase(codexHomeDir), version);
-	if (await hasExpectedOmxPluginCache(codexHomeDir, packagedMarketplace, options)) {
+	if (
+		await hasExpectedOmxPluginCache(codexHomeDir, packagedMarketplace, options)
+	) {
 		return { status: "unchanged", cacheDir, version };
 	}
 	if (!options.dryRun) {
 		const cacheBase = omxPluginCacheBase(codexHomeDir);
 		await mkdir(cacheBase, { recursive: true });
-		const tempDir = join(cacheBase, `.materializing-${version}-${process.pid}-${Date.now()}`);
+		const tempDir = join(
+			cacheBase,
+			`.materializing-${version}-${process.pid}-${Date.now()}`,
+		);
 		await rm(tempDir, { recursive: true, force: true });
 		await cp(packagedMarketplace.pluginRoot, tempDir, { recursive: true });
 		await applyTeamModeToPluginCache(tempDir, options.teamMode);
@@ -476,14 +523,20 @@ function localPluginMcpServerTableHeaderPattern(serverName: string): RegExp {
 	);
 }
 
-export function hasLocalOmxPluginMcpServerRegistrations(config: string): boolean {
+export function hasLocalOmxPluginMcpServerRegistrations(
+	config: string,
+): boolean {
 	const lines = config.split(/\r?\n/);
 	return OMX_FIRST_PARTY_MCP_SERVER_NAMES.some((serverName) =>
-		lines.some((line) => localPluginMcpServerTableHeaderPattern(serverName).test(line)),
+		lines.some((line) =>
+			localPluginMcpServerTableHeaderPattern(serverName).test(line),
+		),
 	);
 }
 
-export function stripLocalOmxPluginMcpServerRegistrations(config: string): string {
+export function stripLocalOmxPluginMcpServerRegistrations(
+	config: string,
+): string {
 	let lines = config.split(/\r?\n/);
 	for (const serverName of OMX_FIRST_PARTY_MCP_SERVER_NAMES) {
 		const headerPattern = localPluginMcpServerTableHeaderPattern(serverName);
@@ -499,7 +552,10 @@ export function stripLocalOmxPluginMcpServerRegistrations(config: string): strin
 		}
 		lines = [...lines.slice(0, start), ...lines.slice(end)];
 	}
-	return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+	return lines
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trimEnd();
 }
 
 function upsertTomlTableBooleanKey(
@@ -529,7 +585,11 @@ function upsertTomlTableBooleanKey(
 
 	let keyIndex = -1;
 	for (let index = start + 1; index < end; index += 1) {
-		if (new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`).test(lines[index])) {
+		if (
+			new RegExp(
+				`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`,
+			).test(lines[index])
+		) {
 			if (keyIndex < 0) {
 				keyIndex = index;
 				lines[index] = `${key} = ${value ? "true" : "false"}`;
@@ -603,9 +663,16 @@ export function upsertLocalOmxPluginMcpServerEnablement(
 	for (const serverName of OMX_FIRST_PARTY_MCP_SERVER_NAMES) {
 		const header = `[plugins.${JSON.stringify(OMX_LOCAL_PLUGIN_CONFIG_KEY)}.mcp_servers.${serverName}]`;
 		const headerPattern = localPluginMcpServerTableHeaderPattern(serverName);
-		next = upsertTomlTableBooleanKey(next, header, headerPattern, "enabled", enabled, {
-			create: enabled,
-		});
+		next = upsertTomlTableBooleanKey(
+			next,
+			header,
+			headerPattern,
+			"enabled",
+			enabled,
+			{
+				create: enabled,
+			},
+		);
 	}
 	return next;
 }

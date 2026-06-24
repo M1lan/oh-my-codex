@@ -14,36 +14,36 @@
  * Accumulates artifacts from prior stages so downstream stages can consume them.
  */
 export interface StageContext {
-  /** Original task description provided by the user. */
-  task: string;
+	/** Original task description provided by the user. */
+	task: string;
 
-  /** Accumulated artifacts from all prior stages keyed by producing stage name. */
-  artifacts: Record<string, unknown>;
+	/** Accumulated artifacts from all prior stages keyed by producing stage name. */
+	artifacts: Record<string, unknown>;
 
-  /** Result of the immediately preceding stage (undefined for the first stage). */
-  previousStageResult?: StageResult;
+	/** Result of the immediately preceding stage (undefined for the first stage). */
+	previousStageResult?: StageResult;
 
-  /** Working directory for the pipeline run. */
-  cwd: string;
+	/** Working directory for the pipeline run. */
+	cwd: string;
 
-  /** Optional session id for scoped state. */
-  sessionId?: string;
+	/** Optional session id for scoped state. */
+	sessionId?: string;
 }
 
 /**
  * Result returned by each pipeline stage after execution.
  */
 export interface StageResult {
-  status: 'completed' | 'failed' | 'skipped';
+	status: "completed" | "failed" | "skipped";
 
-  /** Artifacts produced by this stage (merged into StageContext.artifacts). */
-  artifacts: Record<string, unknown>;
+	/** Artifacts produced by this stage (merged into StageContext.artifacts). */
+	artifacts: Record<string, unknown>;
 
-  /** Wall-clock duration of the stage in milliseconds. */
-  duration_ms: number;
+	/** Wall-clock duration of the stage in milliseconds. */
+	duration_ms: number;
 
-  /** Human-readable error description when status is 'failed'. */
-  error?: string;
+	/** Human-readable error description when status is 'failed'. */
+	error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,17 +55,17 @@ export interface StageResult {
  * backends (deep-interview, ralplan, ultragoal, code-review, ultraqa, and legacy team/Ralph adapters) behind this uniform interface.
  */
 export interface PipelineStage {
-  /** Unique name for this stage (e.g. 'deep-interview', 'ralplan', 'ultragoal', 'code-review'). */
-  readonly name: string;
+	/** Unique name for this stage (e.g. 'deep-interview', 'ralplan', 'ultragoal', 'code-review'). */
+	readonly name: string;
 
-  /** Execute the stage. Must return a StageResult. */
-  run(ctx: StageContext): Promise<StageResult>;
+	/** Execute the stage. Must return a StageResult. */
+	run(ctx: StageContext): Promise<StageResult>;
 
-  /**
-   * Optional predicate — return true to skip this stage.
-   * Useful for conditional stages (e.g. skip ralplan if plan already exists).
-   */
-  canSkip?(ctx: StageContext): boolean;
+	/**
+	 * Optional predicate — return true to skip this stage.
+	 * Useful for conditional stages (e.g. skip ralplan if plan already exists).
+	 */
+	canSkip?(ctx: StageContext): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,37 +76,37 @@ export interface PipelineStage {
  * Configuration for a pipeline run.
  */
 export interface PipelineConfig {
-  /** Human-readable pipeline name (used for state files and logging). */
-  name: string;
+	/** Human-readable pipeline name (used for state files and logging). */
+	name: string;
 
-  /** The task description driving the pipeline. */
-  task: string;
+	/** The task description driving the pipeline. */
+	task: string;
 
-  /** Ordered list of stages to execute. */
-  stages: PipelineStage[];
+	/** Ordered list of stages to execute. */
+	stages: PipelineStage[];
 
-  /** Working directory (defaults to process.cwd()). */
-  cwd?: string;
+	/** Working directory (defaults to process.cwd()). */
+	cwd?: string;
 
-  /** Optional session id for scoped state persistence. */
-  sessionId?: string;
+	/** Optional session id for scoped state persistence. */
+	sessionId?: string;
 
-  /**
-   * Maximum ralph verification iterations.
-   * Passed through to the ralph stage. Defaults to 10.
-   */
-  maxRalphIterations?: number;
+	/**
+	 * Maximum ralph verification iterations.
+	 * Passed through to the ralph stage. Defaults to 10.
+	 */
+	maxRalphIterations?: number;
 
-  /**
-   * Legacy worker count for adapters that still launch team execution. Defaults to 2.
-   */
-  workerCount?: number;
+	/**
+	 * Legacy worker count for adapters that still launch team execution. Defaults to 2.
+	 */
+	workerCount?: number;
 
-  /** Agent type for team workers (e.g. 'executor'). Defaults to 'executor'. */
-  agentType?: string;
+	/** Agent type for team workers (e.g. 'executor'). Defaults to 'executor'. */
+	agentType?: string;
 
-  /** Callback fired on each stage transition. */
-  onStageTransition?: (from: string, to: string) => void;
+	/** Callback fired on each stage transition. */
+	onStageTransition?: (from: string, to: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,23 +117,23 @@ export interface PipelineConfig {
  * Final result of a complete pipeline run.
  */
 export interface PipelineResult {
-  /** Overall pipeline status. */
-  status: 'completed' | 'failed' | 'cancelled';
+	/** Overall pipeline status. */
+	status: "completed" | "failed" | "cancelled";
 
-  /** Per-stage results keyed by stage name. */
-  stageResults: Record<string, StageResult>;
+	/** Per-stage results keyed by stage name. */
+	stageResults: Record<string, StageResult>;
 
-  /** Total wall-clock duration in milliseconds. */
-  duration_ms: number;
+	/** Total wall-clock duration in milliseconds. */
+	duration_ms: number;
 
-  /** Merged artifact map from all stages. */
-  artifacts: Record<string, unknown>;
+	/** Merged artifact map from all stages. */
+	artifacts: Record<string, unknown>;
 
-  /** Error from the failing stage (if any). */
-  error?: string;
+	/** Error from the failing stage (if any). */
+	error?: string;
 
-  /** Name of the stage that failed (if any). */
-  failedStage?: string;
+	/** Name of the stage that failed (if any). */
+	failedStage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,39 +144,39 @@ export interface PipelineResult {
  * Extended ModeState fields for pipeline mode.
  */
 export interface PipelineModeStateExtension {
-  /** Pipeline config name. */
-  pipeline_name: string;
+	/** Pipeline config name. */
+	pipeline_name: string;
 
-  /** Names of stages in execution order. */
-  pipeline_stages: string[];
+	/** Names of stages in execution order. */
+	pipeline_stages: string[];
 
-  /** Index of the currently executing stage. */
-  pipeline_stage_index: number;
+	/** Index of the currently executing stage. */
+	pipeline_stage_index: number;
 
-  /** Per-stage results collected so far. */
-  pipeline_stage_results: Record<string, StageResult>;
+	/** Per-stage results collected so far. */
+	pipeline_stage_results: Record<string, StageResult>;
 
-  /** Current review cycle count; increments when code-review is not clean. */
-  review_cycle?: number;
+	/** Current review cycle count; increments when code-review is not clean. */
+	review_cycle?: number;
 
-  /** Latest code-review verdict artifact. */
-  review_verdict?: unknown;
+	/** Latest code-review verdict artifact. */
+	review_verdict?: unknown;
 
-  /** Latest UltraQA verdict artifact. */
-  qa_verdict?: unknown;
+	/** Latest UltraQA verdict artifact. */
+	qa_verdict?: unknown;
 
-  /** Reason Autopilot returned to ralplan after a non-clean review. */
-  return_to_ralplan_reason?: string | null;
+	/** Reason Autopilot returned to ralplan after a non-clean review. */
+	return_to_ralplan_reason?: string | null;
 
-  /** Phase handoff artifacts keyed by contract names such as deep_interview, ralplan, ultragoal, code_review, and ultraqa. */
-  handoff_artifacts?: Record<string, unknown>;
+	/** Phase handoff artifacts keyed by contract names such as deep_interview, ralplan, ultragoal, code_review, and ultraqa. */
+	handoff_artifacts?: Record<string, unknown>;
 
-  /** Quality-gate retry ceiling; legacy name retained for API compatibility. */
-  pipeline_max_ralph_iterations: number;
+	/** Quality-gate retry ceiling; legacy name retained for API compatibility. */
+	pipeline_max_ralph_iterations: number;
 
-  /** Worker count for team execution. */
-  pipeline_worker_count: number;
+	/** Worker count for team execution. */
+	pipeline_worker_count: number;
 
-  /** Agent type for team workers. */
-  pipeline_agent_type: string;
+	/** Agent type for team workers. */
+	pipeline_agent_type: string;
 }

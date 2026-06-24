@@ -1,12 +1,12 @@
-import { CODEX_BYPASS_FLAG, MADMAX_FLAG } from './constants.js';
-import { parseInitArgs } from './autoresearch-guided.js';
+import { CODEX_BYPASS_FLAG, MADMAX_FLAG } from "./constants.js";
+import { parseInitArgs } from "./autoresearch-guided.js";
 
 export const AUTORESEARCH_DEPRECATION_MESSAGE = [
-  'omx autoresearch is hard-deprecated.',
-  'Use the `$autoresearch` skill for the hook-native persistent loop.',
-  'Use `$deep-interview --autoresearch` to create or refine mission artifacts before execution.',
-  'Direct CLI launch, resume, run, bare mission-dir aliases, and tmux split-pane launch are no longer supported.',
-].join(' ');
+	"omx autoresearch is hard-deprecated.",
+	"Use the `$autoresearch` skill for the hook-native persistent loop.",
+	"Use `$deep-interview --autoresearch` to create or refine mission artifacts before execution.",
+	"Direct CLI launch, resume, run, bare mission-dir aliases, and tmux split-pane launch are no longer supported.",
+].join(" ");
 
 export const AUTORESEARCH_HELP = `omx autoresearch - Hard-deprecated legacy command surface
 
@@ -31,81 +31,115 @@ Migration:
 `;
 
 export interface ParsedAutoresearchArgs {
-  missionDir: string | null;
-  runId: string | null;
-  codexArgs: string[];
-  guided?: boolean;
-  initArgs?: string[];
-  seedArgs?: ReturnType<typeof parseInitArgs>;
-  runSubcommand?: boolean;
+	missionDir: string | null;
+	runId: string | null;
+	codexArgs: string[];
+	guided?: boolean;
+	initArgs?: string[];
+	seedArgs?: ReturnType<typeof parseInitArgs>;
+	runSubcommand?: boolean;
 }
 
-export function normalizeAutoresearchCodexArgs(codexArgs: readonly string[]): string[] {
-  const normalized: string[] = [];
-  let hasBypass = false;
+export function normalizeAutoresearchCodexArgs(
+	codexArgs: readonly string[],
+): string[] {
+	const normalized: string[] = [];
+	let hasBypass = false;
 
-  for (const arg of codexArgs) {
-    if (arg === MADMAX_FLAG) {
-      if (!hasBypass) {
-        normalized.push(CODEX_BYPASS_FLAG);
-        hasBypass = true;
-      }
-      continue;
-    }
-    if (arg === CODEX_BYPASS_FLAG) {
-      if (!hasBypass) {
-        normalized.push(arg);
-        hasBypass = true;
-      }
-      continue;
-    }
-    normalized.push(arg);
-  }
+	for (const arg of codexArgs) {
+		if (arg === MADMAX_FLAG) {
+			if (!hasBypass) {
+				normalized.push(CODEX_BYPASS_FLAG);
+				hasBypass = true;
+			}
+			continue;
+		}
+		if (arg === CODEX_BYPASS_FLAG) {
+			if (!hasBypass) {
+				normalized.push(arg);
+				hasBypass = true;
+			}
+			continue;
+		}
+		normalized.push(arg);
+	}
 
-  if (!hasBypass) {
-    normalized.push(CODEX_BYPASS_FLAG);
-  }
+	if (!hasBypass) {
+		normalized.push(CODEX_BYPASS_FLAG);
+	}
 
-  return normalized;
+	return normalized;
 }
 
-export function parseAutoresearchArgs(args: readonly string[]): ParsedAutoresearchArgs {
-  const values = [...args];
-  if (values.length === 0) {
-    return { missionDir: null, runId: null, codexArgs: [], guided: true };
-  }
+export function parseAutoresearchArgs(
+	args: readonly string[],
+): ParsedAutoresearchArgs {
+	const values = [...args];
+	if (values.length === 0) {
+		return { missionDir: null, runId: null, codexArgs: [], guided: true };
+	}
 
-  const first = values[0];
-  if (first === 'init') {
-    return { missionDir: null, runId: null, codexArgs: [], guided: true, initArgs: values.slice(1) };
-  }
-  if (first === '--help' || first === '-h' || first === 'help') {
-    return { missionDir: '--help', runId: null, codexArgs: [] };
-  }
-  if (first === '--resume') {
-    return { missionDir: null, runId: values[1]?.trim() || null, codexArgs: values.slice(2) };
-  }
-  if (first.startsWith('--resume=')) {
-    return { missionDir: null, runId: first.slice('--resume='.length).trim() || null, codexArgs: values.slice(1) };
-  }
-  if (first === 'run') {
-    return { missionDir: values[1]?.trim() || null, runId: null, codexArgs: values.slice(2), runSubcommand: true };
-  }
-  if (first.startsWith('-')) {
-    return { missionDir: null, runId: null, codexArgs: [], guided: true, seedArgs: parseInitArgs(values) };
-  }
-  return { missionDir: first, runId: null, codexArgs: values.slice(1) };
+	const first = values[0];
+	if (first === "init") {
+		return {
+			missionDir: null,
+			runId: null,
+			codexArgs: [],
+			guided: true,
+			initArgs: values.slice(1),
+		};
+	}
+	if (first === "--help" || first === "-h" || first === "help") {
+		return { missionDir: "--help", runId: null, codexArgs: [] };
+	}
+	if (first === "--resume") {
+		return {
+			missionDir: null,
+			runId: values[1]?.trim() || null,
+			codexArgs: values.slice(2),
+		};
+	}
+	if (first.startsWith("--resume=")) {
+		return {
+			missionDir: null,
+			runId: first.slice("--resume=".length).trim() || null,
+			codexArgs: values.slice(1),
+		};
+	}
+	if (first === "run") {
+		return {
+			missionDir: values[1]?.trim() || null,
+			runId: null,
+			codexArgs: values.slice(2),
+			runSubcommand: true,
+		};
+	}
+	if (first.startsWith("-")) {
+		return {
+			missionDir: null,
+			runId: null,
+			codexArgs: [],
+			guided: true,
+			seedArgs: parseInitArgs(values),
+		};
+	}
+	return { missionDir: first, runId: null, codexArgs: values.slice(1) };
 }
 
 function shouldShowHelp(args: readonly string[]): boolean {
-  return args.length > 0 && args.every((arg) => arg === '--help' || arg === '-h' || arg === 'help');
+	return (
+		args.length > 0 &&
+		args.every((arg) => arg === "--help" || arg === "-h" || arg === "help")
+	);
 }
 
 export async function autoresearchCommand(args: string[]): Promise<void> {
-  if (shouldShowHelp(args)) {
-    console.log(AUTORESEARCH_HELP);
-    return;
-  }
+	if (shouldShowHelp(args)) {
+		console.log(AUTORESEARCH_HELP);
+		return;
+	}
 
-  throw new Error(`${AUTORESEARCH_DEPRECATION_MESSAGE}\n\n${AUTORESEARCH_HELP}`);
+	throw new Error(
+		`${AUTORESEARCH_DEPRECATION_MESSAGE}\n\n${AUTORESEARCH_HELP}`,
+	);
 }

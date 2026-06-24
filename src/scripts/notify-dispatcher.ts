@@ -7,7 +7,15 @@
 
 import { readFile } from "fs/promises";
 import { spawnSync } from "child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import {
+	closeSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
 
@@ -46,7 +54,9 @@ function parseNonNegativeEnvMs(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-function parsePayloadObject(payloadArg: string): Record<string, unknown> | null {
+function parsePayloadObject(
+	payloadArg: string,
+): Record<string, unknown> | null {
 	try {
 		const parsed = JSON.parse(payloadArg) as unknown;
 		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -59,17 +69,30 @@ function parsePayloadObject(payloadArg: string): Record<string, unknown> | null 
 
 function isTurnEndedPayload(payload: Record<string, unknown> | null): boolean {
 	if (!payload) return false;
-	const type = String(payload.type ?? payload.event ?? payload.hook_event_name ?? "")
+	const type = String(
+		payload.type ?? payload.event ?? payload.hook_event_name ?? "",
+	)
 		.trim()
 		.toLowerCase();
-	return type === ""
-		|| type === "agent-turn-complete"
-		|| type === "turn-complete"
-		|| type === "turn-ended";
+	return (
+		type === "" ||
+		type === "agent-turn-complete" ||
+		type === "turn-complete" ||
+		type === "turn-ended"
+	);
 }
 
-function readPayloadTimestampMs(payload: Record<string, unknown>): number | null {
-	for (const key of ["timestamp", "created_at", "createdAt", "event_time", "eventTime", "time"]) {
+function readPayloadTimestampMs(
+	payload: Record<string, unknown>,
+): number | null {
+	for (const key of [
+		"timestamp",
+		"created_at",
+		"createdAt",
+		"event_time",
+		"eventTime",
+		"time",
+	]) {
 		const value = payload[key];
 		if (typeof value === "number" && Number.isFinite(value)) {
 			return value > 1_000_000_000_000 ? value : value * 1000;
@@ -112,33 +135,57 @@ function writeDispatchGuardState(
 	minIntervalMs: number,
 	staleEventAgeMs: number,
 ): void {
-	const previousByIdentity = state.lastDispatchByIdentity && typeof state.lastDispatchByIdentity === "object"
-		? state.lastDispatchByIdentity
-		: {};
+	const previousByIdentity =
+		state.lastDispatchByIdentity &&
+		typeof state.lastDispatchByIdentity === "object"
+			? state.lastDispatchByIdentity
+			: {};
 	const retainedByIdentity: Record<string, number> = {};
 	const now = Date.now();
-	const retentionMs = Math.max(minIntervalMs, staleEventAgeMs, DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS);
+	const retentionMs = Math.max(
+		minIntervalMs,
+		staleEventAgeMs,
+		DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS,
+	);
 	for (const [key, value] of Object.entries(previousByIdentity)) {
 		if (typeof value === "number" && now - value <= retentionMs) {
 			retainedByIdentity[key] = value;
 		}
 	}
 	retainedByIdentity[identity] = now;
-	writeFileSync(statePath, JSON.stringify({
-		lastDispatchAt: identity === "global" ? now : (typeof state.lastDispatchAt === "number" ? state.lastDispatchAt : undefined),
-		lastDispatchByIdentity: retainedByIdentity,
-		pid: process.pid,
-	}));
+	writeFileSync(
+		statePath,
+		JSON.stringify({
+			lastDispatchAt:
+				identity === "global"
+					? now
+					: typeof state.lastDispatchAt === "number"
+						? state.lastDispatchAt
+						: undefined,
+			lastDispatchByIdentity: retainedByIdentity,
+			pid: process.pid,
+		}),
+	);
 }
 
-function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): DispatchGuard {
+function acquireTurnDispatchGuard(
+	metadataPath: string,
+	payloadArg: string,
+): DispatchGuard {
 	const payload = parsePayloadObject(payloadArg);
 	if (!isTurnEndedPayload(payload)) return { ok: true };
 
 	const now = Date.now();
-	const staleEventAgeMs = parseNonNegativeEnvMs("OMX_NOTIFY_DISPATCH_STALE_EVENT_AGE_MS", DEFAULT_STALE_EVENT_AGE_MS);
+	const staleEventAgeMs = parseNonNegativeEnvMs(
+		"OMX_NOTIFY_DISPATCH_STALE_EVENT_AGE_MS",
+		DEFAULT_STALE_EVENT_AGE_MS,
+	);
 	const eventTimestampMs = payload ? readPayloadTimestampMs(payload) : null;
-	if (eventTimestampMs !== null && staleEventAgeMs > 0 && now - eventTimestampMs > staleEventAgeMs) {
+	if (
+		eventTimestampMs !== null &&
+		staleEventAgeMs > 0 &&
+		now - eventTimestampMs > staleEventAgeMs
+	) {
 		return { ok: false };
 	}
 
@@ -171,7 +218,10 @@ function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): Dis
 	};
 
 	try {
-		const minIntervalMs = parseNonNegativeEnvMs("OMX_NOTIFY_DISPATCH_MIN_INTERVAL_MS", DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS);
+		const minIntervalMs = parseNonNegativeEnvMs(
+			"OMX_NOTIFY_DISPATCH_MIN_INTERVAL_MS",
+			DEFAULT_TURN_DISPATCH_MIN_INTERVAL_MS,
+		);
 		const identity = readPayloadIdentity(payload);
 		let state: DispatchGuardState = {};
 		try {
@@ -180,12 +230,21 @@ function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): Dis
 			// No prior guard state.
 		}
 		if (minIntervalMs > 0) {
-			const byIdentity = state.lastDispatchByIdentity && typeof state.lastDispatchByIdentity === "object"
-				? state.lastDispatchByIdentity
-				: {};
-			const identityLastDispatchAt = typeof byIdentity[identity] === "number" ? byIdentity[identity] : 0;
-			const legacyLastDispatchAt = identity === "global" && typeof state.lastDispatchAt === "number" ? state.lastDispatchAt : 0;
-			const lastDispatchAt = Math.max(identityLastDispatchAt, legacyLastDispatchAt);
+			const byIdentity =
+				state.lastDispatchByIdentity &&
+				typeof state.lastDispatchByIdentity === "object"
+					? state.lastDispatchByIdentity
+					: {};
+			const identityLastDispatchAt =
+				typeof byIdentity[identity] === "number" ? byIdentity[identity] : 0;
+			const legacyLastDispatchAt =
+				identity === "global" && typeof state.lastDispatchAt === "number"
+					? state.lastDispatchAt
+					: 0;
+			const lastDispatchAt = Math.max(
+				identityLastDispatchAt,
+				legacyLastDispatchAt,
+			);
 			if (lastDispatchAt > 0 && now - lastDispatchAt < minIntervalMs) {
 				release();
 				return { ok: false };
@@ -195,7 +254,13 @@ function acquireTurnDispatchGuard(metadataPath: string, payloadArg: string): Dis
 			ok: true,
 			release: () => {
 				try {
-					writeDispatchGuardState(statePath, state, identity, minIntervalMs, staleEventAgeMs);
+					writeDispatchGuardState(
+						statePath,
+						state,
+						identity,
+						minIntervalMs,
+						staleEventAgeMs,
+					);
 				} catch {
 					// Guard state is best effort; the lock still prevents concurrent duplicate dispatch.
 				}
@@ -237,7 +302,9 @@ function sameCommand(
 	return left.every((part, index) => part === right[index]);
 }
 
-function resolveNotifyEntrypoint(command: readonly string[]): string | undefined {
+function resolveNotifyEntrypoint(
+	command: readonly string[],
+): string | undefined {
 	if (!/(?:^|[\\/])node(?:\.exe)?$/i.test(command[0] ?? "")) {
 		return command[0];
 	}
@@ -259,7 +326,9 @@ function getPreviousNotifyWrapperValue(
 	return undefined;
 }
 
-function isOmxManagedNotifyCommand(command: readonly string[] | null | undefined): boolean {
+function isOmxManagedNotifyCommand(
+	command: readonly string[] | null | undefined,
+): boolean {
 	if (!command) return false;
 	const entrypoint = resolveNotifyEntrypoint(command);
 	if (!entrypoint) return false;
@@ -269,22 +338,27 @@ function isOmxManagedNotifyCommand(command: readonly string[] | null | undefined
 	return /(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(entrypoint);
 }
 
-function isOmxDispatcherMetadataCommand(command: readonly string[] | null | undefined): boolean {
+function isOmxDispatcherMetadataCommand(
+	command: readonly string[] | null | undefined,
+): boolean {
 	if (!command) return false;
 	const entrypoint = resolveNotifyEntrypoint(command);
 	if (!entrypoint || !/(?:^|[\\/])notify-dispatcher\.js$/.test(entrypoint)) {
 		return false;
 	}
 	const metadataIndex = command.indexOf("--metadata");
-	const metadataPath = metadataIndex >= 0 ? command[metadataIndex + 1] : undefined;
-	return typeof metadataPath === "string" && /(?:^|[\\/])(?:\.omx[\\/])?notify-dispatch\.json$/.test(metadataPath);
+	const metadataPath =
+		metadataIndex >= 0 ? command[metadataIndex + 1] : undefined;
+	return (
+		typeof metadataPath === "string" &&
+		/(?:^|[\\/])(?:\.omx[\\/])?notify-dispatch\.json$/.test(metadataPath)
+	);
 }
 
 function isOmxManagedPayloadText(value: string): boolean {
 	const containsManagedPackageNotify =
-		/(?:^|[\\/])notify-(?:hook|dispatcher)\.js(?:\s|$|["'])/.test(
-			value,
-		) && /(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(value);
+		/(?:^|[\\/])notify-(?:hook|dispatcher)\.js(?:\s|$|["'])/.test(value) &&
+		/(?:^|[\\/])oh-my-codex(?:[\\/]|$)/.test(value);
 	const containsDispatcherMetadataNotify =
 		/(?:^|[\\/])notify-dispatcher\.js(?:\s|$|["'])/.test(value) &&
 		/--metadata(?:\s|=)/.test(value) &&
@@ -322,7 +396,9 @@ function containsOmxManagedNotifyPayload(value: unknown, depth = 0): boolean {
 				isOmxManagedPreviousNotifyWrapper(command)
 			);
 		}
-		return value.some((item) => containsOmxManagedNotifyPayload(item, depth + 1));
+		return value.some((item) =>
+			containsOmxManagedNotifyPayload(item, depth + 1),
+		);
 	}
 	if (typeof value === "object") {
 		const record = value as Record<string, unknown>;

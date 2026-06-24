@@ -84,7 +84,12 @@ export function readTeamModeConfig(cwd = process.cwd()): TeamModeConfig {
 			};
 		}
 	} catch {
-		return { enabled: true, status: "invalid", source: "invalid", path: setupPath };
+		return {
+			enabled: true,
+			status: "invalid",
+			source: "invalid",
+			path: setupPath,
+		};
 	}
 
 	const userConfigPath = join(codexHome(), ".omx-config.json");
@@ -99,7 +104,12 @@ export function readTeamModeConfig(cwd = process.cwd()): TeamModeConfig {
 			};
 		}
 	} catch {
-		return { enabled: true, status: "invalid", source: "invalid", path: userConfigPath };
+		return {
+			enabled: true,
+			status: "invalid",
+			source: "invalid",
+			path: userConfigPath,
+		};
 	}
 
 	return { enabled: true, status: "defaulted", source: "default" };

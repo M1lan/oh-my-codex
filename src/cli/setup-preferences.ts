@@ -1,10 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import {
-	isSetupTeamMode,
-	type SetupTeamMode,
-} from "../config/team-mode.js";
+import { isSetupTeamMode, type SetupTeamMode } from "../config/team-mode.js";
 
 export const SETUP_SCOPES = ["user", "project"] as const;
 export type SetupScope = (typeof SETUP_SCOPES)[number];

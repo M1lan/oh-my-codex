@@ -425,7 +425,11 @@ export async function initAdaptFoundationForTarget(
 	const envelope = applyHermesEnvelope(result.envelope, evidence);
 	if (write) {
 		const paths = envelope.adapterPaths;
-		writeFileSync(paths.envelopePath, `${JSON.stringify(envelope, null, 2)}\n`, "utf-8");
+		writeFileSync(
+			paths.envelopePath,
+			`${JSON.stringify(envelope, null, 2)}\n`,
+			"utf-8",
+		);
 	}
 
 	return {

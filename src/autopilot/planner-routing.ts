@@ -1,36 +1,42 @@
-import { AGENT_DEFINITIONS } from '../agents/definitions.js';
+import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import {
-  getAgentModelOverride,
-  getMainDefaultModel,
-  getModelForMode,
-} from '../config/models.js';
+	getAgentModelOverride,
+	getMainDefaultModel,
+	getModelForMode,
+} from "../config/models.js";
 
-export type AutopilotPlanningOwner = 'main' | 'planner';
+export type AutopilotPlanningOwner = "main" | "planner";
 
 export interface AutopilotPlannerRoutingDecision {
-  owner: AutopilotPlanningOwner;
-  mainModel: string;
-  plannerModel: string;
-  reason: 'main_is_cheap_or_mini' | 'explicit_planner_override' | 'main_not_cheap_or_mini';
-  explicitPlannerOverride: boolean;
+	owner: AutopilotPlanningOwner;
+	mainModel: string;
+	plannerModel: string;
+	reason:
+		| "main_is_cheap_or_mini"
+		| "explicit_planner_override"
+		| "main_not_cheap_or_mini";
+	explicitPlannerOverride: boolean;
 }
 
-const CHEAP_OR_MINI_MODEL_PATTERN = /(?:^|[-_:/\s])(?:o\d+-mini|mini|nano|small|cheap|economy|spark|lite|flash)(?:$|[-_:/\s])/i;
+const CHEAP_OR_MINI_MODEL_PATTERN =
+	/(?:^|[-_:/\s])(?:o\d+-mini|mini|nano|small|cheap|economy|spark|lite|flash)(?:$|[-_:/\s])/i;
 
 function normalizeModelName(value: string): string {
-  return value.trim();
+	return value.trim();
 }
 
 export function isCheapOrMiniModelName(model: string): boolean {
-  const normalized = normalizeModelName(model);
-  if (!normalized) return false;
-  return CHEAP_OR_MINI_MODEL_PATTERN.test(normalized);
+	const normalized = normalizeModelName(model);
+	if (!normalized) return false;
+	return CHEAP_OR_MINI_MODEL_PATTERN.test(normalized);
 }
 
 export function getDefaultPlannerModel(codexHomeOverride?: string): string {
-  return getAgentModelOverride('planner', codexHomeOverride)
-    ?? AGENT_DEFINITIONS.planner.exactModel
-    ?? getMainDefaultModel(codexHomeOverride);
+	return (
+		getAgentModelOverride("planner", codexHomeOverride) ??
+		AGENT_DEFINITIONS.planner.exactModel ??
+		getMainDefaultModel(codexHomeOverride)
+	);
 }
 
 /**
@@ -43,39 +49,43 @@ export function getDefaultPlannerModel(codexHomeOverride?: string): string {
  * phase does not silently stay on the economy lane.
  */
 export function resolveAutopilotPlannerRouting(
-  codexHomeOverride?: string,
+	codexHomeOverride?: string,
 ): AutopilotPlannerRoutingDecision {
-  const mainModel = getModelForMode('autopilot', codexHomeOverride);
-  const explicitPlannerModel = getAgentModelOverride('planner', codexHomeOverride);
-  const plannerModel = explicitPlannerModel ?? getDefaultPlannerModel(codexHomeOverride);
-  const explicitPlannerOverride = Boolean(explicitPlannerModel);
-  const mainIsCheapOrMini = isCheapOrMiniModelName(mainModel);
+	const mainModel = getModelForMode("autopilot", codexHomeOverride);
+	const explicitPlannerModel = getAgentModelOverride(
+		"planner",
+		codexHomeOverride,
+	);
+	const plannerModel =
+		explicitPlannerModel ?? getDefaultPlannerModel(codexHomeOverride);
+	const explicitPlannerOverride = Boolean(explicitPlannerModel);
+	const mainIsCheapOrMini = isCheapOrMiniModelName(mainModel);
 
-  if (explicitPlannerOverride) {
-    return {
-      owner: 'planner',
-      mainModel,
-      plannerModel,
-      reason: 'explicit_planner_override',
-      explicitPlannerOverride,
-    };
-  }
+	if (explicitPlannerOverride) {
+		return {
+			owner: "planner",
+			mainModel,
+			plannerModel,
+			reason: "explicit_planner_override",
+			explicitPlannerOverride,
+		};
+	}
 
-  if (mainIsCheapOrMini) {
-    return {
-      owner: 'planner',
-      mainModel,
-      plannerModel,
-      reason: 'main_is_cheap_or_mini',
-      explicitPlannerOverride,
-    };
-  }
+	if (mainIsCheapOrMini) {
+		return {
+			owner: "planner",
+			mainModel,
+			plannerModel,
+			reason: "main_is_cheap_or_mini",
+			explicitPlannerOverride,
+		};
+	}
 
-  return {
-    owner: 'main',
-    mainModel,
-    plannerModel,
-    reason: 'main_not_cheap_or_mini',
-    explicitPlannerOverride,
-  };
+	return {
+		owner: "main",
+		mainModel,
+		plannerModel,
+		reason: "main_not_cheap_or_mini",
+		explicitPlannerOverride,
+	};
 }

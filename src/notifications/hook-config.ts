@@ -11,9 +11,9 @@ import { join } from "path";
 import { codexHome } from "../utils/paths.js";
 import type { HookNotificationConfig } from "./hook-config-types.js";
 import type {
-  FullNotificationConfig,
-  NotificationEvent,
-  NotificationPlatform,
+	FullNotificationConfig,
+	NotificationEvent,
+	NotificationPlatform,
 } from "./types.js";
 
 /** Cached hook config. `undefined` = not yet read, `null` = read but absent/disabled. */
@@ -31,64 +31,72 @@ let cachedConfig: HookNotificationConfig | null | undefined;
  * - Caches after first read for performance
  */
 export function getHookConfig(): HookNotificationConfig | null {
-  if (cachedConfig !== undefined) return cachedConfig;
+	if (cachedConfig !== undefined) return cachedConfig;
 
-  const envOverridePath = process.env.OMX_HOOK_CONFIG;
+	const envOverridePath = process.env.OMX_HOOK_CONFIG;
 
-  if (envOverridePath) {
-    // Env var: read HookNotificationConfig directly from separate file
-    if (!existsSync(envOverridePath)) {
-      cachedConfig = null;
-      return null;
-    }
-    try {
-      const raw = JSON.parse(readFileSync(envOverridePath, "utf-8"));
-      if (!raw || raw.enabled === false) {
-        cachedConfig = null;
-        return null;
-      }
-      cachedConfig = raw as HookNotificationConfig;
-      return cachedConfig;
-    } catch {
-      cachedConfig = null;
-      return null;
-    }
-  }
+	if (envOverridePath) {
+		// Env var: read HookNotificationConfig directly from separate file
+		if (!existsSync(envOverridePath)) {
+			cachedConfig = null;
+			return null;
+		}
+		try {
+			const raw = JSON.parse(readFileSync(envOverridePath, "utf-8"));
+			if (!raw || raw.enabled === false) {
+				cachedConfig = null;
+				return null;
+			}
+			cachedConfig = raw as HookNotificationConfig;
+			return cachedConfig;
+		} catch {
+			cachedConfig = null;
+			return null;
+		}
+	}
 
-  // Primary: read from notifications.hookTemplates in .omx-config.json
-  const OMX_CONFIG_PATH = join(codexHome(), ".omx-config.json");
-  if (!existsSync(OMX_CONFIG_PATH)) {
-    cachedConfig = null;
-    return null;
-  }
+	// Primary: read from notifications.hookTemplates in .omx-config.json
+	const OMX_CONFIG_PATH = join(codexHome(), ".omx-config.json");
+	if (!existsSync(OMX_CONFIG_PATH)) {
+		cachedConfig = null;
+		return null;
+	}
 
-  try {
-    const raw = JSON.parse(readFileSync(OMX_CONFIG_PATH, "utf-8"));
-    if (!raw || typeof raw !== "object") {
-      cachedConfig = null;
-      return null;
-    }
-    const hookTemplates = (raw as Record<string, unknown>).notifications
-      ? ((raw as Record<string, unknown>).notifications as Record<string, unknown>).hookTemplates
-      : undefined;
+	try {
+		const raw = JSON.parse(readFileSync(OMX_CONFIG_PATH, "utf-8"));
+		if (!raw || typeof raw !== "object") {
+			cachedConfig = null;
+			return null;
+		}
+		const hookTemplates = (raw as Record<string, unknown>).notifications
+			? (
+					(raw as Record<string, unknown>).notifications as Record<
+						string,
+						unknown
+					>
+				).hookTemplates
+			: undefined;
 
-    if (!hookTemplates || (hookTemplates as Record<string, unknown>).enabled === false) {
-      cachedConfig = null;
-      return null;
-    }
-    cachedConfig = hookTemplates as HookNotificationConfig;
-    return cachedConfig;
-  } catch {
-    cachedConfig = null;
-    return null;
-  }
+		if (
+			!hookTemplates ||
+			(hookTemplates as Record<string, unknown>).enabled === false
+		) {
+			cachedConfig = null;
+			return null;
+		}
+		cachedConfig = hookTemplates as HookNotificationConfig;
+		return cachedConfig;
+	} catch {
+		cachedConfig = null;
+		return null;
+	}
 }
 
 /**
  * Clear the cached hook config. Call in tests to reset state.
  */
 export function resetHookConfigCache(): void {
-  cachedConfig = undefined;
+	cachedConfig = undefined;
 }
 
 /**
@@ -97,25 +105,25 @@ export function resetHookConfigCache(): void {
  * Cascade: platform override > event template > defaultTemplate > null
  */
 export function resolveEventTemplate(
-  hookConfig: HookNotificationConfig | null,
-  event: NotificationEvent,
-  platform: NotificationPlatform,
+	hookConfig: HookNotificationConfig | null,
+	event: NotificationEvent,
+	platform: NotificationPlatform,
 ): string | null {
-  if (!hookConfig) return null;
+	if (!hookConfig) return null;
 
-  const eventConfig = hookConfig.events?.[event];
+	const eventConfig = hookConfig.events?.[event];
 
-  if (eventConfig) {
-    // Platform-specific override
-    const platformOverride = eventConfig.platforms?.[platform];
-    if (platformOverride?.template) return platformOverride.template;
+	if (eventConfig) {
+		// Platform-specific override
+		const platformOverride = eventConfig.platforms?.[platform];
+		if (platformOverride?.template) return platformOverride.template;
 
-    // Event-level template
-    if (eventConfig.template) return eventConfig.template;
-  }
+		// Event-level template
+		if (eventConfig.template) return eventConfig.template;
+	}
 
-  // Global default template
-  return hookConfig.defaultTemplate || null;
+	// Global default template
+	return hookConfig.defaultTemplate || null;
 }
 
 /**
@@ -126,24 +134,26 @@ export function resolveEventTemplate(
  * - Platform credentials are NOT affected (they stay in .omx-config.json)
  */
 export function mergeHookConfigIntoNotificationConfig(
-  hookConfig: HookNotificationConfig,
-  notifConfig: FullNotificationConfig,
+	hookConfig: HookNotificationConfig,
+	notifConfig: FullNotificationConfig,
 ): FullNotificationConfig {
-  if (!hookConfig.events) return notifConfig;
+	if (!hookConfig.events) return notifConfig;
 
-  const merged = { ...notifConfig };
-  const events = { ...(merged.events || {}) };
+	const merged = { ...notifConfig };
+	const events = { ...(merged.events || {}) };
 
-  for (const [eventName, hookEventConfig] of Object.entries(hookConfig.events)) {
-    if (!hookEventConfig) continue;
-    const event = eventName as NotificationEvent;
-    const existing = events[event as keyof typeof events];
-    (events as Record<string, unknown>)[event] = {
-      ...(existing || {}),
-      enabled: hookEventConfig.enabled,
-    };
-  }
+	for (const [eventName, hookEventConfig] of Object.entries(
+		hookConfig.events,
+	)) {
+		if (!hookEventConfig) continue;
+		const event = eventName as NotificationEvent;
+		const existing = events[event as keyof typeof events];
+		(events as Record<string, unknown>)[event] = {
+			...(existing || {}),
+			enabled: hookEventConfig.enabled,
+		};
+	}
 
-  merged.events = events as FullNotificationConfig["events"];
-  return merged;
+	merged.events = events as FullNotificationConfig["events"];
+	return merged;
 }

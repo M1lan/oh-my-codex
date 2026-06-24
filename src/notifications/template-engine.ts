@@ -11,20 +11,44 @@ import { basename } from "path";
 
 /** Set of known template variables for validation */
 const KNOWN_VARIABLES = new Set<string>([
-  // Raw payload fields
-  "event", "sessionId", "message", "timestamp", "tmuxSession",
-  "projectPath", "projectName", "modesUsed", "contextSummary",
-  "durationMs", "agentsSpawned", "agentsCompleted",
-  "reason", "activeMode", "iteration", "maxIterations",
-  "question", "incompleteTasks", "agentName", "agentType",
-  "tmuxTail", "tmuxPaneId",
-  // Reply context (from OPENCLAW_REPLY_* env vars; populated in OpenClaw
-  // instruction templates, empty in standard notification templates)
-  "replyChannel", "replyTarget", "replyThread",
-  // Computed variables
-  "duration", "time", "modesDisplay", "iterationDisplay",
-  "agentDisplay", "projectDisplay", "footer", "tmuxTailBlock",
-  "reasonDisplay",
+	// Raw payload fields
+	"event",
+	"sessionId",
+	"message",
+	"timestamp",
+	"tmuxSession",
+	"projectPath",
+	"projectName",
+	"modesUsed",
+	"contextSummary",
+	"durationMs",
+	"agentsSpawned",
+	"agentsCompleted",
+	"reason",
+	"activeMode",
+	"iteration",
+	"maxIterations",
+	"question",
+	"incompleteTasks",
+	"agentName",
+	"agentType",
+	"tmuxTail",
+	"tmuxPaneId",
+	// Reply context (from OPENCLAW_REPLY_* env vars; populated in OpenClaw
+	// instruction templates, empty in standard notification templates)
+	"replyChannel",
+	"replyTarget",
+	"replyThread",
+	// Computed variables
+	"duration",
+	"time",
+	"modesDisplay",
+	"iterationDisplay",
+	"agentDisplay",
+	"projectDisplay",
+	"footer",
+	"tmuxTailBlock",
+	"reasonDisplay",
 ]);
 
 /**
@@ -32,18 +56,18 @@ const KNOWN_VARIABLES = new Set<string>([
  * Mirrors formatDuration() in formatter.ts.
  */
 function formatDuration(ms?: number): string {
-  if (!ms) return "unknown";
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
+	if (!ms) return "unknown";
+	const seconds = Math.floor(ms / 1000);
+	const minutes = Math.floor(seconds / 60);
+	const hours = Math.floor(minutes / 60);
 
-  if (hours > 0) {
-    return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds % 60}s`;
-  }
-  return `${seconds}s`;
+	if (hours > 0) {
+		return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+	}
+	if (minutes > 0) {
+		return `${minutes}m ${seconds % 60}s`;
+	}
+	return `${seconds}s`;
 }
 
 /**
@@ -51,9 +75,9 @@ function formatDuration(ms?: number): string {
  * Mirrors projectDisplay() in formatter.ts.
  */
 function getProjectDisplay(payload: FullNotificationPayload): string {
-  if (payload.projectName) return payload.projectName;
-  if (payload.projectPath) return basename(payload.projectPath);
-  return "unknown";
+	if (payload.projectName) return payload.projectName;
+	if (payload.projectPath) return basename(payload.projectPath);
+	return "unknown";
 }
 
 /**
@@ -61,12 +85,12 @@ function getProjectDisplay(payload: FullNotificationPayload): string {
  * Mirrors buildFooter(payload, true) in formatter.ts.
  */
 function buildFooterText(payload: FullNotificationPayload): string {
-  const parts: string[] = [];
-  if (payload.tmuxSession) {
-    parts.push(`**tmux:** \`${payload.tmuxSession}\``);
-  }
-  parts.push(`**project:** \`${getProjectDisplay(payload)}\``);
-  return parts.join(" | ");
+	const parts: string[] = [];
+	if (payload.tmuxSession) {
+		parts.push(`**tmux:** \`${payload.tmuxSession}\``);
+	}
+	parts.push(`**project:** \`${getProjectDisplay(payload)}\``);
+	return parts.join(" | ");
 }
 
 /**
@@ -75,10 +99,10 @@ function buildFooterText(payload: FullNotificationPayload): string {
  * Includes two leading newlines (blank line separator) to match formatter output.
  */
 function buildTmuxTailBlock(payload: FullNotificationPayload): string {
-  if (!payload.tmuxTail) return "";
-  const parsed = parseTmuxTail(payload.tmuxTail);
-  if (!parsed) return "";
-  return `\n\n**Recent output:**\n\`\`\`\n${parsed}\n\`\`\``;
+	if (!payload.tmuxTail) return "";
+	const parsed = parseTmuxTail(payload.tmuxTail);
+	if (!parsed) return "";
+	return `\n\n**Recent output:**\n\`\`\`\n${parsed}\n\`\`\``;
 }
 
 /**
@@ -86,67 +110,64 @@ function buildTmuxTailBlock(payload: FullNotificationPayload): string {
  * Includes raw payload fields (string-converted) and computed variables.
  */
 export function computeTemplateVariables(
-  payload: FullNotificationPayload,
+	payload: FullNotificationPayload,
 ): Record<string, string> {
-  const vars: Record<string, string> = {};
+	const vars: Record<string, string> = {};
 
-  // Raw payload fields (null/undefined → "")
-  vars.event = payload.event || "";
-  vars.sessionId = payload.sessionId || "";
-  vars.message = payload.message || "";
-  vars.timestamp = payload.timestamp || "";
-  vars.tmuxSession = payload.tmuxSession || "";
-  vars.projectPath = payload.projectPath || "";
-  vars.projectName = payload.projectName || "";
-  vars.modesUsed = payload.modesUsed?.join(", ") || "";
-  vars.contextSummary = payload.contextSummary || "";
-  vars.durationMs =
-    payload.durationMs != null ? String(payload.durationMs) : "";
-  vars.agentsSpawned =
-    payload.agentsSpawned != null ? String(payload.agentsSpawned) : "";
-  vars.agentsCompleted =
-    payload.agentsCompleted != null ? String(payload.agentsCompleted) : "";
-  vars.reason = payload.reason || "";
-  vars.activeMode = payload.activeMode || "";
-  vars.iteration =
-    payload.iteration != null ? String(payload.iteration) : "";
-  vars.maxIterations =
-    payload.maxIterations != null ? String(payload.maxIterations) : "";
-  vars.question = payload.question || "";
-  // incompleteTasks: undefined/null → "" (so {{#if}} is falsy when unset)
-  // 0 → "0" (distinguishable from unset; templates can display "0 incomplete tasks")
-  vars.incompleteTasks =
-    payload.incompleteTasks != null
-      ? String(payload.incompleteTasks)
-      : "";
-  vars.agentName = payload.agentName || "";
-  vars.agentType = payload.agentType || "";
-  vars.tmuxTail = payload.tmuxTail || "";
-  vars.tmuxPaneId = payload.tmuxPaneId || "";
+	// Raw payload fields (null/undefined → "")
+	vars.event = payload.event || "";
+	vars.sessionId = payload.sessionId || "";
+	vars.message = payload.message || "";
+	vars.timestamp = payload.timestamp || "";
+	vars.tmuxSession = payload.tmuxSession || "";
+	vars.projectPath = payload.projectPath || "";
+	vars.projectName = payload.projectName || "";
+	vars.modesUsed = payload.modesUsed?.join(", ") || "";
+	vars.contextSummary = payload.contextSummary || "";
+	vars.durationMs =
+		payload.durationMs != null ? String(payload.durationMs) : "";
+	vars.agentsSpawned =
+		payload.agentsSpawned != null ? String(payload.agentsSpawned) : "";
+	vars.agentsCompleted =
+		payload.agentsCompleted != null ? String(payload.agentsCompleted) : "";
+	vars.reason = payload.reason || "";
+	vars.activeMode = payload.activeMode || "";
+	vars.iteration = payload.iteration != null ? String(payload.iteration) : "";
+	vars.maxIterations =
+		payload.maxIterations != null ? String(payload.maxIterations) : "";
+	vars.question = payload.question || "";
+	// incompleteTasks: undefined/null → "" (so {{#if}} is falsy when unset)
+	// 0 → "0" (distinguishable from unset; templates can display "0 incomplete tasks")
+	vars.incompleteTasks =
+		payload.incompleteTasks != null ? String(payload.incompleteTasks) : "";
+	vars.agentName = payload.agentName || "";
+	vars.agentType = payload.agentType || "";
+	vars.tmuxTail = payload.tmuxTail || "";
+	vars.tmuxPaneId = payload.tmuxPaneId || "";
 
-  // Computed variables
-  vars.duration = formatDuration(payload.durationMs);
-  vars.time = payload.timestamp
-    ? new Date(payload.timestamp).toLocaleTimeString()
-    : "";
-  vars.modesDisplay =
-    payload.modesUsed && payload.modesUsed.length > 0
-      ? payload.modesUsed.join(", ")
-      : "";
-  vars.iterationDisplay =
-    payload.iteration != null && payload.maxIterations != null
-      ? `${payload.iteration}/${payload.maxIterations}`
-      : "";
-  vars.agentDisplay =
-    payload.agentsSpawned != null
-      ? `${payload.agentsCompleted ?? 0}/${payload.agentsSpawned} completed`
-      : "";
-  vars.projectDisplay = getProjectDisplay(payload);
-  vars.footer = buildFooterText(payload);
-  vars.tmuxTailBlock = buildTmuxTailBlock(payload);
-  vars.reasonDisplay = payload.reason || "unknown";
+	// Computed variables
+	vars.duration = formatDuration(payload.durationMs);
+	vars.time = payload.timestamp
+		? new Date(payload.timestamp).toLocaleTimeString()
+		: "";
+	vars.modesDisplay =
+		payload.modesUsed && payload.modesUsed.length > 0
+			? payload.modesUsed.join(", ")
+			: "";
+	vars.iterationDisplay =
+		payload.iteration != null && payload.maxIterations != null
+			? `${payload.iteration}/${payload.maxIterations}`
+			: "";
+	vars.agentDisplay =
+		payload.agentsSpawned != null
+			? `${payload.agentsCompleted ?? 0}/${payload.agentsSpawned} completed`
+			: "";
+	vars.projectDisplay = getProjectDisplay(payload);
+	vars.footer = buildFooterText(payload);
+	vars.tmuxTailBlock = buildTmuxTailBlock(payload);
+	vars.reasonDisplay = payload.reason || "unknown";
 
-  return vars;
+	return vars;
 }
 
 /**
@@ -154,16 +175,16 @@ export function computeTemplateVariables(
  * Only simple truthy checks (non-empty string). No nesting, no else.
  */
 function processConditionals(
-  template: string,
-  vars: Record<string, string>,
+	template: string,
+	vars: Record<string, string>,
 ): string {
-  return template.replace(
-    /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
-    (_match, varName: string, content: string) => {
-      const value = vars[varName] || "";
-      return value ? content : "";
-    },
-  );
+	return template.replace(
+		/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
+		(_match, varName: string, content: string) => {
+			const value = vars[varName] || "";
+			return value ? content : "";
+		},
+	);
 }
 
 /**
@@ -171,13 +192,13 @@ function processConditionals(
  * Unknown/missing variables become empty string.
  */
 function replaceVariables(
-  template: string,
-  vars: Record<string, string>,
+	template: string,
+	vars: Record<string, string>,
 ): string {
-  return template.replace(
-    /\{\{(\w+)\}\}/g,
-    (_match, varName: string) => vars[varName] ?? "",
-  );
+	return template.replace(
+		/\{\{(\w+)\}\}/g,
+		(_match, varName: string) => vars[varName] ?? "",
+	);
 }
 
 /**
@@ -188,7 +209,7 @@ function replaceVariables(
  * (leading \n inside {{#if}} blocks) to produce exact output.
  */
 function postProcess(text: string): string {
-  return text.trimEnd();
+	return text.trimEnd();
 }
 
 /**
@@ -199,40 +220,41 @@ function postProcess(text: string): string {
  * 3. Post-process to normalize blank lines
  */
 export function interpolateTemplate(
-  template: string,
-  payload: FullNotificationPayload,
+	template: string,
+	payload: FullNotificationPayload,
 ): string {
-  const vars = computeTemplateVariables(payload);
-  let result = processConditionals(template, vars);
-  result = replaceVariables(result, vars);
-  result = postProcess(result);
-  return result;
+	const vars = computeTemplateVariables(payload);
+	let result = processConditionals(template, vars);
+	result = replaceVariables(result, vars);
+	result = postProcess(result);
+	return result;
 }
 
 /**
  * Validate a template string for unknown variables.
  * Returns { valid, unknownVars }.
  */
-export function validateTemplate(
-  template: string,
-): { valid: boolean; unknownVars: string[] } {
-  const unknownVars: string[] = [];
+export function validateTemplate(template: string): {
+	valid: boolean;
+	unknownVars: string[];
+} {
+	const unknownVars: string[] = [];
 
-  // Check {{#if var}} conditionals
-  for (const m of template.matchAll(/\{\{#if\s+(\w+)\}\}/g)) {
-    if (!KNOWN_VARIABLES.has(m[1]) && !unknownVars.includes(m[1])) {
-      unknownVars.push(m[1]);
-    }
-  }
+	// Check {{#if var}} conditionals
+	for (const m of template.matchAll(/\{\{#if\s+(\w+)\}\}/g)) {
+		if (!KNOWN_VARIABLES.has(m[1]) && !unknownVars.includes(m[1])) {
+			unknownVars.push(m[1]);
+		}
+	}
 
-  // Check {{variable}} placeholders (skip {{#if}}, {{/if}})
-  for (const m of template.matchAll(/\{\{(?!#if\s|\/if)(\w+)\}\}/g)) {
-    if (!KNOWN_VARIABLES.has(m[1]) && !unknownVars.includes(m[1])) {
-      unknownVars.push(m[1]);
-    }
-  }
+	// Check {{variable}} placeholders (skip {{#if}}, {{/if}})
+	for (const m of template.matchAll(/\{\{(?!#if\s|\/if)(\w+)\}\}/g)) {
+		if (!KNOWN_VARIABLES.has(m[1]) && !unknownVars.includes(m[1])) {
+			unknownVars.push(m[1]);
+		}
+	}
 
-  return { valid: unknownVars.length === 0, unknownVars };
+	return { valid: unknownVars.length === 0, unknownVars };
 }
 
 /**
@@ -245,43 +267,43 @@ export function validateTemplate(
  * Note: "agent-call" event is not supported in OMX (Codex CLI does not emit it).
  */
 const DEFAULT_TEMPLATES: Record<NotificationEvent, string> = {
-  "session-start":
-    "# Session Started\n\n" +
-    "**Session:** `{{sessionId}}`\n" +
-    "**Project:** `{{projectDisplay}}`\n" +
-    "**Time:** {{time}}" +
-    "{{#if tmuxSession}}\n**tmux:** `{{tmuxSession}}`{{/if}}",
+	"session-start":
+		"# Session Started\n\n" +
+		"**Session:** `{{sessionId}}`\n" +
+		"**Project:** `{{projectDisplay}}`\n" +
+		"**Time:** {{time}}" +
+		"{{#if tmuxSession}}\n**tmux:** `{{tmuxSession}}`{{/if}}",
 
-  "session-stop":
-    "# Session Continuing\n" +
-    "{{#if activeMode}}\n**Mode:** {{activeMode}}{{/if}}" +
-    "{{#if iterationDisplay}}\n**Iteration:** {{iterationDisplay}}{{/if}}" +
-    "{{#if incompleteTasks}}\n**Incomplete tasks:** {{incompleteTasks}}{{/if}}" +
-    "\n\n{{footer}}",
+	"session-stop":
+		"# Session Continuing\n" +
+		"{{#if activeMode}}\n**Mode:** {{activeMode}}{{/if}}" +
+		"{{#if iterationDisplay}}\n**Iteration:** {{iterationDisplay}}{{/if}}" +
+		"{{#if incompleteTasks}}\n**Incomplete tasks:** {{incompleteTasks}}{{/if}}" +
+		"\n\n{{footer}}",
 
-  "session-end":
-    "# Session Ended\n\n" +
-    "**Session:** `{{sessionId}}`\n" +
-    "**Duration:** {{duration}}\n" +
-    "**Reason:** {{reasonDisplay}}" +
-    "{{#if agentDisplay}}\n**Agents:** {{agentDisplay}}{{/if}}" +
-    "{{#if modesDisplay}}\n**Modes:** {{modesDisplay}}{{/if}}" +
-    "{{#if contextSummary}}\n\n**Summary:** {{contextSummary}}{{/if}}" +
-    "{{tmuxTailBlock}}" +
-    "\n\n{{footer}}",
+	"session-end":
+		"# Session Ended\n\n" +
+		"**Session:** `{{sessionId}}`\n" +
+		"**Duration:** {{duration}}\n" +
+		"**Reason:** {{reasonDisplay}}" +
+		"{{#if agentDisplay}}\n**Agents:** {{agentDisplay}}{{/if}}" +
+		"{{#if modesDisplay}}\n**Modes:** {{modesDisplay}}{{/if}}" +
+		"{{#if contextSummary}}\n\n**Summary:** {{contextSummary}}{{/if}}" +
+		"{{tmuxTailBlock}}" +
+		"\n\n{{footer}}",
 
-  "session-idle":
-    "# Session Idle\n\n" +
-    "Codex has finished and is waiting for input.\n" +
-    "{{#if reason}}\n**Reason:** {{reason}}{{/if}}" +
-    "{{#if modesDisplay}}\n**Modes:** {{modesDisplay}}{{/if}}" +
-    "{{tmuxTailBlock}}" +
-    "\n\n{{footer}}",
+	"session-idle":
+		"# Session Idle\n\n" +
+		"Codex has finished and is waiting for input.\n" +
+		"{{#if reason}}\n**Reason:** {{reason}}{{/if}}" +
+		"{{#if modesDisplay}}\n**Modes:** {{modesDisplay}}{{/if}}" +
+		"{{tmuxTailBlock}}" +
+		"\n\n{{footer}}",
 
-  "ask-user-question":
-    "# Input Needed\n" +
-    "{{#if question}}\n**Question:** {{question}}\n{{/if}}" +
-    "\nCodex is waiting for your response.\n\n{{footer}}",
+	"ask-user-question":
+		"# Input Needed\n" +
+		"{{#if question}}\n**Question:** {{question}}\n{{/if}}" +
+		"\nCodex is waiting for your response.\n\n{{footer}}",
 };
 
 /**
@@ -289,5 +311,5 @@ const DEFAULT_TEMPLATES: Record<NotificationEvent, string> = {
  * When interpolated, produces output identical to formatter.ts functions.
  */
 export function getDefaultTemplate(event: NotificationEvent): string {
-  return DEFAULT_TEMPLATES[event] || `Event: {{event}}`;
+	return DEFAULT_TEMPLATES[event] || `Event: {{event}}`;
 }

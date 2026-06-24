@@ -5,13 +5,16 @@
  * Codex CLI, and inject text into panes. Used by the reply-listener daemon.
  */
 
-import { execFileSync, spawnSync } from 'child_process';
-import { sleepSync } from '../utils/sleep.js';
-import { resolveCommandPathForPlatform, resolveTmuxBinaryForPlatform } from '../utils/platform-command.js';
-import { buildCapturePaneArgv as sharedBuildCapturePaneArgv } from '../scripts/tmux-hook-engine.js';
+import { execFileSync, spawnSync } from "child_process";
+import { sleepSync } from "../utils/sleep.js";
+import {
+	resolveCommandPathForPlatform,
+	resolveTmuxBinaryForPlatform,
+} from "../utils/platform-command.js";
+import { buildCapturePaneArgv as sharedBuildCapturePaneArgv } from "../scripts/tmux-hook-engine.js";
 
 export function isTmuxAvailable(): boolean {
-  return resolveCommandPathForPlatform('tmux') !== null;
+	return resolveCommandPathForPlatform("tmux") !== null;
 }
 
 /**
@@ -20,55 +23,64 @@ export function isTmuxAvailable(): boolean {
  * command injection through a malicious paneId value (issue #156).
  */
 export function buildCapturePaneArgv(paneId: string, lines: number): string[] {
-  return sharedBuildCapturePaneArgv(paneId, lines);
+	return sharedBuildCapturePaneArgv(paneId, lines);
 }
 
 export function capturePaneContent(paneId: string, lines: number = 15): string {
-  try {
-    return execFileSync(resolveTmuxBinaryForPlatform() || 'tmux', buildCapturePaneArgv(paneId, lines), {
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: process.platform === 'win32',
-    });
-  } catch {
-    return '';
-  }
+	try {
+		return execFileSync(
+			resolveTmuxBinaryForPlatform() || "tmux",
+			buildCapturePaneArgv(paneId, lines),
+			{
+				encoding: "utf-8",
+				timeout: 3000,
+				stdio: ["pipe", "pipe", "pipe"],
+				windowsHide: process.platform === "win32",
+			},
+		);
+	} catch {
+		return "";
+	}
 }
 
 export interface PaneAnalysis {
-  hasCodex: boolean;
-  hasRateLimitMessage: boolean;
-  isBlocked: boolean;
-  confidence: number;
+	hasCodex: boolean;
+	hasRateLimitMessage: boolean;
+	isBlocked: boolean;
+	confidence: number;
 }
 
 export function analyzePaneContent(content: string): PaneAnalysis {
-  const lower = content.toLowerCase();
+	const lower = content.toLowerCase();
 
-  const hasCodex =
-    lower.includes('codex') ||
-    lower.includes('omx') ||
-    lower.includes('oh-my-codex') ||
-    lower.includes('openai');
+	const hasCodex =
+		lower.includes("codex") ||
+		lower.includes("omx") ||
+		lower.includes("oh-my-codex") ||
+		lower.includes("openai");
 
-  const hasRateLimitMessage =
-    lower.includes('rate limit') ||
-    lower.includes('rate-limit') ||
-    lower.includes('429');
+	const hasRateLimitMessage =
+		lower.includes("rate limit") ||
+		lower.includes("rate-limit") ||
+		lower.includes("429");
 
-  const isBlocked =
-    lower.includes('waiting') ||
-    lower.includes('blocked') ||
-    lower.includes('paused');
+	const isBlocked =
+		lower.includes("waiting") ||
+		lower.includes("blocked") ||
+		lower.includes("paused");
 
-  let confidence = 0;
-  if (hasCodex) confidence += 0.5;
-  if (lower.includes('>') || lower.includes('$')) confidence += 0.1;
-  if (lower.includes('agent') || lower.includes('task')) confidence += 0.1;
-  if (content.trim().length > 0) confidence += 0.1;
+	let confidence = 0;
+	if (hasCodex) confidence += 0.5;
+	if (lower.includes(">") || lower.includes("$")) confidence += 0.1;
+	if (lower.includes("agent") || lower.includes("task")) confidence += 0.1;
+	if (content.trim().length > 0) confidence += 0.1;
 
-  return { hasCodex, hasRateLimitMessage, isBlocked, confidence: Math.min(confidence, 1) };
+	return {
+		hasCodex,
+		hasRateLimitMessage,
+		isBlocked,
+		confidence: Math.min(confidence, 1),
+	};
 }
 
 /**
@@ -87,29 +99,29 @@ export function analyzePaneContent(content: string): PaneAnalysis {
  * @returns          array of argv arrays, one per send-keys invocation
  */
 export function buildSendPaneArgvs(
-  paneId: string,
-  text: string,
-  pressEnter: boolean = true,
+	paneId: string,
+	text: string,
+	pressEnter: boolean = true,
 ): string[][] {
-  // Replace newlines with spaces so they cannot act as submit keypresses when the text
-  // is delivered byte-for-byte via -l (literal) mode.
-  const safe = text.replace(/\r?\n/g, ' ');
+	// Replace newlines with spaces so they cannot act as submit keypresses when the text
+	// is delivered byte-for-byte via -l (literal) mode.
+	const safe = text.replace(/\r?\n/g, " ");
 
-  // Use -l (literal) so tmux key names inside the text are never interpreted
-  // as key presses. Use -- to prevent text starting with '-' from being
-  // parsed as tmux flags.
-  const argvs: string[][] = [['send-keys', '-t', paneId, '-l', '--', safe]];
+	// Use -l (literal) so tmux key names inside the text are never interpreted
+	// as key presses. Use -- to prevent text starting with '-' from being
+	// parsed as tmux flags.
+	const argvs: string[][] = [["send-keys", "-t", paneId, "-l", "--", safe]];
 
-  if (pressEnter) {
-    // Codex CLI uses raw input mode; send C-m (carriage return) twice
-    // for reliable prompt submission.
-    // Each C-m is an isolated send-keys call — never bundled with the text
-    // above (issue #107).
-    argvs.push(['send-keys', '-t', paneId, 'C-m']);
-    argvs.push(['send-keys', '-t', paneId, 'C-m']);
-  }
+	if (pressEnter) {
+		// Codex CLI uses raw input mode; send C-m (carriage return) twice
+		// for reliable prompt submission.
+		// Each C-m is an isolated send-keys call — never bundled with the text
+		// above (issue #107).
+		argvs.push(["send-keys", "-t", paneId, "C-m"]);
+		argvs.push(["send-keys", "-t", paneId, "C-m"]);
+	}
 
-  return argvs;
+	return argvs;
 }
 
 const TMUX_TEXT_SETTLE_MS = 120;
@@ -121,53 +133,53 @@ const TMUX_SUBMIT_REPEAT_DELAY_MS = 100;
  * Mirrors the Rust logic inline to avoid shelling out for a trivial mapping.
  */
 export function getSubmitPresses(workerCli: string): number {
-  if (process.env.OMX_RUNTIME_BRIDGE === '0') {
-    return workerCli.toLowerCase() === 'claude' ? 1 : 2;
-  }
-  // Rust-owned mapping: Claude=1, Codex/Other=2
-  return workerCli.toLowerCase() === 'claude' ? 1 : 2;
+	if (process.env.OMX_RUNTIME_BRIDGE === "0") {
+		return workerCli.toLowerCase() === "claude" ? 1 : 2;
+	}
+	// Rust-owned mapping: Claude=1, Codex/Other=2
+	return workerCli.toLowerCase() === "claude" ? 1 : 2;
 }
 
 type SpawnSyncImpl = (
-  command: string,
-  args: ReadonlyArray<string>,
-  options?: {
-    timeout?: number;
-    stdio?: ['pipe', 'pipe', 'pipe'];
-    encoding?: 'utf-8';
-    windowsHide?: boolean;
-  },
+	command: string,
+	args: ReadonlyArray<string>,
+	options?: {
+		timeout?: number;
+		stdio?: ["pipe", "pipe", "pipe"];
+		encoding?: "utf-8";
+		windowsHide?: boolean;
+	},
 ) => { error?: Error; status: number | null };
 
 interface SendToPaneDeps {
-  spawnSyncImpl?: SpawnSyncImpl;
-  sleepImpl?: (ms: number) => void;
+	spawnSyncImpl?: SpawnSyncImpl;
+	sleepImpl?: (ms: number) => void;
 }
 
 export function sendToPane(
-  paneId: string,
-  text: string,
-  pressEnter: boolean = true,
-  deps: SendToPaneDeps = {},
+	paneId: string,
+	text: string,
+	pressEnter: boolean = true,
+	deps: SendToPaneDeps = {},
 ): boolean {
-  const spawnSyncImpl = deps.spawnSyncImpl ?? spawnSync;
-  const sleepImpl = deps.sleepImpl ?? sleepSync;
-  const argvs = buildSendPaneArgvs(paneId, text, pressEnter);
-  const tmuxCommand = resolveTmuxBinaryForPlatform() || 'tmux';
+	const spawnSyncImpl = deps.spawnSyncImpl ?? spawnSync;
+	const sleepImpl = deps.sleepImpl ?? sleepSync;
+	const argvs = buildSendPaneArgvs(paneId, text, pressEnter);
+	const tmuxCommand = resolveTmuxBinaryForPlatform() || "tmux";
 
-  for (const [index, argv] of argvs.entries()) {
-    const result = spawnSyncImpl(tmuxCommand, argv, {
-      timeout: 3000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-      windowsHide: process.platform === 'win32',
-    });
-    if (result.error || result.status !== 0) return false;
+	for (const [index, argv] of argvs.entries()) {
+		const result = spawnSyncImpl(tmuxCommand, argv, {
+			timeout: 3000,
+			stdio: ["pipe", "pipe", "pipe"],
+			encoding: "utf-8",
+			windowsHide: process.platform === "win32",
+		});
+		if (result.error || result.status !== 0) return false;
 
-    const hasNextArgv = index < argvs.length - 1;
-    if (!hasNextArgv) continue;
+		const hasNextArgv = index < argvs.length - 1;
+		if (!hasNextArgv) continue;
 
-    sleepImpl(index === 0 ? TMUX_TEXT_SETTLE_MS : TMUX_SUBMIT_REPEAT_DELAY_MS);
-  }
-  return true;
+		sleepImpl(index === 0 ? TMUX_TEXT_SETTLE_MS : TMUX_SUBMIT_REPEAT_DELAY_MS);
+	}
+	return true;
 }

@@ -6,48 +6,52 @@
  */
 
 export interface VerificationResult {
-  passed: boolean;
-  evidence: VerificationEvidence[];
-  summary: string;
-  confidence: 'high' | 'medium' | 'low';
+	passed: boolean;
+	evidence: VerificationEvidence[];
+	summary: string;
+	confidence: "high" | "medium" | "low";
 }
 
 export interface VerificationEvidence {
-  type: 'test' | 'typecheck' | 'lint' | 'build' | 'manual' | 'runtime';
-  passed: boolean;
-  command?: string;
-  output?: string;
-  details?: string;
+	type: "test" | "typecheck" | "lint" | "build" | "manual" | "runtime";
+	passed: boolean;
+	command?: string;
+	output?: string;
+	details?: string;
 }
 
 /**
  * Heuristic check for structured verification evidence in a task completion summary.
  * Intended for runtime completion gating (best-effort, backward-compatible).
  */
-export function hasStructuredVerificationEvidence(summary: string | null | undefined): boolean {
-  if (typeof summary !== 'string') return false;
-  const text = summary.trim();
-  if (text === '') return false;
+export function hasStructuredVerificationEvidence(
+	summary: string | null | undefined,
+): boolean {
+	if (typeof summary !== "string") return false;
+	const text = summary.trim();
+	if (text === "") return false;
 
-  const hasVerificationSection = /verification(?:\s+evidence)?\s*:/i.test(text)
-    || /##\s*verification/i.test(text);
-  if (!hasVerificationSection) return false;
+	const hasVerificationSection =
+		/verification(?:\s+evidence)?\s*:/i.test(text) ||
+		/##\s*verification/i.test(text);
+	if (!hasVerificationSection) return false;
 
-  const hasEvidenceSignal = /\b(pass|passed|fail|failed)\b/i.test(text)
-    || /`[^`]+`/.test(text)
-    || /\b(command|test|build|typecheck|lint)\b/i.test(text);
+	const hasEvidenceSignal =
+		/\b(pass|passed|fail|failed)\b/i.test(text) ||
+		/`[^`]+`/.test(text) ||
+		/\b(command|test|build|typecheck|lint)\b/i.test(text);
 
-  return hasEvidenceSignal;
+	return hasEvidenceSignal;
 }
 
 /**
  * Generate verification instructions for a given task size
  */
 export function getVerificationInstructions(
-  taskSize: 'small' | 'standard' | 'large',
-  taskDescription: string
+	taskSize: "small" | "standard" | "large",
+	taskDescription: string,
 ): string {
-  const baseInstructions = `
+	const baseInstructions = `
 ## Verification Protocol
 
 Verify the following task is complete: ${taskDescription}
@@ -55,18 +59,23 @@ Verify the following task is complete: ${taskDescription}
 ### Required Evidence:
 `;
 
-  switch (taskSize) {
-    case 'small':
-      return baseInstructions + `
+	switch (taskSize) {
+		case "small":
+			return (
+				baseInstructions +
+				`
 1. Run type checker on modified files (if TypeScript/typed language)
 2. Run tests related to the change
 3. Confirm the change works as described
 
 Report: PASS/FAIL with evidence for each check.
-`;
+`
+			);
 
-    case 'standard':
-      return baseInstructions + `
+		case "standard":
+			return (
+				baseInstructions +
+				`
 1. Run full type check (tsc --noEmit or equivalent)
 2. Run test suite (focus on changed areas)
 3. Run linter on modified files
@@ -74,10 +83,13 @@ Report: PASS/FAIL with evidence for each check.
 5. Check for regressions in related functionality
 
 Report: PASS/FAIL with command output for each check.
-`;
+`
+			);
 
-    case 'large':
-      return baseInstructions + `
+		case "large":
+			return (
+				baseInstructions +
+				`
 1. Run full type check across the project
 2. Run complete test suite
 3. Run linter across modified files
@@ -89,27 +101,28 @@ Report: PASS/FAIL with command output for each check.
 
 Report: PASS/FAIL with detailed evidence for each check.
 Include confidence level (high/medium/low) with justification.
-`;
-  }
+`
+			);
+	}
 }
 
 /**
  * Determine task size from file count and line changes
  */
 export function determineTaskSize(
-  fileCount: number,
-  lineChanges: number
-): 'small' | 'standard' | 'large' {
-  if (fileCount <= 3 && lineChanges < 100) return 'small';
-  if (fileCount <= 15 && lineChanges < 500) return 'standard';
-  return 'large';
+	fileCount: number,
+	lineChanges: number,
+): "small" | "standard" | "large" {
+	if (fileCount <= 3 && lineChanges < 100) return "small";
+	if (fileCount <= 15 && lineChanges < 500) return "standard";
+	return "large";
 }
 
 /**
  * Generate the verification fix-loop instructions
  */
 export function getFixLoopInstructions(maxRetries: number = 3): string {
-  return `
+	return `
 ## Fix-Verify Loop
 
 If verification fails:

@@ -286,10 +286,12 @@ function shouldForceEnableRuntimeHookDispatch(
 
 function shouldDedupeHookEvent(event: HookEventEnvelope): boolean {
 	if (event.source !== "native") return false;
-	return event.event === "session-start"
-		|| event.event === "stop"
-		|| event.event === "session-end"
-		|| event.event === "keyword-detector";
+	return (
+		event.event === "session-start" ||
+		event.event === "stop" ||
+		event.event === "session-end" ||
+		event.event === "keyword-detector"
+	);
 }
 
 function buildHookEventFingerprint(event: HookEventEnvelope): string {
@@ -338,8 +340,8 @@ export async function dispatchHookEvent(
 		? buildHookEventFingerprint(event)
 		: "";
 	if (
-		dedupeFingerprint
-		&& !shouldSendLifecycleHookBroadcast(
+		dedupeFingerprint &&
+		!shouldSendLifecycleHookBroadcast(
 			join(omxRoot(cwd), "state"),
 			event.session_id,
 			event.event,

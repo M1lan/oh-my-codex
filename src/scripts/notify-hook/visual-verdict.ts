@@ -8,15 +8,15 @@
  * than silently swallowed.
  */
 
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { logNotifyHookEvent } from './log.js';
-import { safeString } from './utils.js';
+import { writeFile, mkdir } from "fs/promises";
+import { join } from "path";
+import { logNotifyHookEvent } from "./log.js";
+import { safeString } from "./utils.js";
 
 /** Structured patterns that reliably indicate a verification verdict. */
 const VERDICT_PATTERNS = [
-  /\*\*Status\*\*:\s*(PASS|FAIL|INCOMPLETE)/i,
-  /\bVerdict:\s*(PASS|FAIL|INCOMPLETE)\b/i,
+	/\*\*Status\*\*:\s*(PASS|FAIL|INCOMPLETE)/i,
+	/\bVerdict:\s*(PASS|FAIL|INCOMPLETE)\b/i,
 ];
 
 /**
@@ -26,52 +26,66 @@ const VERDICT_PATTERNS = [
 const VERDICT_CANDIDATE_RE = /(?:\*\*Status\*\*\s*:|Verdict\s*:)/i;
 
 function extractJsonCandidates(rawMessage: any): string[] {
-  const message = safeString(rawMessage).trim();
-  if (!message) return [];
+	const message = safeString(rawMessage).trim();
+	if (!message) return [];
 
-  const candidates = [message];
-  const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
-  for (const match of message.matchAll(fencePattern)) {
-    const block = safeString(match[1]).trim();
-    if (block) candidates.push(block);
-  }
-  return candidates;
+	const candidates = [message];
+	const fencePattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+	for (const match of message.matchAll(fencePattern)) {
+		const block = safeString(match[1]).trim();
+		if (block) candidates.push(block);
+	}
+	return candidates;
 }
 
-async function maybePersistRuntimeVisualFeedback({ cwd, output, sessionId, stateDir }: any): Promise<void> {
-  if (!cwd || !output) return;
+async function maybePersistRuntimeVisualFeedback({
+	cwd,
+	output,
+	sessionId,
+	stateDir,
+}: any): Promise<void> {
+	if (!cwd || !output) return;
 
-  const candidates = extractJsonCandidates(output);
-  if (candidates.length === 0) return;
+	const candidates = extractJsonCandidates(output);
+	if (candidates.length === 0) return;
 
-  const { buildVisualLoopFeedback } = await import('../../visual/verdict.js');
-  const { recordRalphVisualFeedback } = await import('../../ralph/persistence.js');
+	const { buildVisualLoopFeedback } = await import("../../visual/verdict.js");
+	const { recordRalphVisualFeedback } = await import(
+		"../../ralph/persistence.js"
+	);
 
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      const feedback = buildVisualLoopFeedback(parsed);
-      await recordRalphVisualFeedback(cwd, feedback, sessionId || undefined, stateDir || undefined);
-      return;
-    } catch {
-      // Try next candidate
-    }
-  }
+	for (const candidate of candidates) {
+		try {
+			const parsed = JSON.parse(candidate);
+			const feedback = buildVisualLoopFeedback(parsed);
+			await recordRalphVisualFeedback(
+				cwd,
+				feedback,
+				sessionId || undefined,
+				stateDir || undefined,
+			);
+			return;
+		} catch {
+			// Try next candidate
+		}
+	}
 }
 
 /**
  * Attempt to extract a structured verdict from free-form text.
  * Returns `{ verdict, raw }` on success, `null` otherwise.
  */
-export function parseVisualVerdict(text: any): { verdict: string; raw: string } | null {
-  if (!text || typeof text !== 'string') return null;
-  for (const pattern of VERDICT_PATTERNS) {
-    const match = text.match(pattern);
-    if (match) {
-      return { verdict: match[1].toUpperCase(), raw: match[0] };
-    }
-  }
-  return null;
+export function parseVisualVerdict(
+	text: any,
+): { verdict: string; raw: string } | null {
+	if (!text || typeof text !== "string") return null;
+	for (const pattern of VERDICT_PATTERNS) {
+		const match = text.match(pattern);
+		if (match) {
+			return { verdict: match[1].toUpperCase(), raw: match[0] };
+		}
+	}
+	return null;
 }
 
 /**
@@ -84,75 +98,89 @@ export function parseVisualVerdict(text: any): { verdict: string; raw: string } 
  *
  * Module import failure is handled by the caller in notify-hook.ts.
  */
-export async function maybePersistVisualVerdict({ cwd, payload, stateDir, logsDir, sessionId, turnId }: any): Promise<void> {
-  const output = safeString(
-    payload?.['last-assistant-message'] || payload?.last_assistant_message || '',
-  );
-  if (!output) return;
+export async function maybePersistVisualVerdict({
+	cwd,
+	payload,
+	stateDir,
+	logsDir,
+	sessionId,
+	turnId,
+}: any): Promise<void> {
+	const output = safeString(
+		payload?.["last-assistant-message"] ||
+			payload?.last_assistant_message ||
+			"",
+	);
+	if (!output) return;
 
-  // Runtime visual feedback (JSON/fenced JSON) for ralph-progress persistence.
-  // Non-fatal and observable via warn-level structured logging.
-  try {
-    await maybePersistRuntimeVisualFeedback({ cwd, output, sessionId, stateDir });
-  } catch (err: any) {
-    await logNotifyHookEvent(logsDir, {
-      timestamp: new Date().toISOString(),
-      level: 'warn',
-      type: 'visual_runtime_feedback_persist_failure',
-      error: err?.message || String(err),
-      session_id: sessionId,
-      turn_id: turnId,
-    });
-  }
+	// Runtime visual feedback (JSON/fenced JSON) for ralph-progress persistence.
+	// Non-fatal and observable via warn-level structured logging.
+	try {
+		await maybePersistRuntimeVisualFeedback({
+			cwd,
+			output,
+			sessionId,
+			stateDir,
+		});
+	} catch (err: any) {
+		await logNotifyHookEvent(logsDir, {
+			timestamp: new Date().toISOString(),
+			level: "warn",
+			type: "visual_runtime_feedback_persist_failure",
+			error: err?.message || String(err),
+			session_id: sessionId,
+			turn_id: turnId,
+		});
+	}
 
-  const parsed = parseVisualVerdict(output);
+	const parsed = parseVisualVerdict(output);
 
-  if (!parsed) {
-    // Debug level: verdict-like markers present but no structured match
-    if (VERDICT_CANDIDATE_RE.test(output)) {
-      await logNotifyHookEvent(logsDir, {
-        timestamp: new Date().toISOString(),
-        level: 'debug',
-        type: 'visual_verdict_parse_no_match',
-        session_id: sessionId,
-        turn_id: turnId,
-      });
-    }
-    return;
-  }
+	if (!parsed) {
+		// Debug level: verdict-like markers present but no structured match
+		if (VERDICT_CANDIDATE_RE.test(output)) {
+			await logNotifyHookEvent(logsDir, {
+				timestamp: new Date().toISOString(),
+				level: "debug",
+				type: "visual_verdict_parse_no_match",
+				session_id: sessionId,
+				turn_id: turnId,
+			});
+		}
+		return;
+	}
 
-  // Persist the extracted verdict
-  try {
-    const verdictDir = join(stateDir, 'verdicts');
-    await mkdir(verdictDir, { recursive: true });
+	// Persist the extracted verdict
+	try {
+		const verdictDir = join(stateDir, "verdicts");
+		await mkdir(verdictDir, { recursive: true });
 
-    const entry = {
-      timestamp: new Date().toISOString(),
-      verdict: parsed.verdict,
-      raw_match: parsed.raw,
-      session_id: sessionId,
-      turn_id: turnId,
-    };
+		const entry = {
+			timestamp: new Date().toISOString(),
+			verdict: parsed.verdict,
+			raw_match: parsed.raw,
+			session_id: sessionId,
+			turn_id: turnId,
+		};
 
-    await writeFile(
-      join(verdictDir, 'latest-verdict.json'),
-      JSON.stringify(entry, null, 2),
-    );
+		await writeFile(
+			join(verdictDir, "latest-verdict.json"),
+			JSON.stringify(entry, null, 2),
+		);
 
-    await logNotifyHookEvent(logsDir, {
-      ...entry,
-      level: 'info',
-      type: 'visual_verdict_persisted',
-    });
-  } catch (err: any) {
-    // Warn level: persistence write failure with turn/session context
-    await logNotifyHookEvent(logsDir, {
-      timestamp: new Date().toISOString(),
-      level: 'warn',
-      type: 'visual_verdict_write_failure',
-      error: err?.message || String(err),
-      session_id: sessionId,
-      turn_id: turnId,
-    });
-  }
+		await logNotifyHookEvent(logsDir, {
+			...entry,
+			level: "info",
+			type: "visual_verdict_persisted",
+		});
+	} catch (err: any) {
+		// Warn level: persistence write failure with turn/session context
+		await logNotifyHookEvent(logsDir, {
+			timestamp: new Date().toISOString(),
+			level: "warn",
+			type: "visual_verdict_write_failure",
+			error: err?.message || String(err),
+			session_id: sessionId,
+			turn_id: turnId,
+		});
+	}
 }

@@ -35,10 +35,12 @@ export function readConfiguredLoreCommitGuardValue(
 	if (!existsSync(configPath)) return undefined;
 
 	try {
-		const parsed = parseToml(readFileSync(configPath, "utf-8")) as CodexLoreCommitGuardConfig;
+		const parsed = parseToml(
+			readFileSync(configPath, "utf-8"),
+		) as CodexLoreCommitGuardConfig;
 		const value =
-			parsed?.shell_environment_policy?.set?.[OMX_LORE_COMMIT_GUARD_ENV]
-			?? parsed?.env?.[OMX_LORE_COMMIT_GUARD_ENV];
+			parsed?.shell_environment_policy?.set?.[OMX_LORE_COMMIT_GUARD_ENV] ??
+			parsed?.env?.[OMX_LORE_COMMIT_GUARD_ENV];
 		return typeof value === "string" ? value : undefined;
 	} catch {
 		// Invalid config leaves the guard at its default-off behavior.

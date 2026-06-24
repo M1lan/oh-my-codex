@@ -6,20 +6,20 @@
  */
 
 import {
-  type WikiIngestInput,
-  type WikiIngestResult,
-  type WikiPage,
-  type WikiPageFrontmatter,
-  WIKI_SCHEMA_VERSION,
-} from './types.js';
+	type WikiIngestInput,
+	type WikiIngestResult,
+	type WikiPage,
+	type WikiPageFrontmatter,
+	WIKI_SCHEMA_VERSION,
+} from "./types.js";
 import {
-  withWikiLock,
-  readCanonicalPage,
-  writePageUnsafe,
-  updateIndexUnsafe,
-  appendLogUnsafe,
-  titleToSlug,
-} from './storage.js';
+	withWikiLock,
+	readCanonicalPage,
+	writePageUnsafe,
+	updateIndexUnsafe,
+	appendLogUnsafe,
+	titleToSlug,
+} from "./storage.js";
 
 /**
  * Ingest knowledge into the wiki.
@@ -32,61 +32,72 @@ import {
  * @param input - Knowledge to ingest
  * @returns Result with created/updated page lists
  */
-export function ingestKnowledge(root: string, input: WikiIngestInput): WikiIngestResult {
-  const slug = titleToSlug(input.title);
-  const now = new Date().toISOString();
-  const result: WikiIngestResult = { created: [], updated: [], totalAffected: 0 };
+export function ingestKnowledge(
+	root: string,
+	input: WikiIngestInput,
+): WikiIngestResult {
+	const slug = titleToSlug(input.title);
+	const now = new Date().toISOString();
+	const result: WikiIngestResult = {
+		created: [],
+		updated: [],
+		totalAffected: 0,
+	};
 
-  withWikiLock(root, () => {
-    const existing = readCanonicalPage(root, slug);
+	withWikiLock(root, () => {
+		const existing = readCanonicalPage(root, slug);
 
-    if (existing) {
-      // Merge into existing page
-      const merged = mergePage(existing, input, now);
-      writePageUnsafe(root, merged);
-      result.updated.push(slug);
-    } else {
-      // Create new page
-      const page = createPage(slug, input, now);
-      writePageUnsafe(root, page);
-      result.created.push(slug);
-    }
+		if (existing) {
+			// Merge into existing page
+			const merged = mergePage(existing, input, now);
+			writePageUnsafe(root, merged);
+			result.updated.push(slug);
+		} else {
+			// Create new page
+			const page = createPage(slug, input, now);
+			writePageUnsafe(root, page);
+			result.created.push(slug);
+		}
 
-    updateIndexUnsafe(root);
+		updateIndexUnsafe(root);
 
-    appendLogUnsafe(root, {
-      timestamp: now,
-      operation: 'ingest',
-      pagesAffected: [...result.created, ...result.updated],
-      summary: existing
-        ? `Updated "${input.title}" with new content`
-        : `Created new page "${input.title}"`,
-    });
-  });
+		appendLogUnsafe(root, {
+			timestamp: now,
+			operation: "ingest",
+			pagesAffected: [...result.created, ...result.updated],
+			summary: existing
+				? `Updated "${input.title}" with new content`
+				: `Created new page "${input.title}"`,
+		});
+	});
 
-  result.totalAffected = result.created.length + result.updated.length;
-  return result;
+	result.totalAffected = result.created.length + result.updated.length;
+	return result;
 }
 
 /** Create a new wiki page from ingest input. */
-function createPage(slug: string, input: WikiIngestInput, now: string): WikiPage {
-  const frontmatter: WikiPageFrontmatter = {
-    title: input.title,
-    tags: [...new Set(input.tags)],
-    created: now,
-    updated: now,
-    sources: input.sources || [],
-    links: extractWikiLinks(input.content),
-    category: input.category,
-    confidence: input.confidence || 'medium',
-    schemaVersion: WIKI_SCHEMA_VERSION,
-  };
+function createPage(
+	slug: string,
+	input: WikiIngestInput,
+	now: string,
+): WikiPage {
+	const frontmatter: WikiPageFrontmatter = {
+		title: input.title,
+		tags: [...new Set(input.tags)],
+		created: now,
+		updated: now,
+		sources: input.sources || [],
+		links: extractWikiLinks(input.content),
+		category: input.category,
+		confidence: input.confidence || "medium",
+		schemaVersion: WIKI_SCHEMA_VERSION,
+	};
 
-  return {
-    filename: slug,
-    frontmatter,
-    content: `\n# ${input.title}\n\n${input.content}\n`,
-  };
+	return {
+		filename: slug,
+		frontmatter,
+		content: `\n# ${input.title}\n\n${input.content}\n`,
+	};
 }
 
 /**
@@ -96,44 +107,60 @@ function createPage(slug: string, input: WikiIngestInput, now: string): WikiPage
  * - Confidence: keep higher level
  * - Content: append as new timestamped section
  */
-function mergePage(existing: WikiPage, input: WikiIngestInput, now: string): WikiPage {
-  const mergedTags = [...new Set([...existing.frontmatter.tags, ...input.tags])];
-  const mergedSources = [...new Set([...existing.frontmatter.sources, ...(input.sources || [])])];
-  const mergedLinks = [...new Set([
-    ...existing.frontmatter.links,
-    ...extractWikiLinks(input.content),
-  ])];
+function mergePage(
+	existing: WikiPage,
+	input: WikiIngestInput,
+	now: string,
+): WikiPage {
+	const mergedTags = [
+		...new Set([...existing.frontmatter.tags, ...input.tags]),
+	];
+	const mergedSources = [
+		...new Set([...existing.frontmatter.sources, ...(input.sources || [])]),
+	];
+	const mergedLinks = [
+		...new Set([
+			...existing.frontmatter.links,
+			...extractWikiLinks(input.content),
+		]),
+	];
 
-  const confidenceRank = { high: 3, medium: 2, low: 1 };
-  const existingRank = confidenceRank[existing.frontmatter.confidence] || 2;
-  const newRank = confidenceRank[input.confidence || 'medium'] || 2;
-  const mergedConfidence = newRank >= existingRank
-    ? (input.confidence || 'medium')
-    : existing.frontmatter.confidence;
+	const confidenceRank = { high: 3, medium: 2, low: 1 };
+	const existingRank = confidenceRank[existing.frontmatter.confidence] || 2;
+	const newRank = confidenceRank[input.confidence || "medium"] || 2;
+	const mergedConfidence =
+		newRank >= existingRank
+			? input.confidence || "medium"
+			: existing.frontmatter.confidence;
 
-  const appendedContent = existing.content.trimEnd() +
-    `\n\n---\n\n## Update (${now})\n\n${input.content}\n`;
+	const appendedContent =
+		existing.content.trimEnd() +
+		`\n\n---\n\n## Update (${now})\n\n${input.content}\n`;
 
-  return {
-    filename: existing.filename,
-    frontmatter: {
-      ...existing.frontmatter,
-      tags: mergedTags,
-      updated: now,
-      sources: mergedSources,
-      links: mergedLinks,
-      confidence: mergedConfidence,
-    },
-    content: appendedContent,
-  };
+	return {
+		filename: existing.filename,
+		frontmatter: {
+			...existing.frontmatter,
+			tags: mergedTags,
+			updated: now,
+			sources: mergedSources,
+			links: mergedLinks,
+			confidence: mergedConfidence,
+		},
+		content: appendedContent,
+	};
 }
 
 /** Extract [[wiki-link]] references from content. */
 function extractWikiLinks(content: string): string[] {
-  const matches = content.match(/\[\[([^\]]+)\]\]/g);
-  if (!matches) return [];
-  return [...new Set(matches.map(m => {
-    const name = m.slice(2, -2).trim();
-    return titleToSlug(name);
-  }))];
+	const matches = content.match(/\[\[([^\]]+)\]\]/g);
+	if (!matches) return [];
+	return [
+		...new Set(
+			matches.map((m) => {
+				const name = m.slice(2, -2).trim();
+				return titleToSlug(name);
+			}),
+		),
+	];
 }

@@ -317,7 +317,9 @@ export function normalizeTeamTaskCoordinationPlanForStorage(
 		? (required_mechanisms?.length ?? 0) !== plan.required_mechanisms.length
 		: false;
 	const normalizedRequiredMechanisms =
-		!hasInvalidMechanism && required_mechanisms && required_mechanisms.length > 0
+		!hasInvalidMechanism &&
+		required_mechanisms &&
+		required_mechanisms.length > 0
 			? required_mechanisms
 			: [...DEFAULT_COORDINATION_MECHANISMS];
 

@@ -4,8 +4,8 @@ import { mkdir, readFile, rm, stat, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { execFileSync } from "child_process";
 import {
-  getFixLoopInstructions,
-  getVerificationInstructions,
+	getFixLoopInstructions,
+	getVerificationInstructions,
 } from "../verification/verifier.js";
 import { codexHome, listInstalledSkillDirectories } from "../utils/paths.js";
 import { sleep } from "../utils/sleep.js";
@@ -13,8 +13,8 @@ import type { ApprovedRepositoryContextSummary } from "../planning/artifacts.js"
 import type { TeamReminderDirective } from "./reminder-intents.js";
 import type { TaskHintSummary } from "./repo-aware-decomposition.js";
 import {
-  renderTeamWorkerGoalInstruction,
-  type TeamWorkerGoalInstruction,
+	renderTeamWorkerGoalInstruction,
+	type TeamWorkerGoalInstruction,
 } from "./goal-workflow.js";
 import { normalizeTeamTaskCoordinationPlanForRender } from "./coordination-protocol.js";
 
@@ -28,49 +28,49 @@ const LOCK_POLL_INTERVAL_MS = 100;
 const LOCK_STALE_MS = 30_000;
 
 interface WorkerRootAgentsOptions {
-  teamName: string;
-  workerName: string;
-  workerRole: string;
-  rolePromptContent: string;
-  teamStateRoot: string;
-  leaderCwd: string;
-  worktreePath: string;
+	teamName: string;
+	workerName: string;
+	workerRole: string;
+	rolePromptContent: string;
+	teamStateRoot: string;
+	leaderCwd: string;
+	worktreePath: string;
 }
 
 interface WorkerRootAgentsBackup {
-  existed: boolean;
-  tracked: boolean;
-  previousContent?: string;
-  skipWorktreeApplied?: boolean;
+	existed: boolean;
+	tracked: boolean;
+	previousContent?: string;
+	skipWorktreeApplied?: boolean;
 }
 
 function buildWorkerRootAgentsBackupPath(
-  teamStateRoot: string,
-  teamName: string,
-  workerName: string,
-  worktreePath: string,
+	teamStateRoot: string,
+	teamName: string,
+	workerName: string,
+	worktreePath: string,
 ): string {
-  const gitPath = tryReadGitValue(worktreePath, [
-    "rev-parse",
-    "--git-path",
-    "omx/root-agents-backup.json",
-  ]);
-  return gitPath
-    ? gitPath
-    : join(
-        teamStateRoot,
-        "team",
-        teamName,
-        "workers",
-        workerName,
-        "root-agents-backup.json",
-      );
+	const gitPath = tryReadGitValue(worktreePath, [
+		"rev-parse",
+		"--git-path",
+		"omx/root-agents-backup.json",
+	]);
+	return gitPath
+		? gitPath
+		: join(
+				teamStateRoot,
+				"team",
+				teamName,
+				"workers",
+				workerName,
+				"root-agents-backup.json",
+			);
 }
 
 export function generateWorkerRootAgentsContent(
-  options: WorkerRootAgentsOptions,
+	options: WorkerRootAgentsOptions,
 ): string {
-  return `# Team Worker Runtime Instructions
+	return `# Team Worker Runtime Instructions
 
 This file is generated for a live OMX team worker run and is disposable.
 
@@ -133,194 +133,195 @@ ${options.rolePromptContent.trim()}
 }
 
 function tryReadGitValue(cwd: string, args: string[]): string | null {
-  try {
-    const value = execFileSync("git", args, {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    }).trim();
-    return value || null;
-  } catch {
-    return null;
-  }
+	try {
+		const value = execFileSync("git", args, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		}).trim();
+		return value || null;
+	} catch {
+		return null;
+	}
 }
 
 function isTracked(worktreePath: string, fileName: string): boolean {
-  try {
-    execFileSync("git", ["ls-files", "--error-unmatch", fileName], {
-      cwd: worktreePath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    return true;
-  } catch {
-    return false;
-  }
+	try {
+		execFileSync("git", ["ls-files", "--error-unmatch", fileName], {
+			cwd: worktreePath,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function ensureGitInfoExcludePattern(
-  worktreePath: string,
-  pattern: string,
+	worktreePath: string,
+	pattern: string,
 ): Promise<void> {
-  const excludePath = tryReadGitValue(worktreePath, [
-    "rev-parse",
-    "--git-path",
-    "info/exclude",
-  ]);
-  if (!excludePath) return;
-  const existing = existsSync(excludePath)
-    ? await readFile(excludePath, "utf-8")
-    : "";
-  const lines = new Set(existing.split(/\r?\n/).filter(Boolean));
-  if (lines.has(pattern)) return;
-  const next = `${existing}${existing.endsWith("\n") || existing.length === 0 ? "" : "\n"}${pattern}\n`;
-  await mkdir(dirname(excludePath), { recursive: true });
-  await writeFile(excludePath, next, "utf-8");
+	const excludePath = tryReadGitValue(worktreePath, [
+		"rev-parse",
+		"--git-path",
+		"info/exclude",
+	]);
+	if (!excludePath) return;
+	const existing = existsSync(excludePath)
+		? await readFile(excludePath, "utf-8")
+		: "";
+	const lines = new Set(existing.split(/\r?\n/).filter(Boolean));
+	if (lines.has(pattern)) return;
+	const next = `${existing}${existing.endsWith("\n") || existing.length === 0 ? "" : "\n"}${pattern}\n`;
+	await mkdir(dirname(excludePath), { recursive: true });
+	await writeFile(excludePath, next, "utf-8");
 }
 async function buildWorkerRootAgentsContent(
-  options: WorkerRootAgentsOptions,
-  projectAgentsContent: string | undefined,
+	options: WorkerRootAgentsOptions,
+	projectAgentsContent: string | undefined,
 ): Promise<string> {
-  const baseParts: string[] = [];
-  const userAgentsPath = join(codexHome(), "AGENTS.md");
-  const installedSkills = await listInstalledSkillDirectories(options.leaderCwd);
-  const projectSkillNames = new Set(
-    installedSkills
-      .filter((skill) => skill.scope === "project")
-      .map((skill) => skill.name),
-  );
+	const baseParts: string[] = [];
+	const userAgentsPath = join(codexHome(), "AGENTS.md");
+	const installedSkills = await listInstalledSkillDirectories(
+		options.leaderCwd,
+	);
+	const projectSkillNames = new Set(
+		installedSkills
+			.filter((skill) => skill.scope === "project")
+			.map((skill) => skill.name),
+	);
 
-  let userContent = "";
-  try {
-    userContent = await readFile(userAgentsPath, "utf-8");
-  } catch {
-    userContent = "";
-  }
-  userContent = dropShadowedSkillReferenceLines(
-    stripOverlayFromContent(userContent).trim(),
-    projectSkillNames,
-  ).trim();
-  if (userContent) baseParts.push(userContent);
+	let userContent = "";
+	try {
+		userContent = await readFile(userAgentsPath, "utf-8");
+	} catch {
+		userContent = "";
+	}
+	userContent = dropShadowedSkillReferenceLines(
+		stripOverlayFromContent(userContent).trim(),
+		projectSkillNames,
+	).trim();
+	if (userContent) baseParts.push(userContent);
 
-  const projectContent = stripOverlayFromContent(
-    projectAgentsContent ?? "",
-  ).trim();
-  if (projectContent) baseParts.push(projectContent);
+	const projectContent = stripOverlayFromContent(
+		projectAgentsContent ?? "",
+	).trim();
+	if (projectContent) baseParts.push(projectContent);
 
-  const runtimeContent = generateWorkerRootAgentsContent(options).trim();
-  return baseParts.length > 0
-    ? `${baseParts.join("\n\n")}\n\n${runtimeContent}\n`
-    : `${runtimeContent}\n`;
+	const runtimeContent = generateWorkerRootAgentsContent(options).trim();
+	return baseParts.length > 0
+		? `${baseParts.join("\n\n")}\n\n${runtimeContent}\n`
+		: `${runtimeContent}\n`;
 }
 
-
 export async function writeWorkerWorktreeRootAgentsFile(
-  options: WorkerRootAgentsOptions,
+	options: WorkerRootAgentsOptions,
 ): Promise<string> {
-  const agentsPath = join(options.worktreePath, "AGENTS.md");
-  const tracked = isTracked(options.worktreePath, "AGENTS.md");
-  const existed = existsSync(agentsPath);
-  const previousContent = existed
-    ? await readFile(agentsPath, "utf-8")
-    : undefined;
-  let skipWorktreeApplied = false;
+	const agentsPath = join(options.worktreePath, "AGENTS.md");
+	const tracked = isTracked(options.worktreePath, "AGENTS.md");
+	const existed = existsSync(agentsPath);
+	const previousContent = existed
+		? await readFile(agentsPath, "utf-8")
+		: undefined;
+	let skipWorktreeApplied = false;
 
-  if (tracked) {
-    try {
-      execFileSync("git", ["update-index", "--skip-worktree", "AGENTS.md"], {
-        cwd: options.worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-      skipWorktreeApplied = true;
-    } catch {
-      skipWorktreeApplied = false;
-    }
-  } else {
-    await ensureGitInfoExcludePattern(options.worktreePath, "AGENTS.md");
-  }
+	if (tracked) {
+		try {
+			execFileSync("git", ["update-index", "--skip-worktree", "AGENTS.md"], {
+				cwd: options.worktreePath,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+			skipWorktreeApplied = true;
+		} catch {
+			skipWorktreeApplied = false;
+		}
+	} else {
+		await ensureGitInfoExcludePattern(options.worktreePath, "AGENTS.md");
+	}
 
-  const backup: WorkerRootAgentsBackup = {
-    existed,
-    tracked,
-    previousContent,
-    skipWorktreeApplied,
-  };
-  const backupPath = buildWorkerRootAgentsBackupPath(
-    options.teamStateRoot,
-    options.teamName,
-    options.workerName,
-    options.worktreePath,
-  );
-  await mkdir(dirname(backupPath), { recursive: true });
-  await writeFile(backupPath, JSON.stringify(backup, null, 2), "utf-8");
-  await writeFile(
-    agentsPath,
-    await buildWorkerRootAgentsContent(options, previousContent),
-    "utf-8",
-  );
-  return agentsPath;
+	const backup: WorkerRootAgentsBackup = {
+		existed,
+		tracked,
+		previousContent,
+		skipWorktreeApplied,
+	};
+	const backupPath = buildWorkerRootAgentsBackupPath(
+		options.teamStateRoot,
+		options.teamName,
+		options.workerName,
+		options.worktreePath,
+	);
+	await mkdir(dirname(backupPath), { recursive: true });
+	await writeFile(backupPath, JSON.stringify(backup, null, 2), "utf-8");
+	await writeFile(
+		agentsPath,
+		await buildWorkerRootAgentsContent(options, previousContent),
+		"utf-8",
+	);
+	return agentsPath;
 }
 
 export async function removeWorkerWorktreeRootAgentsFile(
-  teamName: string,
-  workerName: string,
-  teamStateRoot: string,
-  worktreePath: string,
+	teamName: string,
+	workerName: string,
+	teamStateRoot: string,
+	worktreePath: string,
 ): Promise<void> {
-  const agentsPath = join(worktreePath, "AGENTS.md");
-  const backupPath = buildWorkerRootAgentsBackupPath(
-    teamStateRoot,
-    teamName,
-    workerName,
-    worktreePath,
-  );
-  let backup: WorkerRootAgentsBackup | null = null;
+	const agentsPath = join(worktreePath, "AGENTS.md");
+	const backupPath = buildWorkerRootAgentsBackupPath(
+		teamStateRoot,
+		teamName,
+		workerName,
+		worktreePath,
+	);
+	let backup: WorkerRootAgentsBackup | null = null;
 
-  try {
-    backup = JSON.parse(
-      await readFile(backupPath, "utf-8"),
-    ) as WorkerRootAgentsBackup;
-  } catch {
-    backup = null;
-  }
+	try {
+		backup = JSON.parse(
+			await readFile(backupPath, "utf-8"),
+		) as WorkerRootAgentsBackup;
+	} catch {
+		backup = null;
+	}
 
-  if (!backup) {
-    return;
-  }
+	if (!backup) {
+		return;
+	}
 
-  if (backup.tracked && backup.skipWorktreeApplied) {
-    try {
-      execFileSync("git", ["update-index", "--no-skip-worktree", "AGENTS.md"], {
-        cwd: worktreePath,
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }
+	if (backup.tracked && backup.skipWorktreeApplied) {
+		try {
+			execFileSync("git", ["update-index", "--no-skip-worktree", "AGENTS.md"], {
+				cwd: worktreePath,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+				windowsHide: true,
+			});
+		} catch {
+			// Best-effort cleanup only.
+		}
+	}
 
-  if (backup.existed) {
-    await writeFile(agentsPath, backup.previousContent ?? "", "utf-8");
-  } else {
-    await rm(agentsPath, { force: true }).catch(() => {});
-  }
+	if (backup.existed) {
+		await writeFile(agentsPath, backup.previousContent ?? "", "utf-8");
+	} else {
+		await rm(agentsPath, { force: true }).catch(() => {});
+	}
 
-  await rm(backupPath, { force: true }).catch(() => {});
+	await rm(backupPath, { force: true }).catch(() => {});
 }
 
 function buildVerificationSection(taskDescription: string): string {
-  const verification = getVerificationInstructions(
-    "standard",
-    taskDescription,
-  ).trim();
-  const fixLoop = getFixLoopInstructions().trim();
-  return `
+	const verification = getVerificationInstructions(
+		"standard",
+		taskDescription,
+	).trim();
+	const fixLoop = getFixLoopInstructions().trim();
+	return `
 ## Verification Requirements
 
 ${verification}
@@ -339,7 +340,7 @@ When marking completion, include structured verification evidence in your task r
  * Per-worker context goes in the inbox file.
  */
 export function generateWorkerOverlay(teamName: string): string {
-  return `${TEAM_OVERLAY_START}
+	return `${TEAM_OVERLAY_START}
 <team_worker_protocol>
 You are a team worker in team "${teamName}". Your identity and assigned tasks are in your inbox file.
 
@@ -410,74 +411,74 @@ ${TEAM_OVERLAY_END}`;
  * Apply worker overlay to AGENTS.md. Idempotent -- strips existing overlay first.
  */
 export async function applyWorkerOverlay(
-  agentsMdPath: string,
-  overlay: string,
+	agentsMdPath: string,
+	overlay: string,
 ): Promise<void> {
-  await withAgentsMdLock(agentsMdPath, async () => {
-    // Read existing content, strip any existing overlay, append new overlay
-    // Uses the START/END markers to find and replace
-    let content = "";
-    try {
-      content = await readFile(agentsMdPath, "utf-8");
-    } catch {
-      // File doesn't exist yet, start empty
-    }
+	await withAgentsMdLock(agentsMdPath, async () => {
+		// Read existing content, strip any existing overlay, append new overlay
+		// Uses the START/END markers to find and replace
+		let content = "";
+		try {
+			content = await readFile(agentsMdPath, "utf-8");
+		} catch {
+			// File doesn't exist yet, start empty
+		}
 
-    // Strip existing overlay if present
-    content = stripOverlayFromContent(content);
+		// Strip existing overlay if present
+		content = stripOverlayFromContent(content);
 
-    // Append new overlay
-    content = content.trimEnd() + "\n\n" + overlay + "\n";
+		// Append new overlay
+		content = content.trimEnd() + "\n\n" + overlay + "\n";
 
-    await writeFile(agentsMdPath, content);
-  });
+		await writeFile(agentsMdPath, content);
+	});
 }
 
 /**
  * Strip worker overlay from AGENTS.md content. Idempotent.
  */
 export async function stripWorkerOverlay(agentsMdPath: string): Promise<void> {
-  await withAgentsMdLock(agentsMdPath, async () => {
-    try {
-      const content = await readFile(agentsMdPath, "utf-8");
-      const stripped = stripOverlayFromContent(content);
-      if (stripped !== content) {
-        await writeFile(agentsMdPath, stripped);
-      }
-    } catch {
-      // File doesn't exist, nothing to strip
-    }
-  });
+	await withAgentsMdLock(agentsMdPath, async () => {
+		try {
+			const content = await readFile(agentsMdPath, "utf-8");
+			const stripped = stripOverlayFromContent(content);
+			if (stripped !== content) {
+				await writeFile(agentsMdPath, stripped);
+			}
+		} catch {
+			// File doesn't exist, nothing to strip
+		}
+	});
 }
 
 function stripOverlayFromContent(content: string): string {
-  const startIdx = content.indexOf(TEAM_OVERLAY_START);
-  const endIdx = content.indexOf(TEAM_OVERLAY_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return content;
-  const before = content.slice(0, startIdx).trimEnd();
-  const after = content.slice(endIdx + TEAM_OVERLAY_END.length).trimStart();
-  return before + (after ? "\n\n" + after : "") + "\n";
+	const startIdx = content.indexOf(TEAM_OVERLAY_START);
+	const endIdx = content.indexOf(TEAM_OVERLAY_END);
+	if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return content;
+	const before = content.slice(0, startIdx).trimEnd();
+	const after = content.slice(endIdx + TEAM_OVERLAY_END.length).trimStart();
+	return before + (after ? "\n\n" + after : "") + "\n";
 }
 
 function dropShadowedSkillReferenceLines(
-  content: string,
-  shadowedSkillNames: ReadonlySet<string>,
+	content: string,
+	shadowedSkillNames: ReadonlySet<string>,
 ): string {
-  if (shadowedSkillNames.size === 0) return content;
+	if (shadowedSkillNames.size === 0) return content;
 
-  const lines = content.split("\n");
-  const keptLines = lines.filter((line) => {
-    SKILL_REFERENCE_PATTERN.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = SKILL_REFERENCE_PATTERN.exec(line)) !== null) {
-      if (shadowedSkillNames.has(match[1] || "")) {
-        return false;
-      }
-    }
-    return true;
-  });
+	const lines = content.split("\n");
+	const keptLines = lines.filter((line) => {
+		SKILL_REFERENCE_PATTERN.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		while ((match = SKILL_REFERENCE_PATTERN.exec(line)) !== null) {
+			if (shadowedSkillNames.has(match[1] || "")) {
+				return false;
+			}
+		}
+		return true;
+	});
 
-  return keptLines.join("\n");
+	return keptLines.join("\n");
 }
 
 /**
@@ -488,58 +489,58 @@ function dropShadowedSkillReferenceLines(
  * Returns the absolute path to the composed file.
  */
 export async function writeTeamWorkerInstructionsFile(
-  teamName: string,
-  cwd: string,
-  overlay: string,
+	teamName: string,
+	cwd: string,
+	overlay: string,
 ): Promise<string> {
-  const baseParts: string[] = [];
-  const userAgentsPath = join(codexHome(), "AGENTS.md");
-  const sourcePaths = [userAgentsPath, join(cwd, "AGENTS.md")];
-  const seenPaths = new Set<string>();
-  const installedSkills = await listInstalledSkillDirectories(cwd);
-  const projectSkillNames = new Set(
-    installedSkills
-      .filter((skill) => skill.scope === "project")
-      .map((skill) => skill.name),
-  );
+	const baseParts: string[] = [];
+	const userAgentsPath = join(codexHome(), "AGENTS.md");
+	const sourcePaths = [userAgentsPath, join(cwd, "AGENTS.md")];
+	const seenPaths = new Set<string>();
+	const installedSkills = await listInstalledSkillDirectories(cwd);
+	const projectSkillNames = new Set(
+		installedSkills
+			.filter((skill) => skill.scope === "project")
+			.map((skill) => skill.name),
+	);
 
-  for (const sourcePath of sourcePaths) {
-    if (seenPaths.has(sourcePath)) continue;
-    seenPaths.add(sourcePath);
+	for (const sourcePath of sourcePaths) {
+		if (seenPaths.has(sourcePath)) continue;
+		seenPaths.add(sourcePath);
 
-    let content = "";
-    try {
-      content = await readFile(sourcePath, "utf-8");
-    } catch {
-      continue;
-    }
+		let content = "";
+		try {
+			content = await readFile(sourcePath, "utf-8");
+		} catch {
+			continue;
+		}
 
-    content = stripOverlayFromContent(content).trim();
-    if (sourcePath === userAgentsPath) {
-      content = dropShadowedSkillReferenceLines(
-        content,
-        projectSkillNames,
-      ).trim();
-    }
-    if (!content) continue;
-    baseParts.push(content);
-  }
+		content = stripOverlayFromContent(content).trim();
+		if (sourcePath === userAgentsPath) {
+			content = dropShadowedSkillReferenceLines(
+				content,
+				projectSkillNames,
+			).trim();
+		}
+		if (!content) continue;
+		baseParts.push(content);
+	}
 
-  const base = baseParts.join("\n\n");
-  const composed =
-    base.trim().length > 0 ? `${base}\n\n${overlay}\n` : `${overlay}\n`;
+	const base = baseParts.join("\n\n");
+	const composed =
+		base.trim().length > 0 ? `${base}\n\n${overlay}\n` : `${overlay}\n`;
 
-  const outPath = join(
-    cwd,
-    ".omx",
-    "state",
-    "team",
-    teamName,
-    "worker-agents.md",
-  );
-  await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, composed);
-  return outPath;
+	const outPath = join(
+		cwd,
+		".omx",
+		"state",
+		"team",
+		teamName,
+		"worker-agents.md",
+	);
+	await mkdir(dirname(outPath), { recursive: true });
+	await writeFile(outPath, composed);
+	return outPath;
 }
 
 /**
@@ -547,15 +548,15 @@ export async function writeTeamWorkerInstructionsFile(
  * instructions with the resolved role prompt content.
  */
 export async function writeWorkerRoleInstructionsFile(
-  teamName: string,
-  workerName: string,
-  cwd: string,
-  baseInstructionsPath: string,
-  workerRole: string,
-  rolePromptContent: string,
+	teamName: string,
+	workerName: string,
+	cwd: string,
+	baseInstructionsPath: string,
+	workerRole: string,
+	rolePromptContent: string,
 ): Promise<string> {
-  const base = await readFile(baseInstructionsPath, "utf-8").catch(() => "");
-  const roleOverlay = `
+	const base = await readFile(baseInstructionsPath, "utf-8").catch(() => "");
+	const roleOverlay = `
 <!-- OMX:TEAM:ROLE:START -->
 <team_worker_role>
 You are operating as the **${workerRole}** role for this team run. Apply the following role-local guidance in addition to the team worker protocol.
@@ -564,129 +565,127 @@ ${rolePromptContent.trim()}
 </team_worker_role>
 <!-- OMX:TEAM:ROLE:END -->
 `;
-  const composed =
-    base.trim().length > 0
-      ? `${base.trimEnd()}
+	const composed =
+		base.trim().length > 0
+			? `${base.trimEnd()}
 
 ${roleOverlay}`
-      : roleOverlay.trimStart();
-  const outPath = join(
-    cwd,
-    ".omx",
-    "state",
-    "team",
-    teamName,
-    "workers",
-    workerName,
-    "AGENTS.md",
-  );
-  await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, composed);
-  return outPath;
+			: roleOverlay.trimStart();
+	const outPath = join(
+		cwd,
+		".omx",
+		"state",
+		"team",
+		teamName,
+		"workers",
+		workerName,
+		"AGENTS.md",
+	);
+	await mkdir(dirname(outPath), { recursive: true });
+	await writeFile(outPath, composed);
+	return outPath;
 }
 
 /**
  * Remove the team-scoped model instructions file.
  */
 export async function removeTeamWorkerInstructionsFile(
-  teamName: string,
-  cwd: string,
+	teamName: string,
+	cwd: string,
 ): Promise<void> {
-  const outPath = join(
-    cwd,
-    ".omx",
-    "state",
-    "team",
-    teamName,
-    "worker-agents.md",
-  );
-  await rm(outPath, { force: true }).catch(() => {});
+	const outPath = join(
+		cwd,
+		".omx",
+		"state",
+		"team",
+		teamName,
+		"worker-agents.md",
+	);
+	await rm(outPath, { force: true }).catch(() => {});
 }
 
 function lockPathFor(agentsMdPath: string): string {
-  return join(dirname(agentsMdPath), ...AGENTS_LOCK_PATH);
+	return join(dirname(agentsMdPath), ...AGENTS_LOCK_PATH);
 }
 
 async function acquireAgentsMdLock(
-  agentsMdPath: string,
-  timeoutMs: number = LOCK_TIMEOUT_MS,
+	agentsMdPath: string,
+	timeoutMs: number = LOCK_TIMEOUT_MS,
 ): Promise<void> {
-  const lockPath = lockPathFor(agentsMdPath);
-  await mkdir(dirname(lockPath), { recursive: true });
+	const lockPath = lockPathFor(agentsMdPath);
+	await mkdir(dirname(lockPath), { recursive: true });
 
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await mkdir(lockPath, { recursive: false });
-      const ownerFile = join(lockPath, LOCK_OWNER_FILE);
-      await writeFile(
-        ownerFile,
-        JSON.stringify({ pid: process.pid, ts: Date.now() }),
-        "utf-8",
-      );
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code && code !== "EEXIST") throw error;
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		try {
+			await mkdir(lockPath, { recursive: false });
+			const ownerFile = join(lockPath, LOCK_OWNER_FILE);
+			await writeFile(
+				ownerFile,
+				JSON.stringify({ pid: process.pid, ts: Date.now() }),
+				"utf-8",
+			);
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code && code !== "EEXIST") throw error;
 
-      const stale = await isStaleLock(lockPath);
-      if (stale) {
-        await rm(lockPath, { recursive: true, force: true }).catch(() => {});
-        continue;
-      }
-      await sleep(LOCK_POLL_INTERVAL_MS);
-    }
-  }
+			const stale = await isStaleLock(lockPath);
+			if (stale) {
+				await rm(lockPath, { recursive: true, force: true }).catch(() => {});
+				continue;
+			}
+			await sleep(LOCK_POLL_INTERVAL_MS);
+		}
+	}
 
-  throw new Error("Failed to acquire AGENTS.md lock within timeout");
+	throw new Error("Failed to acquire AGENTS.md lock within timeout");
 }
 
 async function isStaleLock(lockPath: string): Promise<boolean> {
-  const ownerFile = join(lockPath, LOCK_OWNER_FILE);
-  try {
-    const owner = JSON.parse(await readFile(ownerFile, "utf-8")) as {
-      pid?: number;
-      ts?: number;
-    };
-    if (typeof owner.pid !== "number") return true;
-    try {
-      process.kill(owner.pid, 0);
-    } catch {
-      return true;
-    }
-    return false;
-  } catch {
-    try {
-      const lockStat = await stat(lockPath);
-      return Date.now() - lockStat.mtimeMs > LOCK_STALE_MS;
-    } catch {
-      return true;
-    }
-  }
+	const ownerFile = join(lockPath, LOCK_OWNER_FILE);
+	try {
+		const owner = JSON.parse(await readFile(ownerFile, "utf-8")) as {
+			pid?: number;
+			ts?: number;
+		};
+		if (typeof owner.pid !== "number") return true;
+		try {
+			process.kill(owner.pid, 0);
+		} catch {
+			return true;
+		}
+		return false;
+	} catch {
+		try {
+			const lockStat = await stat(lockPath);
+			return Date.now() - lockStat.mtimeMs > LOCK_STALE_MS;
+		} catch {
+			return true;
+		}
+	}
 }
 
 async function releaseAgentsMdLock(agentsMdPath: string): Promise<void> {
-  await rm(lockPathFor(agentsMdPath), { recursive: true, force: true }).catch(
-    () => {},
-  );
+	await rm(lockPathFor(agentsMdPath), { recursive: true, force: true }).catch(
+		() => {},
+	);
 }
 
 async function withAgentsMdLock<T>(
-  agentsMdPath: string,
-  fn: () => Promise<T>,
+	agentsMdPath: string,
+	fn: () => Promise<T>,
 ): Promise<T> {
-  await acquireAgentsMdLock(agentsMdPath);
-  try {
-    return await fn();
-  } finally {
-    await releaseAgentsMdLock(agentsMdPath);
-  }
+	await acquireAgentsMdLock(agentsMdPath);
+	try {
+		return await fn();
+	} finally {
+		await releaseAgentsMdLock(agentsMdPath);
+	}
 }
 
-
-
 function renderTeamCoordinationGate(): string {
-  return `
+	return `
 ## Team Coordination Gate
 
 Use the lightweight path for independent fan-out: work your assigned scope, keep normal ACK/status updates, and avoid extra ceremony. Activate the coordinated Team Big Five / ATEM-inspired protocol only when task state or wording shows dependencies, shared files/surfaces, handoffs, integration, cross-boundary work, blocked lanes, or changing assumptions.
@@ -694,26 +693,36 @@ Use the lightweight path for independent fan-out: work your assigned scope, keep
 }
 
 function renderCoordinationProtocol(task: TeamTask): string {
-  const plan = normalizeTeamTaskCoordinationPlanForRender(task.coordination);
-  if (!plan || plan.mode !== "coordinated") return "";
+	const plan = normalizeTeamTaskCoordinationPlanForRender(task.coordination);
+	if (!plan || plan.mode !== "coordinated") return "";
 
-  const reasons = plan.activation_reasons.length > 0
-    ? plan.activation_reasons.map((reason) => `- ${reason}`).join("\n")
-    : "- cross_boundary_or_handoff_language";
-  const mechanismText: Record<TeamTaskCoordinationMechanism, string> = {
-    shared_mental_model: "- Shared mental model / single source of truth: treat task JSON, inbox, mailbox, approved handoff, and leader updates as canonical; restate changed assumptions before acting.",
-    closed_loop_communication: "- Closed-loop communication / ACK-readback handoffs: acknowledge handoffs with what you understood, the artifact/path affected, owner, and next action.",
-    mutual_performance_monitoring: "- Mutual performance monitoring at boundaries: check upstream/downstream contracts, shared files, and verification evidence before completion.",
-    backup_behavior: "- Backup behavior: if blocked, write blocked status with the smallest needed help/reassignment request and continue any safe unblocked slice.",
-    adaptability_checkpoint: "- Adaptability checkpoint: when assumptions, dependencies, or verification results change, pause for a brief leader-facing update before widening scope.",
-    team_orientation: "- Team orientation: optimize for the team outcome, not just your local task; call out integration risks, missing tests, and peer impacts.",
-  };
-  const mechanisms = (plan.required_mechanisms && plan.required_mechanisms.length > 0
-    ? plan.required_mechanisms
-    : Object.keys(mechanismText) as TeamTaskCoordinationMechanism[]
-  ).map((mechanism) => mechanismText[mechanism]).join("\n");
+	const reasons =
+		plan.activation_reasons.length > 0
+			? plan.activation_reasons.map((reason) => `- ${reason}`).join("\n")
+			: "- cross_boundary_or_handoff_language";
+	const mechanismText: Record<TeamTaskCoordinationMechanism, string> = {
+		shared_mental_model:
+			"- Shared mental model / single source of truth: treat task JSON, inbox, mailbox, approved handoff, and leader updates as canonical; restate changed assumptions before acting.",
+		closed_loop_communication:
+			"- Closed-loop communication / ACK-readback handoffs: acknowledge handoffs with what you understood, the artifact/path affected, owner, and next action.",
+		mutual_performance_monitoring:
+			"- Mutual performance monitoring at boundaries: check upstream/downstream contracts, shared files, and verification evidence before completion.",
+		backup_behavior:
+			"- Backup behavior: if blocked, write blocked status with the smallest needed help/reassignment request and continue any safe unblocked slice.",
+		adaptability_checkpoint:
+			"- Adaptability checkpoint: when assumptions, dependencies, or verification results change, pause for a brief leader-facing update before widening scope.",
+		team_orientation:
+			"- Team orientation: optimize for the team outcome, not just your local task; call out integration risks, missing tests, and peer impacts.",
+	};
+	const mechanisms = (
+		plan.required_mechanisms && plan.required_mechanisms.length > 0
+			? plan.required_mechanisms
+			: (Object.keys(mechanismText) as TeamTaskCoordinationMechanism[])
+	)
+		.map((mechanism) => mechanismText[mechanism])
+		.join("\n");
 
-  return `
+	return `
 ### Team Coordination Protocol — Task ${task.id}
 
 Activation reasons:
@@ -727,33 +736,35 @@ Completion evidence must mention either \`Coordination protocol: coordinated - <
 }
 
 function renderCoordinationProtocols(tasks: TeamTask[]): string {
-  const sections = tasks.map(renderCoordinationProtocol).filter((section) => section.trim().length > 0);
-  if (sections.length === 0) return "";
-  return `
+	const sections = tasks
+		.map(renderCoordinationProtocol)
+		.filter((section) => section.trim().length > 0);
+	if (sections.length === 0) return "";
+	return `
 ## Team Big Five / ATEM Coordination Protocol
 
 ${sections.join("\n")}`;
 }
 
 function renderDelegationContract(task: TeamTask): string {
-  const plan = task.delegation;
-  if (!plan || plan.mode === "none") return "";
+	const plan = task.delegation;
+	if (!plan || plan.mode === "none") return "";
 
-  const threshold = plan.spawn_before_serial_search_threshold ?? 3;
-  const maxParallel = plan.max_parallel_subtasks ?? 2;
-  const childModel = plan.child_model ?? "gpt-5.4-mini";
-  const candidates = (plan.subtask_candidates ?? [])
-    .map((candidate) => `- ${candidate}`)
-    .join("\n");
-  const requiredProbe = plan.required_parallel_probe
-    ? "- A parallel probe is required unless there is a documented skip reason.\n"
-    : "";
-  const skipLine = plan.skip_allowed_reason_required
-    ? "- If skipped, include `Subagent skip reason:` in your result and explain why serial work was safer or sufficient.\n"
-    : "";
-  const reportFormat = plan.child_report_format ?? "bullets";
+	const threshold = plan.spawn_before_serial_search_threshold ?? 3;
+	const maxParallel = plan.max_parallel_subtasks ?? 2;
+	const childModel = plan.child_model ?? "gpt-5.4-mini";
+	const candidates = (plan.subtask_candidates ?? [])
+		.map((candidate) => `- ${candidate}`)
+		.join("\n");
+	const requiredProbe = plan.required_parallel_probe
+		? "- A parallel probe is required unless there is a documented skip reason.\n"
+		: "";
+	const skipLine = plan.skip_allowed_reason_required
+		? "- If skipped, include `Subagent skip reason:` in your result and explain why serial work was safer or sufficient.\n"
+		: "";
+	const reportFormat = plan.child_report_format ?? "bullets";
 
-  return `
+	return `
 ### Native Subagent Delegation Contract — Task ${task.id}
 
 - Delegation mode: ${plan.mode}
@@ -776,9 +787,11 @@ Delegation compliance evidence (required for completion):
 }
 
 function renderDelegationContracts(tasks: TeamTask[]): string {
-  const sections = tasks.map(renderDelegationContract).filter((section) => section.trim().length > 0);
-  if (sections.length === 0) return "";
-  return `
+	const sections = tasks
+		.map(renderDelegationContract)
+		.filter((section) => section.trim().length > 0);
+	if (sections.length === 0) return "";
+	return `
 ## Native Subagent Delegation Contract
 
 ${sections.join("\n")}`;
@@ -789,86 +802,89 @@ ${sections.join("\n")}`;
  * This is written to .omx/state/team/{team}/workers/{worker}/inbox.md by the lead.
  */
 export function generateInitialInbox(
-  workerName: string,
-  teamName: string,
-  agentType: string,
-  tasks: TeamTask[],
-  options: {
-    teamStateRoot?: string;
-    leaderCwd?: string;
-    workerRole?: string;
-    rolePromptContent?: string;
-    worktreeRootAgentsCanonical?: boolean;
-    taskHints?: Record<string, TaskHintSummary>;
-    approvedContextSummary?: ApprovedRepositoryContextSummary;
-    approvedContextSection?: string;
-    workerGoalInstruction?: TeamWorkerGoalInstruction;
-  } = {},
+	workerName: string,
+	teamName: string,
+	agentType: string,
+	tasks: TeamTask[],
+	options: {
+		teamStateRoot?: string;
+		leaderCwd?: string;
+		workerRole?: string;
+		rolePromptContent?: string;
+		worktreeRootAgentsCanonical?: boolean;
+		taskHints?: Record<string, TaskHintSummary>;
+		approvedContextSummary?: ApprovedRepositoryContextSummary;
+		approvedContextSection?: string;
+		workerGoalInstruction?: TeamWorkerGoalInstruction;
+	} = {},
 ): string {
-  const taskList = tasks
-    .map((t) => {
-      let entry = `- **Task ${t.id}**: ${t.subject}\n  Description: ${t.description}\n  Status: ${t.status}`;
-      if (t.blocked_by && t.blocked_by.length > 0) {
-        entry += `\n  Blocked by: ${t.blocked_by.join(", ")}`;
-      }
-      if (t.depends_on && t.depends_on.length > 0 && !t.blocked_by?.length) {
-        entry += `\n  Depends on: ${t.depends_on.join(", ")}`;
-      }
-      if (t.role) {
-        entry += `\n  Role: ${t.role}`;
-      }
-      const hint = options.taskHints?.[t.id];
-      const filePaths = hint?.filePaths ?? t.filePaths;
-      const domains = hint?.domains ?? t.domains;
-      const lane = hint?.lane ?? t.lane;
-      const allocationReason = hint?.allocation_reason ?? t.allocation_reason;
-      if (filePaths?.length) {
-        entry += `\n  File paths: ${filePaths.join(", ")}`;
-      }
-      if (domains?.length) {
-        entry += `\n  Domains: ${domains.join(", ")}`;
-      }
-      if (lane) {
-        entry += `\n  Lane: ${lane}`;
-      }
-      if (allocationReason) {
-        entry += `\n  Allocation reason: ${allocationReason}`;
-      }
-      return entry;
-    })
-    .join("\n");
+	const taskList = tasks
+		.map((t) => {
+			let entry = `- **Task ${t.id}**: ${t.subject}\n  Description: ${t.description}\n  Status: ${t.status}`;
+			if (t.blocked_by && t.blocked_by.length > 0) {
+				entry += `\n  Blocked by: ${t.blocked_by.join(", ")}`;
+			}
+			if (t.depends_on && t.depends_on.length > 0 && !t.blocked_by?.length) {
+				entry += `\n  Depends on: ${t.depends_on.join(", ")}`;
+			}
+			if (t.role) {
+				entry += `\n  Role: ${t.role}`;
+			}
+			const hint = options.taskHints?.[t.id];
+			const filePaths = hint?.filePaths ?? t.filePaths;
+			const domains = hint?.domains ?? t.domains;
+			const lane = hint?.lane ?? t.lane;
+			const allocationReason = hint?.allocation_reason ?? t.allocation_reason;
+			if (filePaths?.length) {
+				entry += `\n  File paths: ${filePaths.join(", ")}`;
+			}
+			if (domains?.length) {
+				entry += `\n  Domains: ${domains.join(", ")}`;
+			}
+			if (lane) {
+				entry += `\n  Lane: ${lane}`;
+			}
+			if (allocationReason) {
+				entry += `\n  Allocation reason: ${allocationReason}`;
+			}
+			return entry;
+		})
+		.join("\n");
 
-  const teamStateRoot = options.teamStateRoot || "<team_state_root>";
-  const leaderCwd = options.leaderCwd || "<leader_cwd>";
-  const displayRole = options.workerRole ?? agentType;
-  const delegationSection = renderDelegationContracts(tasks);
-  const coordinationGateSection = renderTeamCoordinationGate();
-  const coordinationSection = renderCoordinationProtocols(tasks);
-  const workerGoalSection = renderTeamWorkerGoalInstruction(options.workerGoalInstruction);
+	const teamStateRoot = options.teamStateRoot || "<team_state_root>";
+	const leaderCwd = options.leaderCwd || "<leader_cwd>";
+	const displayRole = options.workerRole ?? agentType;
+	const delegationSection = renderDelegationContracts(tasks);
+	const coordinationGateSection = renderTeamCoordinationGate();
+	const coordinationSection = renderCoordinationProtocols(tasks);
+	const workerGoalSection = renderTeamWorkerGoalInstruction(
+		options.workerGoalInstruction,
+	);
 
-  const approvedContextSection = options.approvedContextSection
-    ? `
+	const approvedContextSection = options.approvedContextSection
+		? `
 ## Approved Handoff Context
 
 ${options.approvedContextSection}
 `
-    : options.approvedContextSummary
-      ? `
+		: options.approvedContextSummary
+			? `
 ## Approved Repository Context Summary
 
-Source: ${options.approvedContextSummary.sourcePath}${options.approvedContextSummary.truncated ? ' (bounded/truncated)' : ''}
+Source: ${options.approvedContextSummary.sourcePath}${options.approvedContextSummary.truncated ? " (bounded/truncated)" : ""}
 
 ${options.approvedContextSummary.content}
 `
-      : "";
+			: "";
 
-  const specializationSection = options.worktreeRootAgentsCanonical === true
-    ? ""
-    : options.rolePromptContent
-      ? `\n## Your Specialization\n\nYou are operating as a **${displayRole}** agent. Follow these behavioral guidelines:\n\n${options.rolePromptContent}\n`
-      : "";
+	const specializationSection =
+		options.worktreeRootAgentsCanonical === true
+			? ""
+			: options.rolePromptContent
+				? `\n## Your Specialization\n\nYou are operating as a **${displayRole}** agent. Follow these behavioral guidelines:\n\n${options.rolePromptContent}\n`
+				: "";
 
-  return `# Worker Assignment: ${workerName}
+	return `# Worker Assignment: ${workerName}
 
 **Team:** ${teamName}
 **Role:** ${displayRole}
@@ -940,64 +956,75 @@ ${specializationSection}`;
  * Generate inbox content for a follow-up task assignment.
  */
 export function generateTaskAssignmentInbox(
-  workerName: string,
-  teamName: string,
-  task: TeamTask,
-  options?: {
-    approvedContextSection?: string;
-  },
+	workerName: string,
+	teamName: string,
+	task: TeamTask,
+	options?: {
+		approvedContextSection?: string;
+	},
 ): string;
 export function generateTaskAssignmentInbox(
-  workerName: string,
-  teamName: string,
-  taskId: string,
-  taskDescription: string,
-  options?: {
-    approvedContextSection?: string;
-  },
+	workerName: string,
+	teamName: string,
+	taskId: string,
+	taskDescription: string,
+	options?: {
+		approvedContextSection?: string;
+	},
 ): string;
 export function generateTaskAssignmentInbox(
-  workerName: string,
-  teamName: string,
-  taskOrId: TeamTask | string,
-  taskDescriptionArg?: string | {
-    approvedContextSection?: string;
-  },
-  optionsArg: {
-    approvedContextSection?: string;
-  } = {},
+	workerName: string,
+	teamName: string,
+	taskOrId: TeamTask | string,
+	taskDescriptionArg?:
+		| string
+		| {
+				approvedContextSection?: string;
+		  },
+	optionsArg: {
+		approvedContextSection?: string;
+	} = {},
 ): string {
-  const options = typeof taskDescriptionArg === "string"
-    ? optionsArg
-    : taskDescriptionArg ?? optionsArg;
-  const task = typeof taskOrId === "string"
-    ? { id: taskOrId, description: typeof taskDescriptionArg === "string" ? taskDescriptionArg : "" }
-    : taskOrId;
-  const taskId = task.id;
-  const taskDescription = task.description;
-  const workerGoalSection = typeof taskOrId === "string"
-    ? ""
-    : renderTeamWorkerGoalInstruction({
-        teamName,
-        workerName,
-        objective: `Complete assigned OMX team task ${taskOrId.id} with verified evidence, preserving leader-owned audit.`,
-        taskIds: [taskOrId.id],
-        taskReferences: [{
-          id: taskOrId.id,
-          subject: taskOrId.subject,
-          status: taskOrId.status,
-          claimOwner: taskOrId.claim?.owner,
-          claimLeasedUntil: taskOrId.claim?.leased_until,
-        }],
-      });
-  const delegationSection = renderDelegationContracts([task as TeamTask]);
-  const coordinationGateSection = renderTeamCoordinationGate();
-  const coordinationSection = renderCoordinationProtocols([task as TeamTask]);
-  const approvedContextSection = options.approvedContextSection
-    ? `\n## Approved Handoff Context\n\n${options.approvedContextSection}\n`
-    : "";
+	const options =
+		typeof taskDescriptionArg === "string"
+			? optionsArg
+			: (taskDescriptionArg ?? optionsArg);
+	const task =
+		typeof taskOrId === "string"
+			? {
+					id: taskOrId,
+					description:
+						typeof taskDescriptionArg === "string" ? taskDescriptionArg : "",
+				}
+			: taskOrId;
+	const taskId = task.id;
+	const taskDescription = task.description;
+	const workerGoalSection =
+		typeof taskOrId === "string"
+			? ""
+			: renderTeamWorkerGoalInstruction({
+					teamName,
+					workerName,
+					objective: `Complete assigned OMX team task ${taskOrId.id} with verified evidence, preserving leader-owned audit.`,
+					taskIds: [taskOrId.id],
+					taskReferences: [
+						{
+							id: taskOrId.id,
+							subject: taskOrId.subject,
+							status: taskOrId.status,
+							claimOwner: taskOrId.claim?.owner,
+							claimLeasedUntil: taskOrId.claim?.leased_until,
+						},
+					],
+				});
+	const delegationSection = renderDelegationContracts([task as TeamTask]);
+	const coordinationGateSection = renderTeamCoordinationGate();
+	const coordinationSection = renderCoordinationProtocols([task as TeamTask]);
+	const approvedContextSection = options.approvedContextSection
+		? `\n## Approved Handoff Context\n\n${options.approvedContextSection}\n`
+		: "";
 
-  return `# New Task Assignment
+	return `# New Task Assignment
 
 **Worker:** ${workerName}
 **Task ID:** ${taskId}
@@ -1032,10 +1059,10 @@ ${buildVerificationSection(taskDescription)}
  * Generate inbox content for shutdown.
  */
 export function generateShutdownInbox(
-  teamName: string,
-  workerName: string,
+	teamName: string,
+	workerName: string,
 ): string {
-  return `# Shutdown Request
+	return `# Shutdown Request
 
 All tasks are complete. Please wrap up any remaining work and respond with a shutdown acknowledgement.
 
@@ -1054,7 +1081,7 @@ Type \`exit\` or press Ctrl+C to end your Codex session.
 }
 
 function buildInstructionPath(...parts: string[]): string {
-  return join(...parts).replaceAll("\\", "/");
+	return join(...parts).replaceAll("\\", "/");
 }
 
 /**
@@ -1062,36 +1089,36 @@ function buildInstructionPath(...parts: string[]): string {
  * Always < 200 characters, ASCII-safe.
  */
 export function generateTriggerMessage(
-  workerName: string,
-  teamName: string,
-  teamStateRoot: string = ".omx/state",
+	workerName: string,
+	teamName: string,
+	teamStateRoot: string = ".omx/state",
 ): string {
-  return buildTriggerDirective(workerName, teamName, teamStateRoot).text;
+	return buildTriggerDirective(workerName, teamName, teamStateRoot).text;
 }
 
 export function buildTriggerDirective(
-  workerName: string,
-  teamName: string,
-  teamStateRoot: string = ".omx/state",
+	workerName: string,
+	teamName: string,
+	teamStateRoot: string = ".omx/state",
 ): TeamReminderDirective {
-  const inboxPath = buildInstructionPath(
-    teamStateRoot,
-    "team",
-    teamName,
-    "workers",
-    workerName,
-    "inbox.md",
-  );
-  if (teamStateRoot !== ".omx/state") {
-    return {
-      intent: "followup-relaunch",
-      text: `Read ${inboxPath}, work now, report progress, continue assigned work or next feasible task.`,
-    };
-  }
-  return {
-    intent: "followup-relaunch",
-    text: `Read ${inboxPath}, start work now, report concrete progress, then continue assigned work or next feasible task.`,
-  };
+	const inboxPath = buildInstructionPath(
+		teamStateRoot,
+		"team",
+		teamName,
+		"workers",
+		workerName,
+		"inbox.md",
+	);
+	if (teamStateRoot !== ".omx/state") {
+		return {
+			intent: "followup-relaunch",
+			text: `Read ${inboxPath}, work now, report progress, continue assigned work or next feasible task.`,
+		};
+	}
+	return {
+		intent: "followup-relaunch",
+		text: `Read ${inboxPath}, start work now, report concrete progress, then continue assigned work or next feasible task.`,
+	};
 }
 
 /**
@@ -1099,68 +1126,74 @@ export function buildTriggerDirective(
  * Always < 200 characters, ASCII-safe.
  */
 export function generateMailboxTriggerMessage(
-  workerName: string,
-  teamName: string,
-  count: number,
-  teamStateRoot: string = ".omx/state",
+	workerName: string,
+	teamName: string,
+	count: number,
+	teamStateRoot: string = ".omx/state",
 ): string {
-  return buildMailboxTriggerDirective(workerName, teamName, count, teamStateRoot).text;
+	return buildMailboxTriggerDirective(
+		workerName,
+		teamName,
+		count,
+		teamStateRoot,
+	).text;
 }
 
 export function buildMailboxTriggerDirective(
-  workerName: string,
-  teamName: string,
-  count: number,
-  teamStateRoot: string = ".omx/state",
+	workerName: string,
+	teamName: string,
+	count: number,
+	teamStateRoot: string = ".omx/state",
 ): TeamReminderDirective {
-  const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
-  const mailboxPath = buildInstructionPath(
-    teamStateRoot,
-    "team",
-    teamName,
-    "mailbox",
-    workerName + ".json",
-  );
-  if (teamStateRoot !== ".omx/state") {
-    return {
-      intent: "pending-mailbox-review",
-      text: `${n} new msg(s): read ${mailboxPath}, act, report progress, continue assigned work or next feasible task.`,
-    };
-  }
-  return {
-    intent: "pending-mailbox-review",
-    text: `You have ${n} new message(s). Read ${mailboxPath}, act now, reply with concrete progress, then continue assigned work or next feasible task.`,
-  };
+	const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+	const mailboxPath = buildInstructionPath(
+		teamStateRoot,
+		"team",
+		teamName,
+		"mailbox",
+		workerName + ".json",
+	);
+	if (teamStateRoot !== ".omx/state") {
+		return {
+			intent: "pending-mailbox-review",
+			text: `${n} new msg(s): read ${mailboxPath}, act, report progress, continue assigned work or next feasible task.`,
+		};
+	}
+	return {
+		intent: "pending-mailbox-review",
+		text: `You have ${n} new message(s). Read ${mailboxPath}, act now, reply with concrete progress, then continue assigned work or next feasible task.`,
+	};
 }
 
 export function generateLeaderMailboxTriggerMessage(
-  teamName: string,
-  fromWorker: string,
-  teamStateRoot: string = ".omx/state",
+	teamName: string,
+	fromWorker: string,
+	teamStateRoot: string = ".omx/state",
 ): string {
-  return buildLeaderMailboxTriggerDirective(teamName, fromWorker, teamStateRoot).text;
+	return buildLeaderMailboxTriggerDirective(teamName, fromWorker, teamStateRoot)
+		.text;
 }
 
 export function buildLeaderMailboxTriggerDirective(
-  teamName: string,
-  fromWorker: string,
-  teamStateRoot: string = ".omx/state",
+	teamName: string,
+	fromWorker: string,
+	teamStateRoot: string = ".omx/state",
 ): TeamReminderDirective {
-  const mailboxPath = buildInstructionPath(
-    teamStateRoot,
-    "team",
-    teamName,
-    "mailbox",
-    "leader-fixed.json",
-  );
-  if (teamStateRoot !== ".omx/state") {
-    return {
-      intent: "pending-mailbox-review",
-      text: `Read ${mailboxPath}; new msg from ${fromWorker}. Review it; decide next step.`,
-    };
-  }
-  return {
-    intent: "pending-mailbox-review",
-    text: `Read ${mailboxPath}; ${fromWorker} sent a new message. Review it and decide the next concrete step.`,
-  };
+	const mailboxPath = buildInstructionPath(
+		teamStateRoot,
+		"team",
+		teamName,
+		"mailbox",
+		"leader-fixed.json",
+	);
+	if (teamStateRoot !== ".omx/state") {
+		return {
+			intent: "pending-mailbox-review",
+			text: `Read ${mailboxPath}; new msg from ${fromWorker}. Review it; decide next step.`,
+		};
+	}
+	return {
+		intent: "pending-mailbox-review",
+		text: `Read ${mailboxPath}; ${fromWorker} sent a new message. Review it and decide the next concrete step.`,
+	};
 }

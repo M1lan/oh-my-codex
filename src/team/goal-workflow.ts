@@ -1,62 +1,63 @@
 import type { TeamTask } from "./state.js";
 
 export interface TeamWorkerGoalInstruction {
-  teamName: string;
-  workerName: string;
-  objective: string;
-  taskIds: string[];
-  taskReferences: Array<{
-    id: string;
-    subject: string;
-    status: TeamTask["status"];
-    claimOwner?: string;
-    claimLeasedUntil?: string;
-  }>;
+	teamName: string;
+	workerName: string;
+	objective: string;
+	taskIds: string[];
+	taskReferences: Array<{
+		id: string;
+		subject: string;
+		status: TeamTask["status"];
+		claimOwner?: string;
+		claimLeasedUntil?: string;
+	}>;
 }
 
 export function buildTeamWorkerGoalInstruction(
-  teamName: string,
-  workerName: string,
-  tasks: TeamTask[],
-  options: { teamStateRoot?: string; objective?: string } = {},
+	teamName: string,
+	workerName: string,
+	tasks: TeamTask[],
+	options: { teamStateRoot?: string; objective?: string } = {},
 ): TeamWorkerGoalInstruction | undefined {
-  if (tasks.length === 0) return undefined;
+	if (tasks.length === 0) return undefined;
 
-  void options.teamStateRoot;
-  const taskIds = tasks.map((task) => task.id);
-  const objective = options.objective ??
-    `Complete assigned OMX team task${taskIds.length === 1 ? "" : "s"} ${taskIds.join(", ")} for ${teamName} with verified evidence, preserving leader-owned audit.`;
+	void options.teamStateRoot;
+	const taskIds = tasks.map((task) => task.id);
+	const objective =
+		options.objective ??
+		`Complete assigned OMX team task${taskIds.length === 1 ? "" : "s"} ${taskIds.join(", ")} for ${teamName} with verified evidence, preserving leader-owned audit.`;
 
-  return {
-    teamName,
-    workerName,
-    objective,
-    taskIds,
-    taskReferences: tasks.map((task) => ({
-      id: task.id,
-      subject: task.subject,
-      status: task.status,
-      claimOwner: task.claim?.owner,
-      claimLeasedUntil: task.claim?.leased_until,
-    })),
-  };
+	return {
+		teamName,
+		workerName,
+		objective,
+		taskIds,
+		taskReferences: tasks.map((task) => ({
+			id: task.id,
+			subject: task.subject,
+			status: task.status,
+			claimOwner: task.claim?.owner,
+			claimLeasedUntil: task.claim?.leased_until,
+		})),
+	};
 }
 
 export function renderTeamWorkerGoalInstruction(
-  instruction: TeamWorkerGoalInstruction | undefined,
+	instruction: TeamWorkerGoalInstruction | undefined,
 ): string {
-  if (!instruction) return "";
+	if (!instruction) return "";
 
-  const taskLines = instruction.taskReferences
-    .map((task) => {
-      const claim = task.claimOwner
-        ? `; active claim owner: ${task.claimOwner}${task.claimLeasedUntil ? ` until ${task.claimLeasedUntil}` : ""}`
-        : "; claim required before work";
-      return `- Task ${task.id}: ${task.subject} (status: ${task.status}${claim})`;
-    })
-    .join("\n");
+	const taskLines = instruction.taskReferences
+		.map((task) => {
+			const claim = task.claimOwner
+				? `; active claim owner: ${task.claimOwner}${task.claimLeasedUntil ? ` until ${task.claimLeasedUntil}` : ""}`
+				: "; claim required before work";
+			return `- Task ${task.id}: ${task.subject} (status: ${task.status}${claim})`;
+		})
+		.join("\n");
 
-  return `
+	return `
 ## Scrum / Team Goal Workflow
 
 Objective: ${instruction.objective}

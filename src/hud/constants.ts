@@ -18,11 +18,15 @@ export const HUD_RESIZE_RECONCILE_DELAY_SECONDS = 2;
  * behavior and allow the HUD. (closes #2754)
  */
 export function isTmuxWindowTooCrampedForHudSplit(
-  windowHeight: number | null | undefined,
-  minWindowHeight: number = HUD_TMUX_MIN_LAUNCH_WINDOW_HEIGHT_LINES,
+	windowHeight: number | null | undefined,
+	minWindowHeight: number = HUD_TMUX_MIN_LAUNCH_WINDOW_HEIGHT_LINES,
 ): boolean {
-  if (typeof windowHeight !== "number" || !Number.isFinite(windowHeight) || windowHeight <= 0) {
-    return false;
-  }
-  return windowHeight < minWindowHeight;
+	if (
+		typeof windowHeight !== "number" ||
+		!Number.isFinite(windowHeight) ||
+		windowHeight <= 0
+	) {
+		return false;
+	}
+	return windowHeight < minWindowHeight;
 }

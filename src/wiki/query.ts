@@ -8,15 +8,12 @@
  * The LLM caller synthesizes answers from returned matches.
  */
 
+import { type WikiQueryOptions, type WikiQueryMatch } from "./types.js";
 import {
-  type WikiQueryOptions,
-  type WikiQueryMatch,
-} from './types.js';
-import {
-  readAllPages,
-  appendLog,
-  isLegacyWikiFallbackActive,
-} from './storage.js';
+	readAllPages,
+	appendLog,
+	isLegacyWikiFallbackActive,
+} from "./storage.js";
 
 /**
  * Tokenize text for search, with CJK bi-gram support.
@@ -27,38 +24,38 @@ import {
  * Other scripts (Cyrillic, Arabic, Thai, etc.): whitespace split (fallback).
  */
 export function tokenize(text: string): string[] {
-  const lower = text.toLowerCase();
-  const tokens: string[] = [];
+	const lower = text.toLowerCase();
+	const tokens: string[] = [];
 
-  // Latin/numeric tokens (including accented Latin: café, naïve, etc.)
-  const latinMatches = lower.match(/[a-z0-9\u00C0-\u024F]+/g);
-  if (latinMatches) tokens.push(...latinMatches);
+	// Latin/numeric tokens (including accented Latin: café, naïve, etc.)
+	const latinMatches = lower.match(/[a-z0-9\u00C0-\u024F]+/g);
+	if (latinMatches) tokens.push(...latinMatches);
 
-  // CJK segments (Hiragana + Katakana + CJK Unified Ideographs + Hangul)
-  const cjkPattern = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g;
-  const cjkMatches = lower.match(cjkPattern);
-  if (cjkMatches) {
-    for (const segment of cjkMatches) {
-      for (let i = 0; i < segment.length; i++) {
-        tokens.push(segment[i]);
-      }
-      for (let i = 0; i < segment.length - 1; i++) {
-        tokens.push(segment.slice(i, i + 2));
-      }
-    }
-  }
+	// CJK segments (Hiragana + Katakana + CJK Unified Ideographs + Hangul)
+	const cjkPattern = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]+/g;
+	const cjkMatches = lower.match(cjkPattern);
+	if (cjkMatches) {
+		for (const segment of cjkMatches) {
+			for (let i = 0; i < segment.length; i++) {
+				tokens.push(segment[i]);
+			}
+			for (let i = 0; i < segment.length - 1; i++) {
+				tokens.push(segment.slice(i, i + 2));
+			}
+		}
+	}
 
-  // Fallback: other scripts (Cyrillic, Arabic, Thai, Devanagari, etc.)
-  // Remove already-matched Latin and CJK, then whitespace-split the remainder
-  // Filter out pure-punctuation tokens to avoid false-positive matches.
-  const remaining = lower
-    .replace(/[a-z0-9\u00C0-\u024F]+/g, ' ')
-    .replace(cjkPattern, ' ')
-    .split(/\s+/)
-    .filter(t => t.length > 0 && /\p{L}/u.test(t));
-  if (remaining.length > 0) tokens.push(...remaining);
+	// Fallback: other scripts (Cyrillic, Arabic, Thai, Devanagari, etc.)
+	// Remove already-matched Latin and CJK, then whitespace-split the remainder
+	// Filter out pure-punctuation tokens to avoid false-positive matches.
+	const remaining = lower
+		.replace(/[a-z0-9\u00C0-\u024F]+/g, " ")
+		.replace(cjkPattern, " ")
+		.split(/\s+/)
+		.filter((t) => t.length > 0 && /\p{L}/u.test(t));
+	if (remaining.length > 0) tokens.push(...remaining);
 
-  return tokens;
+	return tokens;
 }
 
 /**
@@ -77,89 +74,101 @@ export function tokenize(text: string): string[] {
  * @returns Matching pages with snippets, sorted by relevance
  */
 export function queryWiki(
-  root: string,
-  queryText: string,
-  options: WikiQueryOptions = {},
+	root: string,
+	queryText: string,
+	options: WikiQueryOptions = {},
 ): WikiQueryMatch[] {
-  const { tags: filterTags, category, limit = 20, logQuery = true } = options;
-  const legacyFallbackActive = isLegacyWikiFallbackActive(root);
-  const pages = readAllPages(root);
-  const queryLower = queryText.toLowerCase();
-  const queryTerms = tokenize(queryText);
+	const { tags: filterTags, category, limit = 20, logQuery = true } = options;
+	const legacyFallbackActive = isLegacyWikiFallbackActive(root);
+	const pages = readAllPages(root);
+	const queryLower = queryText.toLowerCase();
+	const queryTerms = tokenize(queryText);
 
-  const matches: WikiQueryMatch[] = [];
+	const matches: WikiQueryMatch[] = [];
 
-  for (const page of pages) {
-    // Category filter
-    if (category && page.frontmatter.category !== category) continue;
+	for (const page of pages) {
+		// Category filter
+		if (category && page.frontmatter.category !== category) continue;
 
-    let score = 0;
-    let snippet = '';
+		let score = 0;
+		let snippet = "";
 
-    // Tag matching (weight: 3 per matching tag)
-    if (filterTags && filterTags.length > 0) {
-      const tagOverlap = filterTags.filter(t =>
-        page.frontmatter.tags.some(pt => pt.toLowerCase() === t.toLowerCase())
-      );
-      score += tagOverlap.length * 3;
-    }
+		// Tag matching (weight: 3 per matching tag)
+		if (filterTags && filterTags.length > 0) {
+			const tagOverlap = filterTags.filter((t) =>
+				page.frontmatter.tags.some(
+					(pt) => pt.toLowerCase() === t.toLowerCase(),
+				),
+			);
+			score += tagOverlap.length * 3;
+		}
 
-    // Also match query terms against page tags
-    for (const term of queryTerms) {
-      if (page.frontmatter.tags.some(t => t.toLowerCase().includes(term))) {
-        score += 2;
-      }
-    }
+		// Also match query terms against page tags
+		for (const term of queryTerms) {
+			if (page.frontmatter.tags.some((t) => t.toLowerCase().includes(term))) {
+				score += 2;
+			}
+		}
 
-    // Title matching (weight: 5)
-    const titleLower = page.frontmatter.title.toLowerCase();
-    if (titleLower.includes(queryLower)) {
-      score += 5;
-    } else {
-      for (const term of queryTerms) {
-        if (titleLower.includes(term)) score += 2;
-      }
-    }
+		// Title matching (weight: 5)
+		const titleLower = page.frontmatter.title.toLowerCase();
+		if (titleLower.includes(queryLower)) {
+			score += 5;
+		} else {
+			for (const term of queryTerms) {
+				if (titleLower.includes(term)) score += 2;
+			}
+		}
 
-    // Content matching (weight: 1 per unique term match)
-    const contentLower = page.content.toLowerCase();
-    for (const term of queryTerms) {
-      const idx = contentLower.indexOf(term);
-      if (idx !== -1) {
-        score += 1;
-        // Extract snippet around first match
-        if (!snippet) {
-          const start = Math.max(0, idx - 40);
-          const end = Math.min(contentLower.length, idx + term.length + 80);
-          const raw = page.content.slice(start, end).replace(/\n+/g, ' ').trim();
-          snippet = (start > 0 ? '...' : '') + raw + (end < contentLower.length ? '...' : '');
-        }
-      }
-    }
+		// Content matching (weight: 1 per unique term match)
+		const contentLower = page.content.toLowerCase();
+		for (const term of queryTerms) {
+			const idx = contentLower.indexOf(term);
+			if (idx !== -1) {
+				score += 1;
+				// Extract snippet around first match
+				if (!snippet) {
+					const start = Math.max(0, idx - 40);
+					const end = Math.min(contentLower.length, idx + term.length + 80);
+					const raw = page.content
+						.slice(start, end)
+						.replace(/\n+/g, " ")
+						.trim();
+					snippet =
+						(start > 0 ? "..." : "") +
+						raw +
+						(end < contentLower.length ? "..." : "");
+				}
+			}
+		}
 
-    if (score > 0) {
-      if (!snippet) {
-        // Default snippet: first non-empty line
-        snippet = page.content.split('\n').find(l => l.trim().length > 0)?.trim() || '';
-        if (snippet.length > 120) snippet = snippet.slice(0, 117) + '...';
-      }
+		if (score > 0) {
+			if (!snippet) {
+				// Default snippet: first non-empty line
+				snippet =
+					page.content
+						.split("\n")
+						.find((l) => l.trim().length > 0)
+						?.trim() || "";
+				if (snippet.length > 120) snippet = snippet.slice(0, 117) + "...";
+			}
 
-      matches.push({ page, snippet, score });
-    }
-  }
+			matches.push({ page, snippet, score });
+		}
+	}
 
-  // Sort by score descending
-  matches.sort((a, b) => b.score - a.score);
-  const limited = matches.slice(0, limit);
+	// Sort by score descending
+	matches.sort((a, b) => b.score - a.score);
+	const limited = matches.slice(0, limit);
 
-  if (logQuery && !legacyFallbackActive) {
-    appendLog(root, {
-      timestamp: new Date().toISOString(),
-      operation: 'query',
-      pagesAffected: limited.map(m => m.page.filename),
-      summary: `Query "${queryText}" → ${limited.length} results (of ${matches.length} total)`,
-    });
-  }
+	if (logQuery && !legacyFallbackActive) {
+		appendLog(root, {
+			timestamp: new Date().toISOString(),
+			operation: "query",
+			pagesAffected: limited.map((m) => m.page.filename),
+			summary: `Query "${queryText}" → ${limited.length} results (of ${matches.length} total)`,
+		});
+	}
 
-  return limited;
+	return limited;
 }

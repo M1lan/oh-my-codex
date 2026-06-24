@@ -52,7 +52,11 @@ function makeFakeIo(answers: string[]): AutoresearchQuestionIO {
 
 function makeFakeStructuredQuestionAsker(
 	answers: string[],
-	questions: Array<{ question: string; options: string[]; allowOther: boolean }> = [],
+	questions: Array<{
+		question: string;
+		options: string[];
+		allowOther: boolean;
+	}> = [],
 ): AutoresearchStructuredQuestionAsker {
 	const queue = [...answers];
 	return async (input) => {
@@ -62,7 +66,9 @@ function makeFakeStructuredQuestionAsker(
 			allowOther: input.allow_other,
 		});
 		const next = queue.shift() ?? "";
-		const matchingOption = input.options.find((option) => option.value === next);
+		const matchingOption = input.options.find(
+			(option) => option.value === next,
+		);
 		if (matchingOption) {
 			const answer = {
 				kind: "option" as const,
@@ -73,16 +79,20 @@ function makeFakeStructuredQuestionAsker(
 			return {
 				ok: true,
 				question_id: `q-${questions.length}`,
-				questions: [{
-					id: "q-1",
-					header: input.header,
-					question: input.question,
-					options: input.options,
-					allow_other: input.allow_other,
-					other_label: input.other_label ?? "Other",
-					multi_select: input.multi_select ?? false,
-					type: input.type ?? (input.multi_select ? "multi-answerable" : "single-answerable"),
-				}],
+				questions: [
+					{
+						id: "q-1",
+						header: input.header,
+						question: input.question,
+						options: input.options,
+						allow_other: input.allow_other,
+						other_label: input.other_label ?? "Other",
+						multi_select: input.multi_select ?? false,
+						type:
+							input.type ??
+							(input.multi_select ? "multi-answerable" : "single-answerable"),
+					},
+				],
 				answers: [{ question_id: "q-1", index: 0, answer }],
 				prompt: {
 					header: input.header,
@@ -107,16 +117,20 @@ function makeFakeStructuredQuestionAsker(
 		return {
 			ok: true,
 			question_id: `q-${questions.length}`,
-			questions: [{
-				id: "q-1",
-				header: input.header,
-				question: input.question,
-				options: input.options,
-				allow_other: input.allow_other,
-				other_label: input.other_label ?? "Other",
-				multi_select: input.multi_select ?? false,
-				type: input.type ?? (input.multi_select ? "multi-answerable" : "single-answerable"),
-			}],
+			questions: [
+				{
+					id: "q-1",
+					header: input.header,
+					question: input.question,
+					options: input.options,
+					allow_other: input.allow_other,
+					other_label: input.other_label ?? "Other",
+					multi_select: input.multi_select ?? false,
+					type:
+						input.type ??
+						(input.multi_select ? "multi-answerable" : "single-answerable"),
+				},
+			],
 			answers: [{ question_id: "q-1", index: 0, answer }],
 			prompt: {
 				header: input.header,
@@ -316,13 +330,18 @@ describe("runAutoresearchNoviceBridge", () => {
 						"launch",
 					]),
 					async () => {
-						throw new Error("omx question requires tmux for OMX-owned question UI rendering in this session.");
+						throw new Error(
+							"omx question requires tmux for OMX-owned question UI rendering in this session.",
+						);
 					},
 				),
 			);
 
 			assert.equal(result.slug, "ux-eval");
-			assert.equal(result.resultPath, join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"));
+			assert.equal(
+				result.resultPath,
+				join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"),
+			);
 		} finally {
 			await rm(repo, { recursive: true, force: true });
 		}
@@ -331,9 +350,12 @@ describe("runAutoresearchNoviceBridge", () => {
 	it("does not fall back to plain prompts when question policy denies structured questions", async () => {
 		const repo = await initWorkspace();
 		try {
-			await mkdir(join(repo, ".omx", "state", "sessions", "sess-autoresearch"), {
-				recursive: true,
-			});
+			await mkdir(
+				join(repo, ".omx", "state", "sessions", "sess-autoresearch"),
+				{
+					recursive: true,
+				},
+			);
 			await writeFile(
 				join(repo, ".omx", "state", "session.json"),
 				JSON.stringify({ session_id: "sess-autoresearch" }),
@@ -356,10 +378,7 @@ describe("runAutoresearchNoviceBridge", () => {
 						runAutoresearchNoviceBridge(
 							repo,
 							{},
-							makeFakeIo([
-								"should not be used",
-								"should not be used",
-							]),
+							makeFakeIo(["should not be used", "should not be used"]),
 							async () => {
 								throw new OmxQuestionError(
 									"active_execution_mode_blocked",
@@ -381,7 +400,11 @@ describe("runAutoresearchNoviceBridge", () => {
 
 	it("uses structured omx-question prompts and resumes from returned stdout answers", async () => {
 		const repo = await initWorkspace();
-		const askedQuestions: Array<{ question: string; options: string[]; allowOther: boolean }> = [];
+		const askedQuestions: Array<{
+			question: string;
+			options: string[];
+			allowOther: boolean;
+		}> = [];
 		try {
 			const result = await withMockedTty(() =>
 				runAutoresearchNoviceBridge(
@@ -403,7 +426,10 @@ describe("runAutoresearchNoviceBridge", () => {
 			);
 
 			assert.equal(result.slug, "ux-eval");
-			assert.equal(result.resultPath, join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"));
+			assert.equal(
+				result.resultPath,
+				join(repo, ".omx", "specs", "autoresearch-ux-eval", "result.json"),
+			);
 			assert.equal(askedQuestions.length, 6);
 			assert.equal(askedQuestions[0]?.question, "Research topic/goal");
 			assert.deepEqual(askedQuestions[0]?.options, []);

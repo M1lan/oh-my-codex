@@ -86,7 +86,10 @@ async function installPluginCacheFixture(codexDir: string): Promise<string> {
 	const root = repoRoot();
 	const sourcePluginDir = join(root, "plugins", "oh-my-codex");
 	const manifest = JSON.parse(
-		await readFile(join(sourcePluginDir, ".codex-plugin", "plugin.json"), "utf-8"),
+		await readFile(
+			join(sourcePluginDir, ".codex-plugin", "plugin.json"),
+			"utf-8",
+		),
 	) as { version: string };
 	const cacheDir = join(
 		codexDir,
@@ -133,25 +136,30 @@ function buildHooksJsonWithPostCompactCommand(
 	codexHomeDir: string,
 ): string {
 	const expectedCommand = currentNativeHookCommand(codexHomeDir);
-	return `${JSON.stringify({
-		hooks: Object.fromEntries(
-			MANAGED_HOOK_EVENTS.map((eventName) => [
-				eventName,
-				[
-					{
-						hooks: [
-							{
-								type: "command",
-								command: eventName === "PostCompact"
-									? postCompactCommand
-									: expectedCommand,
-							},
-						],
-					},
-				],
-			]),
-		),
-	}, null, 2)}\n`;
+	return `${JSON.stringify(
+		{
+			hooks: Object.fromEntries(
+				MANAGED_HOOK_EVENTS.map((eventName) => [
+					eventName,
+					[
+						{
+							hooks: [
+								{
+									type: "command",
+									command:
+										eventName === "PostCompact"
+											? postCompactCommand
+											: expectedCommand,
+								},
+							],
+						},
+					],
+				]),
+			),
+		},
+		null,
+		2,
+	)}\n`;
 }
 
 describe("omx doctor onboarding warning copy", () => {
@@ -203,7 +211,10 @@ command = "node"
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
 			await mkdir(codexDir, { recursive: true });
-			await writeFile(join(codexDir, "AGENTS.md"), "# context-mode instructions\n");
+			await writeFile(
+				join(codexDir, "AGENTS.md"),
+				"# context-mode instructions\n",
+			);
 
 			const res = runOmx(wd, ["doctor"], {
 				HOME: home,
@@ -211,7 +222,10 @@ command = "node"
 			});
 			if (shouldSkipForSpawnPermissions(res.error)) return;
 			assert.equal(res.status, 0, res.stderr || res.stdout);
-			assert.match(res.stdout, /\[!!\] AGENTS\.md: OMX AGENTS contract markers missing/);
+			assert.match(
+				res.stdout,
+				/\[!!\] AGENTS\.md: OMX AGENTS contract markers missing/,
+			);
 			assert.match(res.stdout, /may have been overwritten by another tool/);
 			assert.match(res.stdout, /omx setup --scope user --merge-agents/);
 			assert.match(res.stdout, /omx setup --scope user --force/);
@@ -273,7 +287,9 @@ command = "node"
 	});
 
 	it("warns in plugin mode when persistent AGENTS.md exists without OMX contract markers", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-agents-contract-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-agents-contract-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -287,7 +303,10 @@ command = "node"
 					mcpMode: "none",
 				}),
 			);
-			await writeFile(join(codexDir, "config.toml"), "plugin_hooks = true\ngoals = true\n");
+			await writeFile(
+				join(codexDir, "config.toml"),
+				"plugin_hooks = true\ngoals = true\n",
+			);
 			await writeFile(join(codexDir, "AGENTS.md"), "# local instructions\n");
 
 			const res = runOmx(wd, ["doctor"], {
@@ -296,9 +315,15 @@ command = "node"
 			});
 			if (shouldSkipForSpawnPermissions(res.error)) return;
 			assert.equal(res.status, 0, res.stderr || res.stdout);
-			assert.match(res.stdout, /\[!!\] AGENTS\.md: OMX AGENTS contract markers missing/);
+			assert.match(
+				res.stdout,
+				/\[!!\] AGENTS\.md: OMX AGENTS contract markers missing/,
+			);
 			assert.match(res.stdout, /omx setup --scope user --merge-agents/);
-			assert.doesNotMatch(res.stdout, /optional plugin-mode AGENTS\.md defaults found/);
+			assert.doesNotMatch(
+				res.stdout,
+				/optional plugin-mode AGENTS\.md defaults found/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -373,7 +398,10 @@ command = "node"
 				res.stdout,
 				/\[OK\] Native reviewer roles: required RALPLAN\/Autopilot native reviewer roles are available \(architect, critic\); advisory scholastic role is also available/,
 			);
-			assert.doesNotMatch(res.stdout, /role-specific subagent calls may degrade/);
+			assert.doesNotMatch(
+				res.stdout,
+				/role-specific subagent calls may degrade/,
+			);
 			assert.match(
 				res.stdout,
 				/MCP Servers: CLI-first plugin mode: first-party MCP compatibility explicitly disabled/,
@@ -388,7 +416,9 @@ command = "node"
 	});
 
 	it("accepts plugin mode when required native reviewer roles are available from agent files and config", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-native-roles-ok-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-native-roles-ok-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -429,7 +459,10 @@ command = "node"
 				res.stdout,
 				/Skills: plugin marketplace oh-my-codex-local registered; OMX skills are supplied by/,
 			);
-			assert.doesNotMatch(res.stdout, /role-specific subagent calls may degrade/);
+			assert.doesNotMatch(
+				res.stdout,
+				/role-specific subagent calls may degrade/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -493,7 +526,9 @@ command = "node"
 	});
 
 	it("warns when plugin mode is configured but the Codex plugin cache is missing", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-cache-missing-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-cache-missing-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -836,7 +871,9 @@ OMX_LORE_COMMIT_GUARD = "off"
 	});
 
 	it("reports when Lore commit guard is explicitly enabled in config.toml", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-lore-commit-guard-enabled-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-lore-commit-guard-enabled-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -855,14 +892,19 @@ OMX_LORE_COMMIT_GUARD = "1"
 			});
 			if (shouldSkipForSpawnPermissions(res.error)) return;
 			assert.equal(res.status, 0, res.stderr || res.stdout);
-			assert.match(res.stdout, /Lore commit guard: enabled by config\.toml opt-in/);
+			assert.match(
+				res.stdout,
+				/Lore commit guard: enabled by config\.toml opt-in/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
 	});
 
 	it("warns when Lore commit guard has an invalid config.toml value", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-lore-commit-guard-invalid-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-lore-commit-guard-invalid-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -947,9 +989,10 @@ OMX_LORE_COMMIT_GUARD = "truee"
 		}
 	});
 
-
 	it("infers plugin MCP compat mode from Codex plugin config when setup-scope is absent", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-config-compat-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-config-compat-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1010,7 +1053,9 @@ OMX_LORE_COMMIT_GUARD = "truee"
 	});
 
 	it("does not infer plugin mode from a foreign local marketplace source", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-config-foreign-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-config-foreign-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1122,7 +1167,9 @@ OMX_LORE_COMMIT_GUARD = "truee"
 	});
 
 	it("treats a dev-update plugin install shape without setup-scope as plugin mode", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-dev-update-infer-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-dev-update-infer-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1207,7 +1254,9 @@ OMX_LORE_COMMIT_GUARD = "truee"
 	});
 
 	it("fills missing persisted install mode from plugin config without legacy warnings", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-partial-persisted-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-partial-persisted-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1264,7 +1313,9 @@ OMX_LORE_COMMIT_GUARD = "truee"
 	});
 
 	it("infers project plugin mode from project Codex config when setup-scope is absent", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-project-plugin-config-infer-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-project-plugin-config-infer-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const projectCodexDir = join(wd, ".codex");
@@ -1370,15 +1421,23 @@ OMX_LORE_COMMIT_GUARD = "truee"
 				res.stdout,
 				/Skills: plugin marketplace oh-my-codex-local registered; OMX skills are supplied by/,
 			);
-			assert.doesNotMatch(res.stdout, /hooks\.json not found even though config\.toml has OMX entries/);
-			assert.doesNotMatch(res.stdout, /run "omx setup --force" to restore native hook coverage/);
+			assert.doesNotMatch(
+				res.stdout,
+				/hooks\.json not found even though config\.toml has OMX entries/,
+			);
+			assert.doesNotMatch(
+				res.stdout,
+				/run "omx setup --force" to restore native hook coverage/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
 	});
 
 	it("warns when plugin-scoped hook cache launcher content is stale", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-hook-cache-stale-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-hook-cache-stale-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1428,14 +1487,19 @@ OMX_LORE_COMMIT_GUARD = "truee"
 					`\\[!!\\] Native hooks: plugin-scoped hooks are enabled, but cached plugin hook files or pinned hook launcher in ${cacheDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} do not match the packaged plugin; setup-owned hooks\\.json is intentionally absent at .*\\.codex[\\/]+hooks\\.json; run "omx setup --plugin --force" to refresh the plugin cache`,
 				),
 			);
-			assert.doesNotMatch(res.stdout, /plugin cache native hook coverage smoke passed/);
+			assert.doesNotMatch(
+				res.stdout,
+				/plugin cache native hook coverage smoke passed/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
 	});
 
 	it("accepts plugin-scoped native hooks when hooks.json contains user-owned hooks", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-plugin-scoped-hooks-user-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-plugin-scoped-hooks-user-"),
+		);
 		try {
 			const home = join(wd, "home");
 			const codexDir = join(home, ".codex");
@@ -1496,8 +1560,14 @@ OMX_LORE_COMMIT_GUARD = "truee"
 					`\\[OK\\] Native hooks: plugin-scoped hooks are enabled; existing hooks\\.json at .*\\.codex[\\/]+hooks\\.json is treated as user-owned because plugin-scoped hooks are enabled, and plugin cache native hook coverage smoke passed via ${join(cacheDir, "hooks", "hooks.json").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
 				),
 			);
-			assert.doesNotMatch(res.stdout, /hooks\.json is missing OMX-managed coverage/);
-			assert.doesNotMatch(res.stdout, /run "omx setup --force" to restore native hooks/);
+			assert.doesNotMatch(
+				res.stdout,
+				/hooks\.json is missing OMX-managed coverage/,
+			);
+			assert.doesNotMatch(
+				res.stdout,
+				/run "omx setup --force" to restore native hooks/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -1547,10 +1617,18 @@ OMX_LORE_COMMIT_GUARD = "truee"
 	});
 
 	it("warns when runtime codex-home hooks.json symlinks back to project hooks", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-hooks-runtime-mirror-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-hooks-runtime-mirror-"),
+		);
 		try {
 			const codexDir = join(wd, ".codex");
-			const runtimeSessionDir = join(wd, ".omx", "runtime", "codex-home", "session-1");
+			const runtimeSessionDir = join(
+				wd,
+				".omx",
+				"runtime",
+				"codex-home",
+				"session-1",
+			);
 			await mkdir(codexDir, { recursive: true });
 			await mkdir(runtimeSessionDir, { recursive: true });
 			await writeFile(
@@ -1581,7 +1659,10 @@ OMX_LORE_COMMIT_GUARD = "truee"
 					2,
 				) + "\n",
 			);
-			await symlink(join(codexDir, "hooks.json"), join(runtimeSessionDir, "hooks.json"));
+			await symlink(
+				join(codexDir, "hooks.json"),
+				join(runtimeSessionDir, "hooks.json"),
+			);
 
 			const res = runOmx(wd, ["doctor"]);
 			if (shouldSkipForSpawnPermissions(res.error)) return;
@@ -1741,25 +1822,31 @@ command = "node"
 	});
 
 	it("doctor reports reinstall guidance when the installed native hook dist script fails to parse", async () => {
-		const wd = await mkdtemp(join(tmpdir(), "omx-doctor-native-hook-dist-fail-"));
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-doctor-native-hook-dist-fail-"),
+		);
 		try {
 			const distScriptsDir = join(wd, "dist", "scripts");
 			await mkdir(distScriptsDir, { recursive: true });
-			await writeFile(join(wd, "package.json"), JSON.stringify({ version: "0.18.0" }));
-			await writeFile(join(distScriptsDir, "codex-native-hook.js"), "export const broken = ;\n");
+			await writeFile(
+				join(wd, "package.json"),
+				JSON.stringify({ version: "0.18.0" }),
+			);
+			await writeFile(
+				join(distScriptsDir, "codex-native-hook.js"),
+				"export const broken = ;\n",
+			);
 
 			const check = await checkNativeHookDistSmoke({
 				packageRoot: wd,
-				runner: ((cmd, args, options) => spawnSync(cmd, args, options)) as typeof spawnSync,
+				runner: ((cmd, args, options) =>
+					spawnSync(cmd, args, options)) as typeof spawnSync,
 			});
 
 			assert.equal(check.name, "Native hook dist smoke");
 			assert.equal(check.status, "fail");
 			assert.match(check.message, /minimal UserPromptSubmit smoke/);
-			assert.match(
-				check.message,
-				/pnpm add -g oh-my-codex@0\.18\.0 --force/,
-			);
+			assert.match(check.message, /pnpm add -g oh-my-codex@0\.18\.0 --force/);
 			assert.match(check.message, /omx setup --force/);
 		} finally {
 			await rm(wd, { recursive: true, force: true });

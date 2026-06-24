@@ -54,7 +54,9 @@ export type AutoresearchStructuredQuestionAsker = (
 	input: AutoresearchStructuredQuestionInput,
 ) => Promise<OmxQuestionSuccessPayload>;
 
-function primaryStructuredAnswer(response: OmxQuestionSuccessPayload): OmxQuestionSuccessPayload["answers"][number]["answer"] {
+function primaryStructuredAnswer(
+	response: OmxQuestionSuccessPayload,
+): OmxQuestionSuccessPayload["answers"][number]["answer"] {
 	const answer = response.answers[0]?.answer ?? response.answer;
 	if (!answer) throw new Error("Structured question returned no answer.");
 	return answer;
@@ -90,7 +92,7 @@ async function promptWithDefault(
 							value: trimmedCurrentValue,
 							description: trimmedCurrentValue,
 						},
-				  ]
+					]
 				: [],
 			allow_other: true,
 			other_label: trimmedCurrentValue
@@ -99,8 +101,9 @@ async function promptWithDefault(
 			source: "deep-interview",
 		});
 		const answer = primaryStructuredAnswer(response);
-		const answerValue = answer.other_text?.trim()
-			|| (typeof answer.value === "string" ? answer.value.trim() : "");
+		const answerValue =
+			answer.other_text?.trim() ||
+			(typeof answer.value === "string" ? answer.value.trim() : "");
 		return answerValue || trimmedCurrentValue || "";
 	}
 
@@ -134,12 +137,13 @@ async function promptAction(
 			source: "deep-interview",
 		});
 		const answer = primaryStructuredAnswer(response);
-		const answerValue = typeof answer.value === "string"
-			? answer.value.trim().toLowerCase()
-			: "";
+		const answerValue =
+			typeof answer.value === "string" ? answer.value.trim().toLowerCase() : "";
 		if (answerValue === "launch") return "launch";
 		if (answerValue === "refine") return "refine";
-		throw new Error('Structured question returned an invalid next-step answer.');
+		throw new Error(
+			"Structured question returned an invalid next-step answer.",
+		);
 	}
 
 	const answer = (
@@ -182,16 +186,17 @@ async function ensureStructuredQuestionFallbackAllowed(
 	if (policy.allowed || policy.fallbackAllowed !== false) return;
 	throw new OmxQuestionError(
 		policy.code ?? "question_policy_denied",
-		policy.message ?? "Structured questions are unavailable in the current OMX workflow context.",
+		policy.message ??
+			"Structured questions are unavailable in the current OMX workflow context.",
 	);
 }
 
 function shouldFallbackFromStructuredQuestion(error: unknown): boolean {
 	if (error instanceof OmxQuestionError) {
 		if (
-			error.code === "worker_blocked"
-			|| error.code === "team_blocked"
-			|| error.code === "active_execution_mode_blocked"
+			error.code === "worker_blocked" ||
+			error.code === "team_blocked" ||
+			error.code === "active_execution_mode_blocked"
 		) {
 			return false;
 		}

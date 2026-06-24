@@ -34,7 +34,10 @@ describe("repo artifact ownership doctor check", () => {
 			});
 
 			assert.equal(check.status, "warn");
-			assert.match(check.message, /\.omx[\\/]plans[\\/]root-owned\.md \(root-owned uid=0 gid=0\)/);
+			assert.match(
+				check.message,
+				/\.omx[\\/]plans[\\/]root-owned\.md \(root-owned uid=0 gid=0\)/,
+			);
 			assert.match(check.message, /sudo chown -R \$\(id -u\):\$\(id -g\)/);
 			assert.match(check.message, /omx doctor --force/);
 		} finally {
@@ -68,7 +71,10 @@ describe("repo artifact ownership doctor check", () => {
 			});
 
 			assert.equal(check.status, "warn");
-			assert.match(check.message, /\.beads[\\/]state\.json \(not-writable uid=\d+ gid=\d+\)/);
+			assert.match(
+				check.message,
+				/\.beads[\\/]state\.json \(not-writable uid=\d+ gid=\d+\)/,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -128,7 +134,9 @@ describe("repo artifact ownership doctor check", () => {
 			});
 
 			assert.equal(nonWritable.repaired, 0);
-			assert.deepEqual(nonWritable.skipped, [".omx/plans/root-owned.md: not writable by current user"]);
+			assert.deepEqual(nonWritable.skipped, [
+				".omx/plans/root-owned.md: not writable by current user",
+			]);
 
 			const blocked = await repairRepoArtifactOwnership(wd, {
 				currentUid: ownerUid,
@@ -149,7 +157,9 @@ describe("repo artifact ownership doctor check", () => {
 			});
 
 			assert.equal(blocked.repaired, 0);
-			assert.deepEqual(blocked.skipped, ["repo root is not owned by the current user"]);
+			assert.deepEqual(blocked.skipped, [
+				"repo root is not owned by the current user",
+			]);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}

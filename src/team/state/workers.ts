@@ -1,8 +1,8 @@
 export {
-  writeWorkerIdentity,
-  readWorkerHeartbeat,
-  updateWorkerHeartbeat,
-  readWorkerStatus,
-  writeWorkerStatus,
-  writeWorkerInbox,
-} from '../state.js';
+	writeWorkerIdentity,
+	readWorkerHeartbeat,
+	updateWorkerHeartbeat,
+	readWorkerStatus,
+	writeWorkerStatus,
+	writeWorkerInbox,
+} from "../state.js";

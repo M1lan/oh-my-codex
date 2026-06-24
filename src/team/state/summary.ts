@@ -1,1 +1,1 @@
-export { getTeamSummary } from '../state.js';
+export { getTeamSummary } from "../state.js";
