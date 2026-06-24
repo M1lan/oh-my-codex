@@ -192,7 +192,7 @@ describe("buildSendPaneArgvs", () => {
 		const calls: string[][] = [];
 		const sleeps: number[] = [];
 		const fakeSpawnSync = (command: string, argv: readonly string[]) => {
-			assert.match(command, /(?:^|[\\/])(?:rmux|tmux|psmux)(?:\.exe)?$/i);
+			assert.match(command, /(?:^|[\\/])(?:tmux|psmux)(?:\.exe)?$/i);
 			calls.push([...argv]);
 			return { status: 0 };
 		};

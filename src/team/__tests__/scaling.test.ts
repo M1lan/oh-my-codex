@@ -258,7 +258,7 @@ async function writeSuccessfulScaleUpTmuxStub(
 	fakeBinDir: string,
 	tmuxLogPath: string,
 ): Promise<void> {
-	const tmuxStubPath = join(fakeBinDir, "rmux");
+	const tmuxStubPath = join(fakeBinDir, "tmux");
 	await writeFile(
 		tmuxStubPath,
 		[
@@ -752,7 +752,7 @@ describe("scaleUp", () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-scale-up-role-"));
 		const fakeBinDir = await mkdtemp(join(tmpdir(), "omx-scale-up-role-bin-"));
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -1640,7 +1640,7 @@ describe("scaleUp", () => {
 			join(tmpdir(), "omx-scale-up-project-reasoning-bin-"),
 		);
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 		const previousStandardModel = process.env.OMX_DEFAULT_STANDARD_MODEL;
 		const previousFrontierModel = process.env.OMX_DEFAULT_FRONTIER_MODEL;
@@ -1832,7 +1832,7 @@ describe("scaleUp", () => {
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-rollback-worktree-bin-"),
 		);
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -1964,7 +1964,7 @@ exit 0
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-canonical-root-bin-"),
 		);
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2109,7 +2109,7 @@ exit 0
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-frontier-role-bin-"),
 		);
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2237,7 +2237,7 @@ exit 0
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-mini-tuned-bin-"),
 		);
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2363,7 +2363,7 @@ exit 0
 			join(tmpdir(), "omx-scale-up-layout-bin-"),
 		);
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2444,7 +2444,7 @@ exit 0
 			join(tmpdir(), "omx-scale-up-detached-bin-"),
 		);
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2567,7 +2567,7 @@ exit 0
 		const repo = await initRepo();
 		const fakeBinDir = await mkdtemp(join(tmpdir(), "omx-scale-up-named-bin-"));
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
@@ -2945,7 +2945,7 @@ describe("scaleDown teardown hardening", () => {
 			join(tmpdir(), "omx-scale-down-fake-tmux-"),
 		);
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "rmux");
+		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 		try {
 			await writeFile(

@@ -795,7 +795,7 @@ describe("hudCommand --tmux", () => {
 		const logPath = join(tmp, "tmux.log");
 		const fakeBin = join(tmp, "bin");
 		await mkdir(fakeBin);
-		const tmuxPath = join(fakeBin, "rmux");
+		const tmuxPath = join(fakeBin, "tmux");
 		await writeFile(
 			tmuxPath,
 			`#!/usr/bin/env bash
@@ -870,7 +870,7 @@ exit 0
 		const logPath = join(tmp, "tmux.log");
 		const fakeBin = join(tmp, "bin");
 		await mkdir(fakeBin);
-		const tmuxPath = join(fakeBin, "rmux");
+		const tmuxPath = join(fakeBin, "tmux");
 		await writeFile(
 			tmuxPath,
 			`#!/usr/bin/env bash

@@ -227,29 +227,12 @@ export function resolveCommandPathForPlatform(
 	return resolvePosixCommandPath(command, env, existsImpl);
 }
 
-/**
- * Preference order for the tmux-compatible multiplexer binary. `rmux` is a
- * drop-in, tmux-compatible multiplexer (same flags and command surface); this
- * project prefers it over `tmux`. `tmux` (and, on Windows, the `psmux` alias)
- * remain as fallbacks so resolution still succeeds where `rmux` is absent.
- */
-const TMUX_BINARY_PREFERENCE = ["rmux", "tmux"] as const;
-
 export function resolveTmuxBinaryForPlatform(
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = process.env,
 	existsImpl: ExistsSyncLike = existsFileSync,
 ): string | null {
-	for (const candidate of TMUX_BINARY_PREFERENCE) {
-		const resolved = resolveCommandPathForPlatform(
-			candidate,
-			platform,
-			env,
-			existsImpl,
-		);
-		if (resolved) return resolved;
-	}
-	return null;
+	return resolveCommandPathForPlatform("tmux", platform, env, existsImpl);
 }
 
 const CMUX_RUNTIME_ENV_SIGNALS = ["CMUX_SOCKET_PATH", "CMUX_SOCKET"] as const;
