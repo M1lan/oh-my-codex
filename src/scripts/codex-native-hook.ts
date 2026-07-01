@@ -3559,13 +3559,57 @@ function extractDeepInterviewCommandRedirectTargets(command: string): string[] {
   return targets;
 }
 
+function commandHasDestructiveGitSubcommand(command: string): boolean {
+  const destructiveSubcommands = new Set([
+    "am",
+    "apply",
+    "checkout",
+    "merge",
+    "rebase",
+    "reset",
+    "restore",
+    "switch",
+  ]);
+
+  for (const segment of splitShellCommandSegments(stripHeredocBodiesForCommandScan(command))) {
+    const words = tokenizeShellWords(segment);
+    for (let index = 0; index < words.length; index += 1) {
+      if (shellWordBaseName(words[index] ?? "") !== "git") continue;
+      const subcommandIndex = findGitSubcommandIndex(words, index + 1);
+      if (subcommandIndex === null) continue;
+      const subcommand = words[subcommandIndex] ?? "";
+      if (destructiveSubcommands.has(subcommand)) return true;
+      if (subcommand.startsWith("checkout-")) return true;
+      if (subcommand.startsWith("merge-") && subcommand !== "merge-base") return true;
+    }
+  }
+  return false;
+}
+
+function findGitSubcommandIndex(words: string[], startIndex: number): number | null {
+  for (let index = startIndex; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word || word === "--") continue;
+    if (isShellAssignmentWord(word)) continue;
+    if (word === "-C" || word === "-c" || word === "--git-dir" || word === "--work-tree" || word === "--namespace") {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("--git-dir=") || word.startsWith("--work-tree=") || word.startsWith("--namespace=")) continue;
+    if (word.startsWith("-")) continue;
+    return index;
+  }
+  return null;
+}
+
 function commandHasDeepInterviewWriteIntent(command: string): boolean {
   return commandInvokesApplyPatch(command)
     || extractDeepInterviewCommandRedirectTargets(command).length > 0
     || /\btee\s+(?:-a\s+)?[^\s&|;]+/.test(command)
     || /\bsed\s+(?:[^\n;&|]*\s)?-i(?:\b|['"])/.test(command)
     || /\b(?:python3?|node|perl|ruby)\b[\s\S]{0,260}\b(?:writeFileSync|writeFile|write_text|open\([^)]*["']w|File\.write|Path\()/.test(command)
-    || /\b(?:git\s+(?:checkout|switch|restore|reset|apply|am|merge|rebase)|npm\s+(?:install|i|ci)|pnpm\s+(?:install|i)|yarn\s+(?:install|add))\b/.test(command);
+    || commandHasDestructiveGitSubcommand(command)
+    || /\b(?:npm\s+(?:install|i|ci)|pnpm\s+(?:install|i)|yarn\s+(?:install|add))\b/.test(command);
 }
 
 function extractDeepInterviewCommandWriteTargets(command: string): string[] {
