@@ -3871,40 +3871,6 @@ standardMaxRounds = 15
     }
   });
 
-  it("blocks ultragoal Stop with no-active-goal recovery before completion checkpointing", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-null-goal-stop-"));
-    try {
-      await writeJson(join(cwd, ".omx", "ultragoal", "goals.json"), {
-        version: 1,
-        activeGoalId: "G002-resolve-final-independent-review-gat",
-        codexGoalMode: "aggregate",
-        codexObjective: "Complete the durable ultragoal plan in .omx/ultragoal/goals.json.",
-        goals: [
-          { id: "G001-final-review", status: "review_blocked", objective: "Resolve review." },
-          { id: "G002-resolve-final-independent-review-gat", status: "in_progress", objective: "Resolve final independent review gate." },
-        ],
-      });
-
-      const result = await dispatchCodexNativeHook({
-        hook_event_name: "Stop",
-        cwd,
-        session_id: "sess-ultragoal-null-goal-stop",
-        thread_id: "thread-ultragoal-null-goal-stop",
-        last_assistant_message: "Goal complete. get_goal returned null, so I will checkpoint G002 complete from OMX state.",
-      }, { cwd });
-
-      const output = JSON.stringify(result.outputJson);
-      assert.equal(result.outputJson?.decision, "block");
-      assert.match(output, /no active goal\/null/);
-      assert.match(output, /do not checkpoint complete or record a blocker from the empty snapshot/);
-      assert.match(output, /call create_goal/);
-      assert.match(output, /Complete the durable ultragoal plan/);
-      assert.match(output, /Hooks must not mutate Codex goal state/);
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
   it("does not block ultragoal Stop for ordinary prose about a goal to complete work", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ultragoal-ordinary-stop-"));
     try {
@@ -7025,6 +6991,25 @@ exit 0
       );
       assert.equal((blockedMcpStateMutation.outputJson as { decision?: string } | null)?.decision, "block");
 
+      for (const phase of ["planning", "replan", "autopilot:ralplan"] as const) {
+        const allowedAutopilotPlanningAlias = await preToolUse(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: "sess-di-artifact",
+            tool_name: "mcp__omx_state__state_write",
+            tool_use_id: `tool-di-mcp-state-write-autopilot-alias-${phase}`,
+            tool_input: { mode: "autopilot", current_phase: phase },
+          },
+          { cwd },
+        );
+        assert.equal(
+          allowedAutopilotPlanningAlias.outputJson,
+          null,
+          `${phase} autopilot planning handoff should not be classified as deactivation`,
+        );
+      }
+
       const allowedQuotedModeMentionInPayload = await preToolUse(
         {
           hook_event_name: "PreToolUse",
@@ -7502,6 +7487,8 @@ exit 0
         ["xargs-wrapper-write", `xargs omx state write --input ${stateDeactivationInput} --json </dev/null`],
         ["case-arm-clear", "case x in x) omx state clear --json;; esac"],
         ["case-arm-write", `case x in x) omx state write --input ${stateDeactivationInput} --json;; esac`],
+        ["case-late-arm-clear", "case y in x) :;; y) omx state clear --json;; esac"],
+        ["case-late-arm-write", `case y in x) :;; y) omx state write --input ${stateDeactivationInput} --json;; esac`],
         ["subshell-function-body-clear", "f() ( omx state clear --json ); f"],
         ["subshell-function-body-write", `f() ( omx state write --input ${stateDeactivationInput} --json ); f`],
         ["path-qualified-env-wrapper-clear", "/usr/bin/env node dist/cli/omx.js state clear --json"],
@@ -7816,6 +7803,17 @@ exit 0
       const blockedSourceGeneratedScriptCommands = [
         ["source-redirect", "printf 'omx state clear --json\n' > .omx/context/x.sh && source .omx/context/x.sh"],
         ["bash-redirect", "printf 'omx state clear --json\n' > .omx/context/x.sh && bash .omx/context/x.sh"],
+        ["direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && ./.omx/context/x.sh"],
+        ["time-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && time ./.omx/context/x.sh"],
+        ["command-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && command ./.omx/context/x.sh"],
+        ["env-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && env FOO=bar ./.omx/context/x.sh"],
+        ["timeout-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && timeout 5 ./.omx/context/x.sh"],
+        ["nohup-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && nohup ./.omx/context/x.sh"],
+        ["xargs-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && xargs ./.omx/context/x.sh"],
+        ["coproc-direct-exec", "printf '#!/bin/sh\nomx state clear --json\n' > .omx/context/x.sh && chmod +x .omx/context/x.sh && coproc ./.omx/context/x.sh"],
+        ["sh-c-generated-script", "printf 'omx state clear --json\n' > .omx/context/x.sh && sh -c '. .omx/context/x.sh'"],
+        ["sh-c-at-generated-script", "printf 'omx state clear --json\n' > .omx/context/x.sh && sh -c '. \"$@\"' ignored .omx/context/x.sh"],
+        ["sh-c-positional-generated-script", "printf 'omx state clear --json\n' > .omx/context/x.sh && sh -c '. \"$0\"' .omx/context/x.sh"],
         ["source-tee", "printf 'omx state clear --json\n' | tee .omx/context/x.sh >/dev/null && source .omx/context/x.sh"],
         ["source-variable", "tmp=.omx/context/x.sh; printf 'omx state clear --json\n' > \"$tmp\"; source \"$tmp\""],
         ["source-tee-second-target", "printf 'omx state clear --json\n' | tee .omx/context/x.sh .omx/context/y.sh >/dev/null && source .omx/context/y.sh"],
@@ -7985,6 +7983,19 @@ exit 0
       );
       assert.equal((blockedShellStdinPipe.outputJson as { decision?: string } | null)?.decision, "block");
 
+      const blockedHeredocPipeToShell = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-state-cli-heredoc-pipe-to-shell",
+          tool_input: { command: "cat <<'EOF' | bash\nomx state clear --json\nEOF" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedHeredocPipeToShell.outputJson as { decision?: string } | null)?.decision, "block");
+
       for (const [index, command] of [
         "printf 'omx state clear --json'|bash",
         "printf 'omx state clear --json' |bash",
@@ -8087,6 +8098,32 @@ exit 0
         { cwd },
       );
       assert.equal((blockedEnvSplitStringAttachedStateClear.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvSplitStringPrefixedOptionsClear = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-state-cli-env-split-string-prefixed-options-clear",
+          tool_input: { command: "env -S '-i omx state clear --json'" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvSplitStringPrefixedOptionsClear.outputJson as { decision?: string } | null)?.decision, "block");
+
+      const blockedEnvSplitStringPrefixedOptionsSplitClear = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-state-cli-env-split-string-prefixed-options-split-clear",
+          tool_input: { command: "env --split-string '-i omx state clear --json'" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedEnvSplitStringPrefixedOptionsSplitClear.outputJson as { decision?: string } | null)?.decision, "block");
 
       const blockedShellStdinStderrPipe = await preToolUse(
         {
@@ -18765,6 +18802,62 @@ exit 0
       assert.equal(result.omxEventName, "pre-tool-use");
       assert.equal(result.outputJson?.decision, "block");
       assert.match(String(result.outputJson?.reason ?? ""), /(?:Ralplan|Autopilot planning) is active .*implementation\/write tools are blocked/i);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Autopilot planning handoffs with active:true state writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-autopilot-planning-state-write-allow-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-autopilot-planning-state-write-allow";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeJson(join(stateDir, "sessions", sessionId, "skill-active-state.json"), {
+        active: true,
+        skill: "autopilot",
+        phase: "planning",
+        session_id: sessionId,
+        active_skills: [{ skill: "autopilot", phase: "planning", active: true, session_id: sessionId }],
+      });
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "planning",
+        session_id: sessionId,
+        state: {
+          handoff_artifacts: {
+            ralplan_consensus_gate: { required: true, complete: false },
+          },
+        },
+      });
+
+      const allowedPlanningHandoff = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-autopilot-planning-state-write-allow",
+          tool_name: "mcp__omx_state__state_write",
+          tool_input: { mode: "autopilot", active: true, current_phase: "planning" },
+        },
+        { cwd },
+      );
+      assert.equal(allowedPlanningHandoff.outputJson, null);
+
+      const blockedPlanningDeactivation = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-autopilot-planning-state-write-allow",
+          tool_name: "mcp__omx_state__state_write",
+          tool_input: { mode: "autopilot", active: false, current_phase: "planning" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedPlanningDeactivation.outputJson as { decision?: string } | null)?.decision, "block");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

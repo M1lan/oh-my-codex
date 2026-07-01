@@ -2742,12 +2742,10 @@ async function findActiveGoalWorkflowReconciliationRequirement(cwd: string): Pro
   }
   if (activeUltragoal) {
     const goalId = safeString(activeUltragoal.id) || "<goal-id>";
-    const codexObjective = safeString(ultragoal?.codexObjective) || safeString(activeUltragoal.objective) || "<intended ultragoal objective>";
     return {
       workflow: "ultragoal",
       command: `omx ultragoal checkpoint --goal-id ${goalId} --status complete --codex-goal-json '<get_goal JSON or path>' --evidence '<evidence>'`,
       remediation: [
-        `If get_goal returns no active goal/null while ${goalId} remains in_progress in .omx/ultragoal/goals.json, do not checkpoint complete or record a blocker from the empty snapshot; call create_goal with objective ${JSON.stringify(codexObjective)} and continue the active OMX story until real completion evidence exists.`,
         `If get_goal returns a completed task-scoped objective for the same aggregate ultragoal plan, checkpoint ${goalId} with evidence naming ${goalId} plus .omx/ultragoal/goals.json or ledger.jsonl and pass final quality-gate JSON; OMX will reconcile the completed planned scope without mutating Codex goal state.`,
         `If get_goal instead returns a different completed legacy objective and complete checkpointing fails, do not repeat --status complete in this thread.`,
         `Record the non-terminal blocker with: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<different completed get_goal JSON or path>' --evidence '<completed legacy Codex goal blocks create_goal in this thread>'.`,
@@ -3845,25 +3843,47 @@ function firstShellScriptOperand(words: string[], shellWordIndex: number): strin
 }
 
 function sourcesFileWrittenEarlierInSameCommand(cwd: string, command: string): boolean {
-  const assignments = extractCommandLiteralAssignments(command);
-  const writtenTargets = new Set<string>();
-  for (const segment of splitShellCommandSegments(stripHeredocBodiesForCommandScan(command))) {
-    const words = tokenizeShellWords(segment);
-    for (let index = 0; index < words.length; index += 1) {
-      const word = words[index] ?? "";
-      const operand = word === "source" || word === "."
-        ? normalizeSameCommandScriptTarget(cwd, firstNonOptionSourceOperand(words, index), assignments)
-        : isNestedShellCommandWord(word)
-          ? normalizeSameCommandScriptTarget(cwd, firstShellScriptOperand(words, index), assignments)
-          : null;
-      if (operand && writtenTargets.has(operand)) return true;
+  const scanCommand = (currentCommand: string, activeCommands: Set<string>, writtenTargets: Set<string>): boolean => {
+    const normalizedCommand = stripHeredocBodiesForCommandScan(normalizeShellLineContinuations(currentCommand));
+    const commandKey = normalizedCommand.trim();
+    if (!commandKey || activeCommands.has(commandKey)) return false;
+
+    const assignments = extractCommandLiteralAssignments(normalizedCommand);
+    const nextActiveCommands = new Set(activeCommands);
+    nextActiveCommands.add(commandKey);
+
+    for (const segment of splitShellCommandSegments(normalizedCommand)) {
+      const words = tokenizeShellWords(segment);
+      for (let index = 0; index < words.length; index += 1) {
+        const word = words[index] ?? "";
+        const operand = word === "source" || word === "."
+          ? normalizeSameCommandScriptTarget(cwd, firstNonOptionSourceOperand(words, index), assignments)
+          : isNestedShellCommandWord(word)
+            ? normalizeSameCommandScriptTarget(cwd, firstShellScriptOperand(words, index), assignments)
+            : null;
+        if (operand && writtenTargets.has(operand)) return true;
+      }
+
+      const commandWordIndex = findWrappedCommandPositionIndex(words, 0);
+      const directExecutionTarget = commandWordIndex === null
+        ? null
+        : normalizeSameCommandScriptTarget(cwd, words[commandWordIndex] ?? "", assignments);
+      if (directExecutionTarget && writtenTargets.has(directExecutionTarget)) return true;
+
+      for (const nestedCommand of extractNestedShellCommandStringsForStateScan(segment)) {
+        if (scanCommand(nestedCommand, nextActiveCommands, writtenTargets)) return true;
+      }
+
+      for (const target of extractDeepInterviewCommandWriteTargets(segment)) {
+        const normalizedTarget = normalizeSameCommandScriptTarget(cwd, target, assignments);
+        if (normalizedTarget) writtenTargets.add(normalizedTarget);
+      }
     }
-    for (const target of extractDeepInterviewCommandWriteTargets(segment)) {
-      const normalizedTarget = normalizeSameCommandScriptTarget(cwd, target, assignments);
-      if (normalizedTarget) writtenTargets.add(normalizedTarget);
-    }
-  }
-  return false;
+
+    return false;
+  };
+
+  return scanCommand(command, new Set(), new Set());
 }
 
 
@@ -4086,7 +4106,7 @@ function extractEnvSplitStringCommand(words: string[], startIndex: number): stri
       const operand = words[index + 1] ?? "";
       if (!operand) return "";
       const tail = words.slice(index + 2).join(" ");
-      return tail ? `${operand} ${tail}` : operand;
+      return tail ? `env ${operand} ${tail}` : `env ${operand}`;
     }
     if (token.startsWith("--split-string=") || (token.startsWith("-S") && token.length > 2)) {
       const operand = token.startsWith("--split-string=")
@@ -4094,7 +4114,7 @@ function extractEnvSplitStringCommand(words: string[], startIndex: number): stri
         : token.slice(2);
       if (!operand) return "";
       const tail = words.slice(index + 1).join(" ");
-      return tail ? `${operand} ${tail}` : operand;
+      return tail ? `env ${operand} ${tail}` : `env ${operand}`;
     }
     if (isShellAssignmentWord(token)) continue;
     if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir" || token === "-a" || token === "--argv0") {
@@ -4750,6 +4770,10 @@ function findCaseArmCommandIndex(words: string[], startIndex: number): number | 
     return index + 1;
   }
 
+  if (words[index + 1] === ")") {
+    return index + 2;
+  }
+
   return null;
 }
 
@@ -4785,6 +4809,45 @@ function skipShellCommandPositionPrefixWords(words: string[], startIndex: number
     break;
   }
   return commandWordIndex;
+}
+
+function findWrappedCommandPositionIndex(words: string[], startIndex: number): number | null {
+  let commandWordIndex = skipShellCommandPositionPrefixWords(words, startIndex);
+  for (let unwrapCount = 0; unwrapCount < 8; unwrapCount += 1) {
+    const commandWord = words[commandWordIndex] ?? "";
+    if (!commandWord) return null;
+
+    const commandWordBase = shellWordBaseName(commandWord);
+    const operandIndex =
+      commandWordBase === "env"
+        ? findEnvDispatchOperandIndex(words, commandWordIndex + 1)
+        : commandWordBase === "command"
+          ? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+          : commandWordBase === "exec"
+            ? findExecDispatchOperandIndex(words, commandWordIndex + 1)
+            : commandWordBase === "time"
+              ? findTimeDispatchOperandIndex(words, commandWordIndex + 1)
+              : commandWordBase === "timeout"
+                ? findTimeoutDispatchOperandIndex(words, commandWordIndex + 1)
+                : commandWordBase === "nohup"
+                  ? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+                  : commandWordBase === "coproc"
+                    ? findCoprocDispatchOperandIndex(words, commandWordIndex + 1)
+                    : commandWordBase === "xargs"
+                      ? findXargsDispatchOperandIndex(words, commandWordIndex + 1)
+                      : commandWordBase === "nice"
+                        ? findNiceDispatchOperandIndex(words, commandWordIndex + 1)
+                        : commandWordBase === "stdbuf"
+                          ? findStdbufDispatchOperandIndex(words, commandWordIndex + 1)
+                          : null;
+    if (operandIndex === null) return commandWordIndex;
+
+    const nextCommandWordIndex = skipShellCommandPositionPrefixWords(words, operandIndex);
+    if (nextCommandWordIndex === commandWordIndex) return commandWordIndex;
+    commandWordIndex = nextCommandWordIndex;
+  }
+
+  return null;
 }
 
 function readOmxStateCommandFromSegmentWords(
@@ -5060,7 +5123,12 @@ function extractNestedShellCommandStringsForStateScan(command: string): string[]
       const commandStringIndex = findShellCommandStringArgIndex(words, index + 1);
       if (commandStringIndex !== null) {
         const nestedCommand = words[commandStringIndex];
-        if (nestedCommand) nested.push(nestedCommand);
+        if (nestedCommand) {
+          nested.push(nestedCommand);
+          const positionalArgs = words.slice(commandStringIndex + 1);
+          const expandedNestedCommand = expandShellPositionalParameters(nestedCommand, positionalArgs);
+          if (expandedNestedCommand !== nestedCommand) nested.push(expandedNestedCommand);
+        }
       }
     }
     if (word === "eval") {
@@ -5182,6 +5250,89 @@ function isShellOptionWithSeparateValue(option: string): boolean {
 function isDynamicNestedCommandString(command: string): boolean {
   return /(?:^|[^\\])\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\}|\()/.test(command)
     || /(?:^|[^\\])`/.test(command);
+}
+
+function shellQuoteForStateScan(value: string): string {
+  if (value === "") return "''";
+  return `'${value.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function expandShellPositionalParameters(command: string, positionalArgs: string[]): string {
+  if (!command.includes("$") || positionalArgs.length === 0) return command;
+
+  let expanded = "";
+  let replaced = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "\\" && index + 1 < command.length) {
+      expanded += char;
+      index += 1;
+      expanded += command[index] ?? "";
+      continue;
+    }
+    if (char !== "$") {
+      expanded += char;
+      continue;
+    }
+
+    const next = command[index + 1] ?? "";
+    if (next === "{") {
+      let endIndex = index + 2;
+      let digits = "";
+      while (endIndex < command.length) {
+        const bodyChar = command[endIndex] ?? "";
+        if (bodyChar === "}") break;
+        digits += bodyChar;
+        endIndex += 1;
+      }
+      if (command[endIndex] === "}" && /^\d+$/.test(digits)) {
+        const positionalIndex = Number.parseInt(digits, 10);
+        const replacement = positionalArgs[positionalIndex];
+        if (replacement !== undefined) {
+          expanded += shellQuoteForStateScan(replacement);
+          replaced = true;
+          index = endIndex;
+          continue;
+        }
+      }
+      if (command[endIndex] === "}" && (digits === "@" || digits === "*")) {
+        const expansionArgs = positionalArgs.slice(1);
+        const replacement = expansionArgs.map((arg) => shellQuoteForStateScan(arg)).join(" ");
+        expanded += replacement;
+        replaced = true;
+        index = endIndex;
+        continue;
+      }
+    } else if (next === "@" || next === "*") {
+      const replacement = positionalArgs.slice(1).map((arg) => shellQuoteForStateScan(arg)).join(" ");
+      if (replacement) {
+        expanded += replacement;
+        replaced = true;
+        index += 1;
+        continue;
+      }
+    } else if (/[0-9]/.test(next)) {
+      let endIndex = index + 1;
+      let digits = "";
+      while (endIndex < command.length && /[0-9]/.test(command[endIndex] ?? "")) {
+        digits += command[endIndex] ?? "";
+        endIndex += 1;
+      }
+      const positionalIndex = Number.parseInt(digits, 10);
+      const replacement = positionalArgs[positionalIndex];
+      if (replacement !== undefined) {
+        expanded += shellQuoteForStateScan(replacement);
+        replaced = true;
+        index = endIndex - 1;
+        continue;
+      }
+    }
+
+    expanded += char;
+  }
+
+  return replaced ? expanded : command;
 }
 
 function splitShellCommandSegments(command: string): string[] {
@@ -5430,11 +5581,12 @@ function isPlanningPhaseDeactivationPayload(payload: Record<string, unknown>): b
   if (!mode) return false;
   if (mode !== "deep-interview" && mode !== "ralplan") {
     if (!isTrackedWorkflowMode(mode)) return false;
-    if (payload.active === true) return true;
     const currentPhase = safeString(payload.current_phase ?? payload.currentPhase).trim().toLowerCase();
-    if (mode === "autopilot" && (currentPhase === "deep-interview" || currentPhase === "ralplan" || currentPhase === "ultragoal")) {
-      return false;
+    const normalizedAutopilotPhase = normalizeAutopilotPhase(currentPhase);
+    if (mode === "autopilot" && (normalizedAutopilotPhase === "deep-interview" || normalizedAutopilotPhase === "ralplan" || normalizedAutopilotPhase === "ultragoal")) {
+      return payload.active === false;
     }
+    if (payload.active === true) return true;
     return inferTerminalLifecycleOutcome(payload, { includeQuestionEnforcement: false }) === undefined;
   }
 
