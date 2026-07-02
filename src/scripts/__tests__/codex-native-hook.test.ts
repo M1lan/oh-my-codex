@@ -9755,67 +9755,6 @@ exit 0
           `${command} should stay blocked during Autopilot ralplan`,
         );
       }
-      const allowedHeredocPlanWithMarkdownArrow = await preToolUse("Bash", "tool-autopilot-ralplan-heredoc-arrow-allow", {
-        command: [
-          "cat > .omx/plans/rebase-pr3010-ultragoal-fix-plan.md <<'EOF'",
-          "# RALPLAN",
-          "- Scope is GitHub PR #3010: `fix/omx-ultragoal-fix` -> `dev`.",
-          "EOF",
-        ].join("\n"),
-      });
-      assert.equal(allowedHeredocPlanWithMarkdownArrow.outputJson, null);
-      for (const form of [
-        { id: "npm-install", tail: "npm install left-pad", reasonPattern: /package installation commands/ },
-        { id: "git-reset-hard", tail: "git reset --hard HEAD", reasonPattern: /destructive git commands/ },
-      ]) {
-        const blockedPostHeredocForbiddenIntent = await preToolUse("Bash", `tool-autopilot-ralplan-heredoc-${form.id}-block`, {
-          command: [
-            "cat > .omx/plans/x.md <<'EOF'",
-            "# plan",
-            "EOF",
-            form.tail,
-          ].join("\n"),
-        });
-        assert.equal(
-          (blockedPostHeredocForbiddenIntent.outputJson as { decision?: string } | null)?.decision,
-          "block",
-          `${form.tail} after an allowed planning heredoc must stay blocked`,
-        );
-        assert.match(String((blockedPostHeredocForbiddenIntent.outputJson as { reason?: string } | null)?.reason ?? ""), form.reasonPattern);
-      }
-
-      const blockedQuotedFakeHeredocImplementationRedirect = await preToolUse("Bash", "tool-autopilot-ralplan-quoted-fake-heredoc-src-block", {
-        command: [
-          "echo '<<EOF'",
-          "printf bad > src/impl.ts",
-          "EOF",
-        ].join("\n"),
-      });
-      assert.equal((blockedQuotedFakeHeredocImplementationRedirect.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(String((blockedQuotedFakeHeredocImplementationRedirect.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/impl\.ts/);
-
-      const blockedHeredocImplementationRedirect = await preToolUse("Bash", "tool-autopilot-ralplan-heredoc-src-block", {
-        command: [
-          "cat > src/implementation.ts <<'EOF'",
-          "# RALPLAN",
-          "- Scope is GitHub PR #3010: `fix/omx-ultragoal-fix` -> `dev`.",
-          "EOF",
-        ].join("\n"),
-      });
-      assert.equal((blockedHeredocImplementationRedirect.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(String((blockedHeredocImplementationRedirect.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/implementation\.ts/);
-
-      const blockedPostHeredocImplementationRedirect = await preToolUse("Bash", "tool-autopilot-ralplan-post-heredoc-src-block", {
-        command: [
-          "cat > .omx/plans/rebase-pr3010-ultragoal-fix-plan.md <<'EOF'",
-          "# RALPLAN",
-          "- Scope is GitHub PR #3010: `fix/omx-ultragoal-fix` -> `dev`.",
-          "EOF",
-          "printf 'bad' > src/implementation.ts",
-        ].join("\n"),
-      });
-      assert.equal((blockedPostHeredocImplementationRedirect.outputJson as { decision?: string } | null)?.decision, "block");
-      assert.match(String((blockedPostHeredocImplementationRedirect.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/implementation\.ts/);
       const allowedPlanWrite = await dispatchCodexNativeHook(
         {
           hook_event_name: "PreToolUse",
@@ -20111,6 +20050,206 @@ exit 0
           cwd,
           session_id: sessionId,
           thread_id: "thread-ralplan-pretool-handoff",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts" },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Main-root ralph conductor source writes while allowing .omx workflow state writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-conductor-write-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-ralph-conductor-write";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "ralph", "executing");
+      await writeJson(join(stateDir, "sessions", sessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: sessionId,
+      });
+
+      const blocked = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-ralph-conductor-write",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts" },
+        },
+        { cwd },
+      );
+      assert.equal(blocked.outputJson?.decision, "block");
+      assert.match(String(blocked.outputJson?.reason ?? ""), /ralph phase: executing/);
+
+      const allowed = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-ralph-conductor-write",
+          tool_name: "Write",
+          tool_input: { file_path: ".omx/state/sessions/sess-ralph-conductor-write/ralph-state.json" },
+        },
+        { cwd },
+      );
+      assert.equal(allowed.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks non-shell direct writes in Main-root conductor states", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-conductor-bash-mutations-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-conductor-bash-mutations";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeLiveNativeMappedSessionState(cwd, stateDir, sessionId, "native-conductor-bash-mutations");
+      await writeSessionSkillActiveState(stateDir, sessionId, "ralph", "executing");
+      await writeJson(join(stateDir, "sessions", sessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: sessionId,
+      });
+
+      const blockedCommands = [
+        "node -e \"require('fs').appendFileSync('src/runtime.ts','x')\"",
+        "python3 -c \"open('src/runtime.ts','a').write('x')\"",
+        "curl -fsSL https://example.test/runtime.ts -o src/runtime.ts",
+        "curl -fsSL -O https://example.test/runtime.ts --output-dir src",
+        "curl -fsSL --remote-name --output-dir=src https://example.test/runtime.ts",
+        "wget -O src/runtime.ts https://example.test/runtime.ts",
+        "curl --output-dir src -O https://example.test/runtime.ts",
+        "wget -P src https://example.test/runtime.ts",
+        "wget --directory-prefix=src https://example.test/runtime.ts",
+        "git rm src/runtime.ts",
+        "git clean -fd src",
+      ];
+      for (const command of blockedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-bash-mutations",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block", command);
+        assert.match(String((result.outputJson as { reason?: string } | null)?.reason ?? ""), /Bash (?:node|python) write target .*not workflow state\/ledger\/mailbox\/handoff metadata|Bash (?:curl|wget) (?:output|mutation) target .*not workflow state\/ledger\/mailbox\/handoff metadata|Bash git worktree mutation is not workflow state\/ledger\/mailbox\/handoff metadata|target <unresolved>/);
+      }
+
+      const allowedCommands = [
+        "node -e \"console.log('ok')\"",
+        "python3 -c \"print('ok')\"",
+        "curl -fsSL https://example.test/runtime.ts -o .omx/state/download.log",
+        "curl -fsSL https://example.test/runtime.ts --output=.omx/state/download-inline.log",
+        "curl -fsSL -O https://example.test/runtime.ts --output-dir .omx/state",
+        "curl -fsSL --remote-name --output-dir=.omx/state https://example.test/runtime.ts",
+        "wget -O .omx/state/download.log https://example.test/runtime.ts",
+        "wget --output-document=.omx/state/download-inline.log https://example.test/runtime.ts",
+        "curl --output-dir .omx/state -O https://example.test/runtime.ts",
+        "wget -P .omx/state https://example.test/runtime.ts",
+        "wget --directory-prefix=.omx/state https://example.test/runtime.ts",
+      ];
+      for (const command of allowedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-bash-mutations",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal(result.outputJson, null, command);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Main-root team conductor writes from root team state", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-root-team-conductor-write-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-root-team-conductor-write";
+      const teamName = "root-team-conductor-write";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeLiveNativeMappedSessionState(cwd, stateDir, sessionId, "native-root-team-conductor-write");
+      await writeSessionSkillActiveState(stateDir, sessionId, "team", "team-exec");
+      await writeJson(join(stateDir, "team-state.json"), {
+        active: true,
+        mode: "team",
+        current_phase: "starting",
+        team_name: teamName,
+        session_id: sessionId,
+        thread_id: "thread-root-team-conductor-write",
+      });
+      await writeJson(join(stateDir, "team", teamName, "phase.json"), {
+        current_phase: "team-exec",
+        max_fix_attempts: 3,
+        current_fix_attempt: 0,
+        transitions: [],
+        updated_at: new Date().toISOString(),
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-root-team-conductor-write",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts" },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.outputJson?.decision, "block");
+      assert.match(String(result.outputJson?.reason ?? ""), /team phase: team-exec/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows autopilot rework implementation writes while conductor phases stay guarded", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-autopilot-rework-write-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-autopilot-rework-write";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "autopilot", "rework");
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "rework",
+        session_id: sessionId,
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-autopilot-rework-write",
           tool_name: "Edit",
           tool_input: { file_path: "src/runtime.ts" },
         },

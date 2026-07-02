@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "fs";
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
-import { extname, join, relative, resolve } from "path";
+import { extname, isAbsolute, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import { readModeStateForActiveDecision, readModeStateForSession, updateModeState } from "../modes/base.js";
 import { redactAuthSecrets } from "../auth/redact.js";
@@ -220,6 +220,11 @@ function safeString(value: unknown): string {
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function hasTeamWorkerEnvironment(): boolean {
+  return safeString(process.env.OMX_TEAM_INTERNAL_WORKER).trim() !== ""
+    || safeString(process.env.OMX_TEAM_WORKER).trim() !== "";
 }
 
 function resolveHudReconcileSessionId(
@@ -3565,11 +3570,14 @@ function commandHasDestructiveGitSubcommand(command: string): boolean {
     "am",
     "apply",
     "checkout",
+    "clean",
     "merge",
     "rebase",
     "reset",
     "restore",
+    "rm",
     "switch",
+    "clean",
   ]);
 
   for (const segment of splitShellCommandSegments(stripHeredocBodiesForCommandScan(command))) {
@@ -6205,6 +6213,594 @@ async function buildPlanningRootPointerConflictPreToolUseOutput(
   return blocked ? buildRalplanRootPointerConflictBlock(ralplanState) : null;
 }
 
+interface ActiveConductorState {
+  mode: string;
+  phase: string;
+}
+
+async function isTypedSubagentOrWorkerForPreToolUse(
+  payload: CodexHookPayload,
+  cwd: string,
+  stateDir: string,
+  sessionId: string,
+): Promise<boolean> {
+  if (hasTeamWorkerEnvironment()) return true;
+  const threadId = readPayloadThreadId(payload);
+  const nativeSessionId = readPayloadSessionId(payload);
+  const currentSession = await readUsableSessionStateFromStateDir(cwd, stateDir).catch(() => null);
+  const canonicalLeaderNativeSessionId = safeString(currentSession?.native_session_id).trim();
+  return isNativeSubagentHook(cwd, sessionId, nativeSessionId, threadId, canonicalLeaderNativeSessionId);
+}
+
+function isActiveConductorModeState(state: Record<string, unknown> | null, mode: string, sessionId: string): boolean {
+  if (!state || state.active !== true) return false;
+  const stateMode = safeString(state.mode).trim();
+  if (stateMode && stateMode !== mode) return false;
+  const stateSessionId = safeString(state.session_id).trim();
+  if (sessionId && stateSessionId && stateSessionId !== sessionId) return false;
+  return isNonTerminalPhase(state.current_phase ?? state.currentPhase);
+}
+
+async function readActiveMainRootConductorStateForPreToolUse(
+  payload: CodexHookPayload,
+  cwd: string,
+  stateDir: string,
+  resolvedSessionId?: string,
+): Promise<ActiveConductorState | null> {
+  const sessionId = safeString(resolvedSessionId ?? readPayloadSessionId(payload)).trim();
+  const threadId = readPayloadThreadId(payload);
+  if (!sessionId) return null;
+  if (await isTypedSubagentOrWorkerForPreToolUse(payload, cwd, stateDir, sessionId)) return null;
+
+  const canonicalState = await readVisibleSkillActiveStateForStateDir(stateDir, sessionId);
+  if (!canonicalState) return null;
+  const activeEntries = listActiveSkills(canonicalState).filter((entry) => (
+    matchesSkillStopContext(entry, canonicalState, sessionId, threadId)
+  ));
+  const hasActiveSkill = (skill: string): boolean => activeEntries.some((entry) => entry.skill === skill);
+
+  if (hasActiveSkill("ralph")) {
+    const state = await readStopSessionPinnedState("ralph-state.json", cwd, sessionId, stateDir);
+    if (isActiveConductorModeState(state, "ralph", sessionId)) {
+      const phase = safeString(state?.current_phase ?? state?.currentPhase) || "active";
+      if (phase.toLowerCase() !== "starting") return { mode: "ralph", phase };
+    }
+  }
+
+  if (hasActiveSkill("team") && !hasTeamWorkerEnvironment()) {
+    const teamStateForStop = await readTeamModeStateForStop(cwd, stateDir, sessionId, threadId);
+    const state = teamStateForStop?.state ?? null;
+    if (isActiveConductorModeState(state, "team", sessionId)) {
+      const teamName = safeString(state?.team_name).trim();
+      const phase = teamName ? (await readTeamPhase(teamName, cwd).catch(() => null))?.current_phase ?? state?.current_phase : state?.current_phase;
+      if (isNonTerminalPhase(phase)) return { mode: "team", phase: safeString(phase) || "active" };
+    }
+  }
+
+  return null;
+}
+
+const CONDUCTOR_ALLOWED_METADATA_PREFIXES = [
+  ".omx/state",
+  ".omx/ultragoal",
+  ".omx/ralph",
+  ".omx/team",
+  ".omx/mailbox",
+  ".omx/handoff",
+  ".omx/handoffs",
+  ".omx/goals",
+  ".omx/notepad",
+  ".omx/wiki",
+  ".beads",
+] as const;
+
+function normalizeRepoRelativePath(cwd: string, rawPath: string): string | null {
+  const candidate = rawPath.trim().replace(/^['"]|['"]$/g, "");
+  if (!candidate || isUnresolvedVariableTarget(candidate)) return null;
+  const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate);
+  let relativePath = relative(cwd, absolute).replace(/\\/g, "/");
+  if (!relativePath || relativePath === ".") return null;
+  if (relativePath.startsWith("../") || relativePath === "..") {
+    relativePath = candidate.replace(/\\/g, "/");
+  }
+  return relativePath.replace(/^\.\//, "");
+}
+
+function isAllowedConductorMetadataPath(cwd: string, rawPath: string): boolean {
+  const relativePath = normalizeRepoRelativePath(cwd, rawPath);
+  if (!relativePath) return false;
+  if (relativePath === ".omx/context/ralplan-wrapper-notes.md") return true;
+  return CONDUCTOR_ALLOWED_METADATA_PREFIXES.some((prefix) => (
+    relativePath === prefix || relativePath.startsWith(`${prefix}/`)
+  ));
+}
+
+function describeConductorBlockedWrite(toolName: string, blockedPath: string | undefined, pathCount: number): string {
+  if (pathCount === 0) {
+    const operationClass = isApplyPatchToolName(toolName) ? "apply_patch target extraction failed" : `${toolName} path`;
+    return `${operationClass} target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`;
+  }
+  const operationClass = isApplyPatchToolName(toolName) ? "apply_patch target" : `${toolName} path`;
+  return `${operationClass} target ${blockedPath ?? "<unresolved>"} is not workflow state/ledger/mailbox/handoff metadata`;
+}
+
+const CONDUCTOR_BASH_MUTATION_COMMANDS = new Set([
+  "cp",
+  "mv",
+  "rm",
+  "touch",
+  "mkdir",
+  "rmdir",
+  "install",
+  "ln",
+  "chmod",
+  "chown",
+  "chgrp",
+  "truncate",
+  "dd",
+  "rsync",
+]);
+
+const CONDUCTOR_BASH_TRANSPARENT_WRAPPERS = new Set([
+  "builtin",
+  "noglob",
+]);
+
+const CONDUCTOR_BASH_DOWNLOADER_COMMANDS = new Set([
+  "curl",
+  "wget",
+]);
+
+const CONDUCTOR_BASH_OPTIONS_WITH_VALUES = new Set([
+  "-S",
+  "--suffix",
+  "-t",
+  "--target-directory",
+  "-m",
+  "--mode",
+  "-o",
+  "--owner",
+  "-g",
+  "--group",
+  "--reference",
+  "--preserve",
+  "--size",
+  "-if",
+  "if",
+  "-of",
+  "of",
+]);
+
+interface ConductorBashMutation {
+  command: string;
+  targets: string[];
+}
+
+interface ConductorInterpreterWrite {
+  runtime: string;
+  targets: string[];
+  unresolved: boolean;
+}
+
+function extractConductorInterpreterWrites(command: string): ConductorInterpreterWrite[] {
+  const writes: ConductorInterpreterWrite[] = [];
+  const scanCommand = normalizeShellLineContinuations(command);
+
+  for (const match of scanCommand.matchAll(/\bnode\b[\s\S]{0,520}\b(?:appendFileSync|writeFileSync|appendFile|writeFile|createWriteStream)\s*\(\s*(["'])([^"']+)\1/g)) {
+    const target = safeString(match[2]).trim();
+    writes.push({ runtime: "node", targets: target ? [target] : [], unresolved: !target });
+  }
+  if (/\bnode\b[\s\S]{0,520}\b(?:appendFileSync|writeFileSync|appendFile|writeFile|createWriteStream)\s*\(/.test(scanCommand)
+    && !writes.some((write) => write.runtime === "node")) {
+    writes.push({ runtime: "node", targets: [], unresolved: true });
+  }
+
+  for (const match of scanCommand.matchAll(/\bpython3?\b[\s\S]{0,520}\bopen\s*\(\s*(["'])([^"']+)\1\s*,\s*(["'])([^"']*[wax+][^"']*)\3/g)) {
+    const target = safeString(match[2]).trim();
+    writes.push({ runtime: "python", targets: target ? [target] : [], unresolved: !target });
+  }
+  for (const match of scanCommand.matchAll(/\bpython3?\b[\s\S]{0,520}\bPath\s*\(\s*(["'])([^"']+)\1\s*\)\s*\.\s*(?:write_text|write_bytes)\s*\(/g)) {
+    const target = safeString(match[2]).trim();
+    writes.push({ runtime: "python", targets: target ? [target] : [], unresolved: !target });
+  }
+  if (/\bpython3?\b[\s\S]{0,520}\b(?:open\s*\([^)]*,\s*["'][^"']*[wax+]|Path\s*\([^)]*\)\s*\.\s*(?:write_text|write_bytes))/.test(scanCommand)
+    && !writes.some((write) => write.runtime === "python")) {
+    writes.push({ runtime: "python", targets: [], unresolved: true });
+  }
+
+  return writes;
+}
+
+function commandNameFromShellWord(word: string): string {
+  const base = word.trim().split(/[\\/]/).pop() ?? word.trim();
+  return base.toLowerCase();
+}
+
+function isShellCommandSeparator(word: string): boolean {
+  return word === "&&" || word === "||" || word === ";" || word === "&" || word === "|" || word === "|&";
+}
+
+function isEnvironmentAssignmentWord(word: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
+function findSudoDispatchOperandIndex(words: string[], startIndex: number): number | null {
+  for (let index = startIndex; index < words.length; index += 1) {
+    const token = words[index] ?? "";
+    if (!token || token === "--") continue;
+    if (isShellAssignmentWord(token)) continue;
+    if (
+      token === "-u"
+      || token === "--user"
+      || token === "-g"
+      || token === "--group"
+      || token === "-h"
+      || token === "--host"
+      || token === "-p"
+      || token === "--prompt"
+      || token === "-C"
+      || token === "--close-from"
+    ) {
+      index += 1;
+      continue;
+    }
+    if (
+      token.startsWith("--user=")
+      || token.startsWith("--group=")
+      || token.startsWith("--host=")
+      || token.startsWith("--prompt=")
+      || token.startsWith("--close-from=")
+      || /^-[ughpC].+/.test(token)
+    ) {
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+    return index;
+  }
+  return null;
+}
+
+function findConductorWrapperOperandIndex(commandName: string, words: string[], startIndex: number): number | null | undefined {
+  switch (commandName) {
+    case "env":
+      return findEnvDispatchOperandIndex(words, startIndex);
+    case "command":
+      return findCommandDispatchOperandIndex(words, startIndex);
+    case "exec":
+      return findExecDispatchOperandIndex(words, startIndex);
+    case "sudo":
+      return findSudoDispatchOperandIndex(words, startIndex);
+    case "nohup":
+      return findCommandDispatchOperandIndex(words, startIndex);
+    case "time":
+      return findTimeDispatchOperandIndex(words, startIndex);
+    case "timeout":
+      return findTimeoutDispatchOperandIndex(words, startIndex);
+    case "nice":
+      return findNiceDispatchOperandIndex(words, startIndex);
+    case "stdbuf":
+      return findStdbufDispatchOperandIndex(words, startIndex);
+    default:
+      return undefined;
+  }
+}
+
+function collectConductorDownloaderOutputTargets(
+  commandName: string,
+  words: string[],
+  commandIndex: number,
+): { sawOutputFlag: boolean; targets: string[] } {
+  const targets: string[] = [];
+  let sawOutputFlag = false;
+  let sawCurlRemoteName = false;
+  const curlOutputDirs: string[] = [];
+
+  const pushTarget = (rawTarget: string): void => {
+    const target = safeString(rawTarget).trim();
+    if (target) targets.push(target);
+  };
+
+  for (let index = commandIndex + 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word || isShellCommandSeparator(word)) break;
+    if (isEnvironmentAssignmentWord(word)) continue;
+
+    const inlineCurlOutput = commandName === "curl" ? word.match(/^--output=(.+)$/) : null;
+    const inlineWgetOutput = commandName === "wget" ? word.match(/^--output-document=(.+)$/) : null;
+    const inlineWgetDirectoryPrefix = commandName === "wget" ? word.match(/^--directory-prefix=(.+)$/) : null;
+    const inlineCurlOutputDir = commandName === "curl" ? word.match(/^--output-dir=(.+)$/) : null;
+    const inlineTarget = inlineCurlOutput?.[1] ?? inlineWgetOutput?.[1] ?? inlineWgetDirectoryPrefix?.[1];
+    if (inlineTarget !== undefined) {
+      sawOutputFlag = true;
+      pushTarget(inlineTarget);
+      continue;
+    }
+    if (inlineCurlOutputDir?.[1] !== undefined) {
+      curlOutputDirs.push(inlineCurlOutputDir[1]);
+      continue;
+    }
+
+    if (commandName === "curl" && (word === "-O" || word === "--remote-name")) {
+      sawCurlRemoteName = true;
+      continue;
+    }
+
+    const separateOutputFlag = (commandName === "curl" && (word === "-o" || word === "--output"))
+      || (commandName === "wget" && (word === "-O" || word === "--output-document" || word === "-P" || word === "--directory-prefix"));
+    if (!separateOutputFlag) {
+      if (commandName === "curl" && word === "--output-dir") {
+        const nextWord = words[index + 1] ?? "";
+        if (nextWord && !isShellCommandSeparator(nextWord)) {
+          curlOutputDirs.push(nextWord);
+          index += 1;
+        }
+      }
+      continue;
+    }
+
+    sawOutputFlag = true;
+    const nextWord = words[index + 1] ?? "";
+    if (nextWord && !isShellCommandSeparator(nextWord)) {
+      pushTarget(nextWord);
+      index += 1;
+    }
+  }
+
+  if (commandName === "curl" && sawCurlRemoteName && curlOutputDirs.length > 0) {
+    sawOutputFlag = true;
+    targets.push(...curlOutputDirs.map((target) => safeString(target).trim()).filter(Boolean));
+  }
+
+  return { sawOutputFlag, targets };
+}
+
+function collectConductorMutationCommandTargets(commandName: string, words: string[], commandIndex: number): string[] {
+  const targets: string[] = [];
+  let positionalCount = 0;
+  for (let index = commandIndex + 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (!word || isShellCommandSeparator(word)) break;
+    if (isEnvironmentAssignmentWord(word)) continue;
+
+    if (commandName === "dd") {
+      const ofMatch = word.match(/^of=(.+)$/);
+      if (ofMatch) targets.push(safeString(ofMatch[1]).trim());
+      continue;
+    }
+
+    if (word === "--") continue;
+    if (word.startsWith("--")) {
+      const [option, inlineValue] = word.split("=", 2);
+      if (CONDUCTOR_BASH_OPTIONS_WITH_VALUES.has(option) && inlineValue === undefined) index += 1;
+      if ((option === "--target-directory" || option === "--backup" || option === "--suffix" || option === "--reference") && inlineValue) {
+        targets.push(inlineValue);
+      }
+      continue;
+    }
+    if (word.startsWith("-") && word.length > 1) {
+      if (CONDUCTOR_BASH_OPTIONS_WITH_VALUES.has(word)) index += 1;
+      continue;
+    }
+    positionalCount += 1;
+    if (
+      (commandName === "chmod" || commandName === "chown" || commandName === "chgrp")
+      && positionalCount === 1
+    ) {
+      continue;
+    }
+    targets.push(word);
+  }
+  return targets;
+}
+
+function extractConductorBashMutations(command: string): ConductorBashMutation[] {
+  const mutations: ConductorBashMutation[] = [];
+  for (const segment of splitShellCommandSegments(stripHeredocBodiesForCommandScan(command))) {
+    const words = tokenizeShellWords(segment);
+    let commandStart = true;
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index] ?? "";
+      if (!word) continue;
+      if (isShellCommandSeparator(word)) {
+        commandStart = true;
+        continue;
+      }
+      if (commandStart && isEnvironmentAssignmentWord(word)) continue;
+      if (commandStart && word.startsWith("-")) continue;
+      if (!commandStart) continue;
+
+      const commandName = commandNameFromShellWord(word);
+      if (CONDUCTOR_BASH_TRANSPARENT_WRAPPERS.has(commandName)) {
+        continue;
+      }
+      const wrapperOperandIndex = findConductorWrapperOperandIndex(commandName, words, index + 1);
+      if (wrapperOperandIndex !== undefined) {
+        if (wrapperOperandIndex === null) {
+          mutations.push({ command: commandName, targets: [] });
+          commandStart = false;
+        } else {
+          index = wrapperOperandIndex - 1;
+        }
+        continue;
+      }
+      if (CONDUCTOR_BASH_DOWNLOADER_COMMANDS.has(commandName)) {
+        const downloaderTargets = collectConductorDownloaderOutputTargets(commandName, words, index);
+        if (downloaderTargets.sawOutputFlag) {
+          mutations.push({
+            command: commandName,
+            targets: downloaderTargets.targets,
+          });
+        }
+      } else if (CONDUCTOR_BASH_MUTATION_COMMANDS.has(commandName)) {
+        mutations.push({
+          command: commandName,
+          targets: collectConductorMutationCommandTargets(commandName, words, index),
+        });
+      }
+      commandStart = false;
+    }
+  }
+  return mutations;
+}
+
+const CONDUCTOR_BASH_MAX_NESTING_DEPTH = 5;
+
+function evaluateConductorBashWrite(
+  cwd: string,
+  command: string,
+  depth = 0,
+): { allowed: boolean; blockedDetail?: string } {
+  const commandWithHeredocBodies = normalizeShellLineContinuations(command);
+  const normalizedCommand = stripHeredocBodiesForCommandScan(commandWithHeredocBodies);
+  if (depth > CONDUCTOR_BASH_MAX_NESTING_DEPTH) {
+    return {
+      allowed: false,
+      blockedDetail: "Bash nested shell depth exceeded Main-root Conductor validation limits",
+    };
+  }
+  if (hasDynamicNestedShellExecution(normalizedCommand)) {
+    return {
+      allowed: false,
+      blockedDetail: "Bash nested shell execution is dynamic and cannot be validated for Main-root Conductor writes",
+    };
+  }
+
+  const shellMutations = extractConductorBashMutations(normalizedCommand);
+  if (shellMutations.length > 0) {
+    for (const mutation of shellMutations) {
+      if (mutation.targets.length === 0) {
+        return {
+          allowed: false,
+          blockedDetail: `Bash ${mutation.command} mutation target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`,
+        };
+      }
+      const blockedTarget = mutation.targets.find((target) => !isAllowedConductorMetadataPath(cwd, target));
+      if (blockedTarget) {
+        return {
+          allowed: false,
+          blockedDetail: `Bash ${mutation.command} mutation target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+        };
+      }
+    }
+  }
+
+  for (const nestedCommand of extractNestedShellCommandStringsForStateScan(normalizedCommand)) {
+    const nestedDecision = evaluateConductorBashWrite(cwd, nestedCommand, depth + 1);
+    if (!nestedDecision.allowed) return nestedDecision;
+  }
+
+  if (commandHasDestructiveGitSubcommand(normalizedCommand)) {
+    return {
+      allowed: false,
+      blockedDetail: "Bash git worktree mutation is not workflow state/ledger/mailbox/handoff metadata",
+    };
+  }
+  if (commandHasPackageInstallIntent(normalizedCommand)) {
+    return {
+      allowed: false,
+      blockedDetail: "Bash package manager install is not workflow state/ledger/mailbox/handoff metadata",
+    };
+  }
+
+  const interpreterWrites = extractConductorInterpreterWrites(commandWithHeredocBodies);
+  for (const write of interpreterWrites) {
+    if (write.unresolved || write.targets.length === 0) {
+      return {
+        allowed: false,
+        blockedDetail: `Bash ${write.runtime} write target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`,
+      };
+    }
+    const blockedTarget = write.targets.find((target) => !isAllowedConductorMetadataPath(cwd, target));
+    if (blockedTarget) {
+      return {
+        allowed: false,
+        blockedDetail: `Bash ${write.runtime} write target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+      };
+    }
+  }
+
+  if (!commandHasDeepInterviewWriteIntent(commandWithHeredocBodies)) return { allowed: true };
+  const targets = extractDeepInterviewCommandWriteTargets(commandWithHeredocBodies);
+  if (commandInvokesApplyPatch(normalizedCommand) && targets.length === 0) {
+    return {
+      allowed: false,
+      blockedDetail: "apply_patch target extraction failed for Main-root Conductor write",
+    };
+  }
+  if (targets.length === 0) {
+    return {
+      allowed: false,
+      blockedDetail: "Bash write intent target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata",
+    };
+  }
+  const blockedTarget = targets.find((target) => !isAllowedConductorMetadataPath(cwd, target));
+  if (blockedTarget) {
+    const operationClass = /\btee\s+(?:-a\s+)?/.test(commandWithHeredocBodies) ? "Bash tee write" : "Bash write";
+    return {
+      allowed: false,
+      blockedDetail: `${operationClass} target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+    };
+  }
+  return { allowed: true };
+}
+
+function isAllowedConductorBashWrite(cwd: string, command: string): boolean {
+  return evaluateConductorBashWrite(cwd, command).allowed;
+}
+
+function buildConductorBashBlockedDetail(cwd: string, command: string): string {
+  return evaluateConductorBashWrite(cwd, command).blockedDetail
+    ?? "Bash write intent target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata";
+}
+
+export async function buildConductorPreToolUseWriteGuardOutput(
+  payload: CodexHookPayload,
+  cwd: string,
+  stateDir: string,
+  resolvedSessionId?: string,
+): Promise<Record<string, unknown> | null> {
+  const activeState = await readActiveMainRootConductorStateForPreToolUse(payload, cwd, stateDir, resolvedSessionId);
+  if (!activeState) return null;
+
+  const toolName = safeString(payload.tool_name).trim();
+  const command = readPreToolUseCommand(payload);
+  const pathCandidates = readPreToolUsePathCandidates(payload);
+  let blocked = false;
+  let blockedDetail = "Main-root Conductor write is not delegated";
+
+  if (toolName === "Bash") {
+    blocked = !isAllowedConductorBashWrite(cwd, command);
+    if (blocked) blockedDetail = buildConductorBashBlockedDetail(cwd, command);
+  } else if (PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
+    const toolPathCandidates = collectImplementationToolPathCandidates(payload, toolName, pathCandidates);
+    if (toolPathCandidates.length === 0) {
+      blocked = true;
+      blockedDetail = describeConductorBlockedWrite(toolName, undefined, toolPathCandidates.length);
+    } else {
+      const blockedPath = toolPathCandidates.find((candidate) => !isAllowedConductorMetadataPath(cwd, candidate));
+      blocked = blockedPath !== undefined;
+      if (blockedPath !== undefined) {
+        blockedDetail = describeConductorBlockedWrite(toolName, blockedPath, toolPathCandidates.length);
+      }
+    }
+  }
+
+  if (!blocked) return null;
+
+  return {
+    decision: "block",
+    reason: `Main-root Conductor mode is active (${activeState.mode} phase: ${formatPhase(activeState.phase, "active")}); direct plan/code writes are blocked and must be delegated; ${blockedDetail}.`,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext:
+        "When the Main agent is acting in Conductor mode, NEVER make plan or code changes directly. ALWAYS delegate implementation to specialized agents. "
+        + "Use specialized agents for source edits and plan/spec authorship. "
+        + `Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata under ${CONDUCTOR_ALLOWED_METADATA_PREFIXES.join(", ")}. `
+        + "Autopilot rework and typed subagent/worker lanes are exempt from this guard.",
+    },
+  };
+}
+
 function matchesSkillStopContext(
   entry: { session_id?: string; thread_id?: string },
   state: { session_id?: string; thread_id?: string },
@@ -7804,6 +8400,7 @@ export async function dispatchCodexNativeHook(
       : "";
     outputJson = await buildDeepInterviewPreToolUseBoundaryOutput(payload, cwd, stateDir, preToolUseSessionId)
       ?? await buildRalplanPreToolUseBoundaryOutput(payload, cwd, stateDir, preToolUseSessionId)
+      ?? await buildConductorPreToolUseWriteGuardOutput(payload, cwd, stateDir, preToolUseSessionId)
       ?? await buildPlanningRootPointerConflictPreToolUseOutput(payload, cwd, stateDir, rootPointerConflict)
       ?? await buildNativeSubagentCapacityCloseGuardOutput(payload, cwd, stateDir)
       ?? buildMalformedPreToolUseBlockTestOutput(payload)
