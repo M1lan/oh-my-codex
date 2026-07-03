@@ -48,3 +48,4 @@ snapshot.json
 .codex/skills/.system/**
 !.codex/prompts/
 !.codex/prompts/**
+.forks/

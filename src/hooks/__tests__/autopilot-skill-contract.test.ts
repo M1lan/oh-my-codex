@@ -13,6 +13,14 @@ const ralplanSkill = readFileSync(
 	join(__dirname, "../../../skills/ralplan/SKILL.md"),
 	"utf-8",
 );
+const codeReviewSkill = readFileSync(
+	join(__dirname, "../../../skills/code-review/SKILL.md"),
+	"utf-8",
+);
+const ultragoalSkill = readFileSync(
+	join(__dirname, "../../../skills/ultragoal/SKILL.md"),
+	"utf-8",
+);
 const pipelineSkill = readFileSync(
 	join(__dirname, "../../../skills/pipeline/SKILL.md"),
 	"utf-8",
@@ -64,6 +72,26 @@ describe("autopilot skill default Ultragoal contract", () => {
 		]) {
 			assert.match(autopilotSkill, new RegExp(field));
 		}
+	});
+
+	it("documents minimal state/HUD contracts for code-review and ultragoal child phases", () => {
+		assert.match(codeReviewSkill, /State\/HUD Phase Contract/);
+		assert.match(
+			codeReviewSkill,
+			/not a standalone tracked mode with a `code-review-state\.json` lifecycle/i,
+		);
+		assert.match(
+			codeReviewSkill,
+			/skill-active-state\.json.*skill:"code-review".*phase:"planning"/s,
+		);
+		assert.match(codeReviewSkill, /current_phase":"code-review"/);
+		assert.match(ultragoalSkill, /State\/HUD Phase Contract/);
+		assert.match(
+			ultragoalSkill,
+			/mode:"ultragoal".*active:true.*current_phase/s,
+		);
+		assert.match(ultragoalSkill, /current_phase":"ultragoal"/);
+		assert.match(ultragoalSkill, /handoff_artifacts\.ultragoal/);
 	});
 
 	it("forbids self-attesting clean review and QA gates without durable stage evidence", () => {

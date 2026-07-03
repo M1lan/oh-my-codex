@@ -20,6 +20,7 @@ export const CANONICAL_WORKFLOW_SKILLS = [
 	"autopilot",
 	"autoresearch",
 	"team",
+	"ultragoal",
 	"ralph",
 	"ultrawork",
 	"ultraqa",
@@ -199,7 +200,7 @@ function sanitizeWriterBaseForSession(
 	return inherited;
 }
 
-function isTerminalSkillActivePhase(phase: unknown): boolean {
+export function isTerminalSkillActivePhase(phase: unknown): boolean {
 	const normalized = safeString(phase).trim().toLowerCase();
 	if (!normalized) return false;
 	if (normalized === "cleared") return true;
@@ -208,7 +209,9 @@ function isTerminalSkillActivePhase(phase: unknown): boolean {
 	return Boolean(normalizeTerminalLifecycleOutcome(normalized).outcome);
 }
 
-function isTerminalSkillActiveState(state: SkillActiveStateLike): boolean {
+export function isTerminalSkillActiveState(
+	state: SkillActiveStateLike,
+): boolean {
 	if (state.active === false) return true;
 	if (isTerminalSkillActivePhase(state.phase)) return true;
 	if (safeString(state.completed_at).trim().length > 0) return true;
@@ -220,7 +223,7 @@ function isTerminalSkillActiveState(state: SkillActiveStateLike): boolean {
 	return Boolean(lifecycleOutcome);
 }
 
-function clearTerminalSkillActiveMarkers<T extends SkillActiveStateLike>(
+export function clearTerminalSkillActiveMarkers<T extends SkillActiveStateLike>(
 	state: T,
 ): T {
 	const next = { ...state };
@@ -230,6 +233,7 @@ function clearTerminalSkillActiveMarkers<T extends SkillActiveStateLike>(
 	delete next.run_outcome;
 	delete next.lifecycle_outcome;
 	delete next.terminal_outcome;
+	delete next.terminal_reason;
 	return next;
 }
 

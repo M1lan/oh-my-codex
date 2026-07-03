@@ -37,6 +37,16 @@ describe("proxy env resolution", () => {
 		);
 	});
 
+	it("ignores blank scheme-specific proxy values and trims the fallback", () => {
+		const env: ProxyEnv = {
+			https_proxy: "   ",
+			ALL_PROXY: "  http://all.example:8080  ",
+		};
+		const proxy = getProxyForUrl("https://hooks.slack.com/services/T/B/C", env);
+		assert.equal(proxy?.url.hostname, "all.example");
+		assert.equal(proxy?.url.port, "8080");
+	});
+
 	it("bypasses proxy when NO_PROXY matches exact host, suffix, port, or wildcard", () => {
 		assert.equal(
 			noProxyMatches(

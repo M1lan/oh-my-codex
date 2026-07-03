@@ -43,6 +43,7 @@ export type QuestionRendererStrategy =
 	| "detached-tmux"
 	| "inline-tty"
 	| "windows-console"
+	| "windows-psmux-shell-pane"
 	| "test-noop"
 	| "unsupported";
 
@@ -93,15 +94,23 @@ function hasInteractiveQuestionTty(options?: {
 	return stdinIsTTY && stdoutIsTTY;
 }
 
-function hasWindowsPsmuxReturnBridge(
+function hasNativeWindowsPsmuxBridge(
 	env: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform,
 ): boolean {
 	if (platform !== "win32") return false;
-	if (hasExplicitQuestionPaneTarget(env)) return true;
 	const tmux = safeString(env.TMUX).trim().toLowerCase();
+	if (!tmux) return false;
 	const tmuxPane = safeString(env.TMUX_PANE).trim();
-	return tmux !== "" && (tmux.includes("psmux") || isPaneId(tmuxPane));
+	return tmux.includes("psmux") || isPaneId(tmuxPane);
+}
+
+function hasWindowsConsoleReturnBridge(
+	env: NodeJS.ProcessEnv,
+	platform: NodeJS.Platform,
+): boolean {
+	if (platform !== "win32") return false;
+	return hasExplicitQuestionPaneTarget(env);
 }
 
 export function resolveQuestionRendererStrategy(
@@ -120,7 +129,9 @@ export function resolveQuestionRendererStrategy(
 	const platform = options?.platform ?? process.platform;
 	if (safeString(env.OMX_QUESTION_TEST_RENDERER).trim() === "noop")
 		return "test-noop";
-	if (hasWindowsPsmuxReturnBridge(env, platform)) return "windows-console";
+	if (hasNativeWindowsPsmuxBridge(env, platform))
+		return "windows-psmux-shell-pane";
+	if (hasWindowsConsoleReturnBridge(env, platform)) return "windows-console";
 	if (safeString(env.TMUX).trim() !== "") return "inside-tmux";
 	if (hasExplicitQuestionPaneTarget(env)) return "inside-tmux";
 	if (
@@ -543,6 +554,92 @@ function buildWindowsConsoleStartCommand(
 	].join(" ");
 }
 
+function quoteWindowsInteractiveCmdArg(value: string): string {
+	return `"${value.replace(/%/g, "%%").replace(/"/g, '""')}"`;
+}
+
+function buildWindowsPsmuxQuestionUiCommand(
+	recordPath: string,
+	options: {
+		cwd: string;
+		env?: NodeJS.ProcessEnv;
+		sessionId?: string;
+		returnTarget?: string;
+	},
+): string {
+	const envEntries: Array<[string, string]> = [];
+	if (options.sessionId) envEntries.push(["OMX_SESSION_ID", options.sessionId]);
+	if (options.returnTarget) {
+		envEntries.push(["OMX_QUESTION_RETURN_TARGET", options.returnTarget]);
+		envEntries.push(["OMX_QUESTION_RETURN_TRANSPORT", "tmux-send-keys"]);
+	}
+	const envPrefix = envEntries
+		.map(
+			([key, value]) =>
+				`set "${key}=${value.replace(/%/g, "%%").replace(/"/g, '""')}"`,
+		)
+		.join(" && ");
+	const command = [
+		process.execPath,
+		...resolveQuestionUiProcessArgs(recordPath, options),
+	]
+		.map((token) => quoteWindowsInteractiveCmdArg(token))
+		.join(" ");
+	return envPrefix ? `${envPrefix} && ${command}` : command;
+}
+
+function launchWindowsPsmuxShellQuestionPane(
+	execTmux: ExecTmuxSync,
+	sleepImpl: SleepSync,
+	recordPath: string,
+	options: {
+		cwd: string;
+		env?: NodeJS.ProcessEnv;
+		sessionId?: string;
+		returnTarget?: string;
+		launchedAt: string;
+	},
+): QuestionRendererState {
+	const rawPane = execTmux([
+		"new-window",
+		"-n",
+		"OMX Question",
+		"-P",
+		"-F",
+		"#{pane_id}",
+		"-c",
+		options.cwd,
+	]);
+	const paneId = parsePaneIdFromTmuxOutput(rawPane);
+	if (!paneId)
+		throw new Error("Failed to create psmux question renderer shell pane.");
+	sleepImpl(QUESTION_RENDERER_PANE_SETTLE_MS);
+	if (!isLaunchedQuestionPaneAlive(paneId, execTmux)) {
+		throw new Error(
+			`Question UI psmux pane ${paneId} disappeared immediately after launch.`,
+		);
+	}
+
+	const command = buildWindowsPsmuxQuestionUiCommand(recordPath, options);
+	for (const argv of buildSendPaneArgvs(paneId, command, false)) {
+		execTmux(argv);
+	}
+	sleepImpl(QUESTION_TEXT_SETTLE_MS);
+	execTmux(["send-keys", "-t", paneId, "C-m"]);
+
+	return {
+		renderer: "tmux-pane",
+		target: paneId,
+		launched_at: options.launchedAt,
+		...(options.returnTarget
+			? {
+					return_target: options.returnTarget,
+					return_transport: "tmux-send-keys" as const,
+				}
+			: {}),
+	};
+}
+
 function defaultSpawnDetachedRenderer(
 	command: string,
 	args: string[],
@@ -955,6 +1052,25 @@ export function launchQuestionRenderer(
 		returnTarget,
 		underCmux: isRunningUnderCmux(env),
 	});
+
+	if (strategy === "windows-psmux-shell-pane") {
+		supersedeLiveQuestionsForSession(options.cwd, options.sessionId, execTmux, {
+			excludeRecordPath: options.recordPath,
+			nowIso: launchedAt,
+		});
+		return launchWindowsPsmuxShellQuestionPane(
+			execTmux,
+			sleepImpl,
+			options.recordPath,
+			{
+				cwd: options.cwd,
+				env: options.env,
+				sessionId: options.sessionId,
+				returnTarget,
+				launchedAt,
+			},
+		);
+	}
 
 	if (strategy === "inside-tmux") {
 		const splitTarget = returnTarget ? ["-t", returnTarget] : [];

@@ -145,9 +145,7 @@ function normalizeConfig(raw: unknown): NormalizedConfig | null {
 	};
 }
 
-async function readSidecarConfig(
-	root: string,
-): Promise<{
+async function readSidecarConfig(root: string): Promise<{
 	config: SidecarTeamConfig | null;
 	source: string | null;
 	warnings: string[];

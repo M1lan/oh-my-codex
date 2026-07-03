@@ -23,6 +23,11 @@ import {
 	listActiveSkills,
 	readVisibleSkillActiveStateForStateDir,
 } from "../state/skill-active.js";
+import {
+	readSubagentTrackingState,
+	summarizeSubagentSession,
+	type SubagentTrackingState,
+} from "../subagents/tracker.js";
 import type {
 	RalphStateForHud,
 	UltragoalStateForHud,
@@ -706,6 +711,44 @@ function supervisedAutopilotStage<
 		: null;
 }
 
+function hasLiveCodeReviewSubagentEvidence(
+	tracking: SubagentTrackingState,
+	sessionId: string | undefined,
+): boolean {
+	if (!sessionId) return false;
+	const summary = summarizeSubagentSession(tracking, sessionId);
+	if (!summary || summary.activeSubagentThreadIds.length === 0) return false;
+	const session = tracking.sessions[sessionId];
+	if (!session) return false;
+	return summary.activeSubagentThreadIds.some((threadId) => {
+		const mode = sanitizeOptionalString(
+			session.threads[threadId]?.mode,
+		)?.toLowerCase();
+		return mode === "code-reviewer" || mode === "code-review";
+	});
+}
+
+function codeReviewFromSubagentEvidence(
+	canonicalSkills: Map<string, { phase?: string }>,
+	tracking: SubagentTrackingState,
+	sessionId: string | undefined,
+	autopilot: AutopilotStateForHud | null,
+): CodeReviewStateForHud | null {
+	if (autopilot?.active === true) return null;
+	if (!hasLiveCodeReviewSubagentEvidence(tracking, sessionId)) return null;
+	const phase = normalizeCanonicalHudPhase(
+		canonicalPhaseForSkill(canonicalSkills, "autopilot"),
+	);
+	return {
+		active: true,
+		current_phase:
+			phase === "reviewing" || phase === "review" || phase === "code-review"
+				? phase
+				: "reviewing",
+		source: "subagent-tracking",
+	};
+}
+
 /** Read all state files and build the full render context */
 export async function readAllState(
 	cwd: string,
@@ -713,12 +756,14 @@ export async function readAllState(
 ): Promise<HudRenderContext> {
 	const version = readVersion();
 	const gitBranch = buildGitBranchLabel(cwd, config);
-	const [metrics, hudNotify, session, currentSessionId] = await Promise.all([
-		readMetrics(cwd),
-		readHudNotifyState(cwd),
-		readSessionState(cwd),
-		readCurrentSessionId(cwd),
-	]);
+	const [metrics, hudNotify, session, currentSessionId, subagentTracking] =
+		await Promise.all([
+			readMetrics(cwd),
+			readHudNotifyState(cwd),
+			readSessionState(cwd),
+			readCurrentSessionId(cwd),
+			readSubagentTrackingState(cwd),
+		]);
 	const stateDir = getBaseStateDir(cwd);
 	const canonicalSkillState = await readVisibleSkillActiveStateForStateDir(
 		stateDir,
@@ -732,7 +777,8 @@ export async function readAllState(
 
 	const [
 		ralphDetail,
-		ultragoal,
+		ultragoalArtifact,
+		ultragoalDetail,
 		ultraworkDetail,
 		autopilotDetail,
 		ralplanDetail,
@@ -744,6 +790,7 @@ export async function readAllState(
 	] = await Promise.all([
 		readAuthoritativeModeState<RalphStateForHud>(cwd, "ralph"),
 		readUltragoalState(cwd),
+		readAuthoritativeModeState<UltragoalStateForHud>(cwd, "ultragoal"),
 		readAuthoritativeModeState<UltraworkStateForHud>(cwd, "ultrawork"),
 		readAuthoritativeModeState<AutopilotStateForHud>(cwd, "autopilot"),
 		readAuthoritativeModeState<RalplanStateForHud>(cwd, "ralplan"),
@@ -764,6 +811,14 @@ export async function readAllState(
 				canonicalPhaseForSkill(canonicalSkills, "ralph"),
 			)
 		: null;
+	const ultragoal =
+		ultragoalArtifact ??
+		(shouldSurfaceCanonicalSkill(canonicalSkills, "ultragoal", ultragoalDetail)
+			? mergePhase(
+					ultragoalDetail?.active === true ? ultragoalDetail : null,
+					canonicalPhaseForSkill(canonicalSkills, "ultragoal"),
+				)
+			: null);
 	const ultrawork = shouldSurfaceCanonicalSkill(
 		canonicalSkills,
 		"ultrawork",
@@ -829,7 +884,16 @@ export async function readAllState(
 				),
 				"canonical-skill",
 			)
-		: supervisedAutopilotStage<CodeReviewStateForHud>(autopilot, "code-review");
+		: (supervisedAutopilotStage<CodeReviewStateForHud>(
+				autopilot,
+				"code-review",
+			) ??
+			codeReviewFromSubagentEvidence(
+				canonicalSkills,
+				subagentTracking,
+				currentSessionId,
+				autopilot,
+			));
 	const ultraqa = shouldSurfaceCanonicalSkill(
 		canonicalSkills,
 		"ultraqa",

@@ -679,10 +679,8 @@ describe("maybeCheckAndPromptUpdate", () => {
 });
 
 describe("direct pnpm spawn fallback", () => {
-	function enoentResult() {
-		const error = Object.assign(new Error("spawnSync pnpm ENOENT"), {
-			code: "ENOENT",
-		});
+	function spawnErrorResult(code: string) {
+		const error = Object.assign(new Error(`spawnSync pnpm ${code}`), { code });
 		return {
 			status: null,
 			signal: null,
@@ -692,6 +690,14 @@ describe("direct pnpm spawn fallback", () => {
 			output: [null, "", ""],
 			pid: 0,
 		};
+	}
+
+	function enoentResult() {
+		return spawnErrorResult("ENOENT");
+	}
+
+	function einvalResult() {
+		return spawnErrorResult("EINVAL");
 	}
 
 	function okResult(stdout = "") {
@@ -724,6 +730,105 @@ describe("direct pnpm spawn fallback", () => {
 		);
 		assert.deepEqual(calls[0].args, ["add", "-g", "oh-my-codex@latest"]);
 		assert.deepEqual(calls[1].args, ["add", "-g", "oh-my-codex@latest"]);
+	});
+
+	it("falls back through cmd.exe when win32 pnpm.cmd cannot be spawned", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
+
+		const result = runGlobalUpdate(
+			((command: string, args: readonly string[]) => {
+				calls.push({ command, args: args as string[] });
+				if (command === "pnpm") return enoentResult();
+				if (command === "pnpm.cmd") return einvalResult();
+				return okResult();
+			}) as unknown as typeof import("node:child_process").spawnSync,
+			"win32",
+		);
+
+		assert.equal(result.ok, true);
+		assert.deepEqual(
+			calls.map((call) => call.command),
+			["pnpm", "pnpm.cmd", "cmd.exe"],
+		);
+		assert.deepEqual(calls[0].args, ["add", "-g", "oh-my-codex@latest"]);
+		assert.deepEqual(calls[1].args, ["add", "-g", "oh-my-codex@latest"]);
+		assert.deepEqual(calls[2].args, [
+			"/d",
+			"/s",
+			"/c",
+			"pnpm",
+			"add",
+			"-g",
+			"oh-my-codex@latest",
+		]);
+	});
+
+	it("uses cmd.exe for win32 global installs when direct pnpm returns EINVAL", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
+
+		const result = runGlobalUpdate(
+			((command: string, args: readonly string[]) => {
+				calls.push({ command, args: args as string[] });
+				return command === "pnpm" ? einvalResult() : okResult();
+			}) as unknown as typeof import("node:child_process").spawnSync,
+			"win32",
+		);
+
+		assert.equal(result.ok, true);
+		assert.deepEqual(
+			calls.map((call) => call.command),
+			["pnpm", "cmd.exe"],
+		);
+		assert.deepEqual(calls[1].args, [
+			"/d",
+			"/s",
+			"/c",
+			"pnpm",
+			"add",
+			"-g",
+			"oh-my-codex@latest",
+		]);
+	});
+
+	it("does not shell-wrap non-target win32 pnpm operations when pnpm.cmd returns EINVAL", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
+
+		const root = resolveGlobalInstallRoot(
+			((command: string, args: readonly string[]) => {
+				calls.push({ command, args: args as string[] });
+				if (command === "pnpm") return enoentResult();
+				if (command === "pnpm.cmd") return einvalResult();
+				return okResult("unexpected");
+			}) as unknown as typeof import("node:child_process").spawnSync,
+			"win32",
+		);
+
+		assert.equal(root, null);
+		assert.deepEqual(
+			calls.map((call) => call.command),
+			["pnpm", "pnpm.cmd"],
+		);
+		assert.deepEqual(calls[0].args, ["root", "-g"]);
+		assert.deepEqual(calls[1].args, ["root", "-g"]);
+	});
+
+	it("keeps the direct pnpm path when it succeeds", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
+
+		const result = runGlobalUpdate(
+			((command: string, args: readonly string[]) => {
+				calls.push({ command, args: args as string[] });
+				return okResult();
+			}) as unknown as typeof import("node:child_process").spawnSync,
+			"win32",
+		);
+
+		assert.equal(result.ok, true);
+		assert.deepEqual(
+			calls.map((call) => call.command),
+			["pnpm"],
+		);
+		assert.deepEqual(calls[0].args, ["add", "-g", "oh-my-codex@latest"]);
 	});
 
 	it("does not fall back to pnpm.cmd for non-Windows ENOENT failures", () => {
@@ -823,6 +928,38 @@ describe("direct pnpm spawn fallback", () => {
 				delete process.env.npm_config_location;
 			}
 		}
+	});
+
+	it("does not use cmd.exe for win32 dev-channel pnpm packaging when pnpm.cmd returns EINVAL", () => {
+		const calls: Array<{ command: string; args: string[] }> = [];
+
+		const result = runGlobalUpdate(
+			"github:Yeachan-Heo/oh-my-codex#dev",
+			((command: string, args: readonly string[]) => {
+				calls.push({ command, args: args as string[] });
+				if (command === "git" && args[0] === "clone") {
+					mkdirSync(String(args[args.length - 1]), { recursive: true });
+					return okResult();
+				}
+				if (command === "git" && args[0] === "rev-parse")
+					return okResult("1234567890abcdef\n");
+				if (command === "pnpm") return enoentResult();
+				if (command === "pnpm.cmd") return einvalResult();
+				return okResult();
+			}) as unknown as typeof import("node:child_process").spawnSync,
+			"win32",
+		);
+
+		assert.equal(result.ok, false);
+		assert.match(result.stderr, /EINVAL/);
+		assert.deepEqual(
+			calls.map((call) => call.command),
+			["git", "git", "pnpm", "pnpm.cmd"],
+		);
+		assert.equal(
+			calls.some((call) => call.command === "cmd.exe"),
+			false,
+		);
 	});
 
 	it("falls back to pnpm.cmd for win32 global-root lookup when direct pnpm spawn returns ENOENT", () => {

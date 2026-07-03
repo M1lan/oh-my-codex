@@ -33,7 +33,7 @@ describe("omx session help", () => {
 			);
 			assert.match(
 				mainHelp.stdout,
-				/omx session\s+Search prior local session transcripts \(--codex-home <path> escape hatch\)/i,
+				/omx session\s+Search and summarize local session history \(--codex-home <path> escape hatch\)/i,
 			);
 
 			const sessionHelp = runOmx(cwd, ["session", "--help"]);
@@ -43,6 +43,8 @@ describe("omx session help", () => {
 				sessionHelp.stderr || sessionHelp.stdout,
 			);
 			assert.match(sessionHelp.stdout, /omx session search <query>/i);
+			assert.match(sessionHelp.stdout, /omx session friction \[options\]/i);
+			assert.match(sessionHelp.stdout, /Options for friction:/i);
 			assert.match(sessionHelp.stdout, /--since <spec>/i);
 			assert.match(sessionHelp.stdout, /--codex-home <path>/i);
 		} finally {

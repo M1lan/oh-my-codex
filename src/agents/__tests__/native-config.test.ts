@@ -190,26 +190,31 @@ describe("agents/native-config", () => {
 		}
 	});
 
-	it("pins ralplan thesis/antithesis and researcher to exact gpt-5.4-mini without downgrading judgment roles", () => {
+	it("pins planner and architect to exact gpt-5.5 while keeping researcher on exact mini", () => {
 		process.env.OMX_DEFAULT_FRONTIER_MODEL = "gpt-5.5";
 		process.env.OMX_DEFAULT_STANDARD_MODEL = "gpt-5.5";
 
-		for (const role of ["planner", "architect", "researcher"] as const) {
+		for (const role of ["planner", "architect"] as const) {
 			const toml = generateAgentToml(AGENT_DEFINITIONS[role], `${role} prompt`);
 			assert.match(
 				toml,
-				/model = "gpt-5\.4-mini"/,
-				`${role} should use exact mini`,
+				/model = "gpt-5\.5"/,
+				`${role} should use exact gpt-5.5`,
 			);
 			assert.match(
 				toml,
-				/exact gpt-5\.4-mini model/,
-				`${role} should receive exact-mini guidance`,
+				/exact gpt-5\.5 model/,
+				`${role} should receive exact-gpt-5.5 guidance`,
 			);
 			assert.match(
 				toml,
-				/resolved_model: gpt-5\.4-mini/,
-				`${role} should record exact mini metadata`,
+				/strict execution order: inspect -> plan -> act -> verify/,
+				`${role} should receive the exact-model guardrail`,
+			);
+			assert.match(
+				toml,
+				/resolved_model: gpt-5\.5/,
+				`${role} should record exact gpt-5.5 metadata`,
 			);
 		}
 
@@ -217,17 +222,32 @@ describe("agents/native-config", () => {
 			AGENT_DEFINITIONS.planner,
 			"planner prompt",
 		);
-		assert.match(plannerToml, /model_reasoning_effort = "high"/);
+		assert.match(plannerToml, /model_reasoning_effort = "medium"/);
 
 		const architectToml = generateAgentToml(
 			AGENT_DEFINITIONS.architect,
 			"architect prompt",
 		);
-		assert.match(architectToml, /model_reasoning_effort = "high"/);
+		assert.match(architectToml, /model_reasoning_effort = "xhigh"/);
 
 		const researcherToml = generateAgentToml(
 			AGENT_DEFINITIONS.researcher,
 			"researcher prompt",
+		);
+		assert.match(
+			researcherToml,
+			/model = "gpt-5\.4-mini"/,
+			"researcher should keep exact mini",
+		);
+		assert.match(
+			researcherToml,
+			/exact gpt-5\.4-mini model/,
+			"researcher should receive exact-mini guidance",
+		);
+		assert.match(
+			researcherToml,
+			/resolved_model: gpt-5\.4-mini/,
+			"researcher should record exact mini metadata",
 		);
 		assert.match(researcherToml, /model_reasoning_effort = "high"/);
 
@@ -334,30 +354,30 @@ describe("agents/native-config", () => {
 			"metadata should remain final non-policy bookkeeping",
 		);
 
-		const architectToml = generateAgentToml(
-			AGENT_DEFINITIONS.architect,
-			"architect prompt",
+		const researcherToml = generateAgentToml(
+			AGENT_DEFINITIONS.researcher,
+			"researcher prompt",
 		);
-		const exactMiniIndex = architectToml.indexOf(
+		const exactMiniIndex = researcherToml.indexOf(
 			"strict execution order: inspect -> plan -> act -> verify",
 		);
-		const architectGuardIndex = architectToml.indexOf(
+		const researcherGuardIndex = researcherToml.indexOf(
 			"<native_subagent_leaf_guard>",
 		);
-		const architectMetadataIndex = architectToml.indexOf(
+		const researcherMetadataIndex = researcherToml.indexOf(
 			"## OMX Agent Metadata",
 		);
 
 		assert.ok(
 			exactMiniIndex >= 0,
-			"architect should exercise the exact-model overlay path",
+			"researcher should exercise the exact-mini overlay path",
 		);
 		assert.ok(
-			architectGuardIndex > exactMiniIndex,
-			"leaf guard should override exact-model overlay guidance",
+			researcherGuardIndex > exactMiniIndex,
+			"leaf guard should override exact-mini overlay guidance",
 		);
 		assert.ok(
-			architectMetadataIndex > architectGuardIndex,
+			researcherMetadataIndex > researcherGuardIndex,
 			"metadata should remain final non-policy bookkeeping for exact-model roles",
 		);
 
@@ -524,6 +544,48 @@ describe("agents/native-config", () => {
 				process.env.CODEX_HOME = previousCodexHome;
 			else delete process.env.CODEX_HOME;
 			process.env.OMX_DEFAULT_STANDARD_MODEL = "gpt-5.4-mini";
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("omits inherited custom provider for default Spark-lane native agents", async () => {
+		const root = await mkdtemp(
+			join(tmpdir(), "omx-native-config-spark-provider-"),
+		);
+		const codexHome = join(root, ".codex");
+		const promptsDir = join(root, "prompts");
+		const outDir = join(codexHome, "agents");
+		const previousCodexHome = process.env.CODEX_HOME;
+
+		try {
+			process.env.CODEX_HOME = codexHome;
+			await mkdir(promptsDir, { recursive: true });
+			await mkdir(codexHome, { recursive: true });
+			await writeFile(
+				join(codexHome, ".omx-config.json"),
+				JSON.stringify({
+					env: {
+						OMX_DEFAULT_SPARK_MODEL: "gpt-5.4-mini",
+					},
+				}),
+			);
+			await writeFile(
+				join(codexHome, "config.toml"),
+				['model = "gpt-5.5"', 'model_provider = "OpenAI"', ""].join("\n"),
+			);
+			await writeFile(join(promptsDir, "explore.md"), "explore prompt");
+
+			await installNativeAgentConfigs(root, {
+				agentsDir: outDir,
+				catalogManifest: manifestWithAgents(["explore"]),
+			});
+			const exploreToml = await readFile(join(outDir, "explore.toml"), "utf8");
+			assert.match(exploreToml, /model = "gpt-5\.4-mini"/);
+			assert.doesNotMatch(exploreToml, /model_provider = /);
+		} finally {
+			if (typeof previousCodexHome === "string")
+				process.env.CODEX_HOME = previousCodexHome;
+			else delete process.env.CODEX_HOME;
 			await rm(root, { recursive: true, force: true });
 		}
 	});

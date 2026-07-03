@@ -12,8 +12,8 @@ import {
 	buildWorkerProcessLaunchSpec,
 	scrubTeamWorkerHudOwnershipEnv,
 	resolveTeamWorkerCli,
+	resolveTeamWorkerCliForResolvedLaunchArgs,
 	type TeamWorkerCli,
-	resolveTeamWorkerCliPlan,
 	resolveTeamWorkerLaunchMode,
 	type TeamSession,
 	waitForWorkerReady,
@@ -131,9 +131,11 @@ import {
 	resolveTeamWorkerLaunchArgs,
 	resolveTeamWorkerLaunchDiagnostics,
 	TEAM_LOW_COMPLEXITY_DEFAULT_MODEL,
+	TEAM_WORKER_INHERITED_MODEL_ENV,
 	parseTeamWorkerLaunchArgs,
 	resolveAgentDefaultModel,
 	resolveAgentReasoningEffort,
+	shouldHonorAgentExactModel,
 	type TeamReasoningEffort,
 } from "./model-contract.js";
 import { resolveCanonicalTeamStateRoot } from "./state-root.js";
@@ -151,6 +153,8 @@ import { hasStructuredVerificationEvidence } from "../verification/verifier.js";
 import { buildRebalanceDecisions } from "./rebalance-policy.js";
 import { getStatePath } from "../mcp/state-paths.js";
 import { readModeState, updateModeState } from "../modes/base.js";
+
+export { resolveTeamWorkerCliForResolvedLaunchArgs };
 import {
 	buildApprovedTeamHandoffSection,
 	buildApprovedTeamExecutionBinding,
@@ -2929,17 +2933,25 @@ export function resolveWorkerLaunchArgsFromEnv(
 	preferredReasoning?: TeamReasoningEffort,
 	workerCliOverride?: TeamWorkerCli,
 ): string[] {
-	const inheritedArgs =
+	const inheritedFromEnv =
+		typeof env[TEAM_WORKER_INHERITED_MODEL_ENV] === "string"
+			? env[TEAM_WORKER_INHERITED_MODEL_ENV]?.trim()
+			: undefined;
+	const effectiveInheritedModel =
 		typeof inheritedLeaderModel === "string" &&
 		inheritedLeaderModel.trim() !== ""
-			? ["--model", inheritedLeaderModel.trim()]
-			: [];
+			? inheritedLeaderModel.trim()
+			: inheritedFromEnv;
+	const inheritedArgs = effectiveInheritedModel
+		? ["--model", effectiveInheritedModel]
+		: [];
 	const fallbackModel = resolveAgentDefaultModel(agentType, env.CODEX_HOME);
 	const diagnostics = resolveTeamWorkerLaunchDiagnostics({
 		existingRaw: env.OMX_TEAM_WORKER_LAUNCH_ARGS,
 		inheritedArgs,
 		fallbackModel,
 		preferredReasoning,
+		honorExactRoleModel: shouldHonorAgentExactModel(agentType, env.CODEX_HOME),
 		requestedAgentType: agentType,
 	});
 
@@ -3279,14 +3291,6 @@ export async function startTeam(
 		existingRaw: launchEnv.OMX_TEAM_WORKER_LAUNCH_ARGS,
 		fallbackModel: resolveAgentDefaultModel(agentType, codexHomeOverride),
 	});
-	const workerCliPlan = resolveTeamWorkerCliPlan(
-		workerCount,
-		sharedWorkerLaunchArgs,
-		launchEnv,
-	);
-	if (workerLaunchMode === "prompt") {
-		assertPromptModeWorkerCliSupported(workerCliPlan);
-	}
 	const workerReadyTimeoutMs = resolveWorkerReadyTimeoutMs(launchEnv);
 	const workerStartupEvidenceTimeoutMs = resolveWorkerStartupEvidenceTimeoutMs(
 		launchEnv,
@@ -3461,6 +3465,7 @@ export async function startTeam(
 			workerLaunchArgs: string[];
 			workerCli: TeamWorkerCli;
 		}>;
+		const workerCliPlan: TeamWorkerCli[] = [];
 
 		for (let i = 1; i <= workerCount; i++) {
 			const workerName = `worker-${i}`;
@@ -3490,7 +3495,12 @@ export async function startTeam(
 				runtimeRole,
 				undefined,
 				preferredReasoning,
-				workerCliPlan[i - 1],
+			);
+			const workerCli = resolveTeamWorkerCliForResolvedLaunchArgs(
+				i,
+				workerCount,
+				workerLaunchArgs,
+				launchEnv,
 			);
 			const resolvedWorkerModel =
 				parseTeamWorkerLaunchArgs(workerLaunchArgs).modelOverride ?? undefined;
@@ -3554,11 +3564,11 @@ export async function startTeam(
 				resolveInstructionStateRoot(workerWorkspace.worktreePath),
 			);
 			const trigger = triggerDirective.text;
-			const initialPrompt =
-				workerCliPlan[i - 1] === "gemini" ? trigger : undefined;
+			const initialPrompt = workerCli === "gemini" ? trigger : undefined;
 			if (initialPrompt) {
 				await writeWorkerInbox(sanitized, workerName, inbox, leaderCwd);
 			}
+			workerCliPlan.push(workerCli);
 			workerBootstrapPlans.push({
 				workerName,
 				workerWorkspace,
@@ -3571,8 +3581,11 @@ export async function startTeam(
 				triggerIntent: triggerDirective.intent,
 				initialPrompt,
 				workerLaunchArgs,
-				workerCli: workerCliPlan[i - 1],
+				workerCli,
 			});
+		}
+		if (workerLaunchMode === "prompt") {
+			assertPromptModeWorkerCliSupported(workerCliPlan);
 		}
 
 		const workerStartups = workerBootstrapPlans.map((plan) => {

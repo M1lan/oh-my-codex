@@ -20,9 +20,7 @@ function getRunnerPath(): string {
 	);
 }
 
-function runRunner(
-	input: Record<string, unknown>,
-): Promise<{
+function runRunner(input: Record<string, unknown>): Promise<{
 	stdout: string;
 	stderr: string;
 	code: number | null;

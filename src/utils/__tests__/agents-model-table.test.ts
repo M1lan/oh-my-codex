@@ -94,11 +94,11 @@ describe("agents model table", () => {
 		);
 		assert.match(
 			table,
-			/\| `planner` \| `gpt-5\.4-mini` \| high \| Task sequencing, execution plans, risk flags \(frontier-orchestrator, frontier\) \|/,
+			/\| `planner` \| `gpt-5\.5` \| medium \| Task sequencing, execution plans, risk flags \(frontier-orchestrator, frontier\) \|/,
 		);
 		assert.match(
 			table,
-			/\| `architect` \| `gpt-5\.4-mini` \| high \| System design, boundaries, interfaces, long-horizon tradeoffs \(frontier-orchestrator, frontier\) \|/,
+			/\| `architect` \| `gpt-5\.5` \| xhigh \| System design, boundaries, interfaces, long-horizon tradeoffs \(frontier-orchestrator, frontier\) \|/,
 		);
 		assert.doesNotMatch(table, /\| `security-reviewer` \|/);
 		assert.doesNotMatch(table, /\| `build-fixer` \|/);

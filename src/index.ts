@@ -23,3 +23,12 @@ export {
 	installNativeAgentConfigs,
 } from "./agents/native-config.js";
 export { hudCommand } from "./hud/index.js";
+export {
+	buildDirectSessionArgs,
+	findDangerousLaunchArgs,
+	launchDirectSession,
+	launchRequiresDangerousApproval,
+	redactOmxLogLine,
+	resolveVscodeLaunchEnv,
+	runOmxCatalogCommand,
+} from "./vscode/index.js";

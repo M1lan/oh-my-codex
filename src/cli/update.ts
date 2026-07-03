@@ -180,12 +180,12 @@ async function getCurrentVersion(): Promise<string | null> {
 	}
 }
 
-function isEnoentSpawnError(error: unknown): boolean {
+function isSpawnErrorCode(error: unknown, codes: string[]): boolean {
 	return Boolean(
 		error &&
 			typeof error === "object" &&
 			"code" in error &&
-			(error as NodeJS.ErrnoException).code === "ENOENT",
+			codes.includes(String((error as NodeJS.ErrnoException).code)),
 	);
 }
 
@@ -196,10 +196,37 @@ function spawnPnpmSync(
 	platform: NodeJS.Platform = process.platform,
 ): ReturnType<SpawnSyncLike> {
 	const result = spawnProcess("pnpm", args, options);
-	if (platform === "win32" && isEnoentSpawnError(result.error)) {
+	if (platform === "win32" && isSpawnErrorCode(result.error, ["ENOENT"])) {
 		return spawnProcess("pnpm.cmd", args, options);
 	}
 	return result;
+}
+
+function spawnGlobalPnpmInstallSync(
+	installSource: string,
+	options: SpawnSyncOptions,
+	spawnProcess: SpawnSyncLike = spawnSync,
+	platform: NodeJS.Platform = process.platform,
+): ReturnType<SpawnSyncLike> {
+	const args = ["add", "-g", installSource];
+	const result = spawnProcess("pnpm", args, options);
+	if (
+		platform !== "win32" ||
+		!isSpawnErrorCode(result.error, ["ENOENT", "EINVAL"])
+	) {
+		return result;
+	}
+
+	if (isSpawnErrorCode(result.error, ["ENOENT"])) {
+		const cmdShimResult = spawnProcess("pnpm.cmd", args, options);
+		if (!isSpawnErrorCode(cmdShimResult.error, ["ENOENT", "EINVAL"])) {
+			return cmdShimResult;
+		}
+	}
+
+	// Some Windows/pnpm shim layouts reject direct pnpm/pnpm.cmd spawn with EINVAL;
+	// cmd.exe can still resolve and run pnpm from the user's configured PATH.
+	return spawnProcess("cmd.exe", ["/d", "/s", "/c", "pnpm", ...args], options);
 }
 
 function commandFailure(
@@ -417,8 +444,8 @@ export function runGlobalUpdate(
 		return runDevGlobalUpdate(spawnProcess, resolvedPlatform);
 	}
 
-	const result = spawnPnpmSync(
-		["add", "-g", installSource],
+	const result = spawnGlobalPnpmInstallSync(
+		installSource,
 		{
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "pipe"],

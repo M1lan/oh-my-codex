@@ -43,8 +43,10 @@ import {
 	resolveCanonicalTeamStateRoot,
 	resolveWorkerNotifyTeamStateRootPath,
 } from "../team/state-root.js";
+import { inferTerminalLifecycleOutcome } from "../runtime/run-outcome.js";
 import {
 	appendToLog,
+	isSessionStale,
 	isSessionStateUsable,
 	readSessionState,
 	readUsableSessionState,
@@ -101,6 +103,7 @@ import {
 } from "./codex-execution-surface.js";
 import { buildNativeHookEvent } from "../hooks/extensibility/events.js";
 import type { HookEventEnvelope } from "../hooks/extensibility/types.js";
+import { isTrackedWorkflowMode } from "../state/workflow-transition.js";
 import { dispatchHookEventRuntime } from "../hooks/extensibility/runtime.js";
 import {
 	getNotificationConfig,
@@ -229,6 +232,66 @@ const SHORT_FOLLOWUP_PRIORITY_PATTERNS = [
 	/(?:按照|按|基于)(?:这个|上述|当前)?(?:plan|计划|方案)/u,
 	/\b(?:follow up|latest request|this turn|current turn|newest request)\b/i,
 ] as const;
+const RALPH_CONTINUATION_INTENT_PATTERNS = [
+	/\b(?:continue|resume|keep going|carry on|proceed|finish|complete)\b/i,
+	/\b(?:same|current|active|that|this)\s+(?:ralph|task|work|job|workflow)\b/i,
+	/\b(?:ralph)\b.{0,40}\b(?:continue|resume|finish|complete)\b/i,
+	/\b(?:continue|resume|finish|complete)\b.{0,40}\b(?:ralph)\b/i,
+] as const;
+const RALPH_LIVE_RISK_PATTERNS = [
+	/\b(?:prod|production|live|customer|user\s+data|billing|payment|credential|secret|token|key)\b/i,
+	/\b(?:deploy|release|publish|merge|push|delete|remove|drop|destroy|migrate|migration)\b/i,
+	/\b(?:database|db|terraform|kubectl|kubernetes|aws|gcp|azure|external|destructive)\b/i,
+	/\b(?:telegram|vps|service|restart|send|notify|notification|notifications|cron)\b/i,
+] as const;
+const RALPH_TASK_TEXT_FIELDS = [
+	"task_description",
+	"taskDescription",
+	"objective",
+	"task",
+	"prompt",
+	"initial_prompt",
+	"initialPrompt",
+	"user_prompt",
+	"userPrompt",
+	"last_user_message",
+	"lastUserMessage",
+	"task_slug",
+] as const;
+const RALPH_INTENT_STOPWORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"by",
+	"for",
+	"from",
+	"in",
+	"is",
+	"it",
+	"of",
+	"on",
+	"or",
+	"that",
+	"the",
+	"this",
+	"to",
+	"with",
+	"you",
+	"your",
+	"task",
+	"work",
+	"ralph",
+	"continue",
+	"resume",
+	"finish",
+	"complete",
+	"fix",
+	"issue",
+]);
 const MAX_SESSION_META_LINE_BYTES = 256 * 1024;
 
 function safeString(value: unknown): string {
@@ -664,6 +727,9 @@ function sanitizeCodexHookOutput(
 	output: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
 	if (!output || hookEventName !== "PreToolUse") return output;
+	const preToolUseDenyOutput = toPreToolUseDenyOutput(output);
+	if (preToolUseDenyOutput) return preToolUseDenyOutput;
+
 	const systemMessage = safeString(output.systemMessage).trim();
 	if (systemMessage) return { systemMessage };
 
@@ -680,6 +746,45 @@ function sanitizeCodexHookOutput(
 		.filter(Boolean)
 		.join("\n\n");
 	return derivedSystemMessage ? { systemMessage: derivedSystemMessage } : {};
+}
+
+function toPreToolUseDenyOutput(
+	output: Record<string, unknown>,
+): Record<string, unknown> | null {
+	const sourceHookSpecificOutput = safeObject(output.hookSpecificOutput);
+	const legacyBlock = output.decision === "block";
+	const hookSpecificDeny =
+		sourceHookSpecificOutput.permissionDecision === "deny";
+	if (!legacyBlock && !hookSpecificDeny) return null;
+
+	const permissionDecisionReason = safeString(
+		sourceHookSpecificOutput.permissionDecisionReason,
+	).trim();
+	const legacyReason = safeString(output.reason).trim();
+	const additionalContext = safeString(
+		sourceHookSpecificOutput.additionalContext,
+	).trim();
+	const systemMessage = safeString(output.systemMessage).trim();
+	const reason = permissionDecisionReason || legacyReason || systemMessage;
+	if (!reason) {
+		throw new Error(
+			"Malformed PreToolUse block output: explicit deny/block requires non-empty permissionDecisionReason, reason, or systemMessage.",
+		);
+	}
+
+	const hookSpecificOutput: Record<string, unknown> = {
+		hookEventName: "PreToolUse",
+		permissionDecision: "deny",
+		permissionDecisionReason: reason,
+	};
+	if (additionalContext) {
+		hookSpecificOutput.additionalContext = additionalContext;
+	}
+
+	return {
+		...(systemMessage ? { systemMessage } : {}),
+		hookSpecificOutput,
+	};
 }
 
 export function mapCodexHookEventToOmxEvent(
@@ -945,6 +1050,7 @@ interface RalphStopOwnershipContext {
 	threadId: string;
 	currentNativeSessionId: string;
 	tmuxPaneId: string;
+	payload?: CodexHookPayload;
 }
 
 function isRalphStartingPhase(state: Record<string, unknown>): boolean {
@@ -1006,6 +1112,162 @@ async function isStaleOrphanedRalphStartingState(
 
 function hasValue(values: string[], value: string): boolean {
 	return value !== "" && values.some((candidate) => candidate === value);
+}
+
+function hasPositiveRalphStopOwnerMatch(
+	state: Record<string, unknown>,
+	context: RalphStopOwnershipContext,
+): boolean {
+	const ownerOmxSessionId = safeString(state.owner_omx_session_id).trim();
+	if (ownerOmxSessionId && ownerOmxSessionId === context.sessionId) return true;
+
+	const stateSessionId = safeString(state.session_id).trim();
+	if (
+		!ownerOmxSessionId &&
+		stateSessionId &&
+		stateSessionId === context.sessionId
+	)
+		return true;
+
+	const codexOwnerSessionId = safeString(state.owner_codex_session_id).trim();
+	if (codexOwnerSessionId) {
+		const stopCodexSessionIds = [
+			context.payloadSessionId,
+			context.currentNativeSessionId,
+			context.sessionId,
+		].filter(Boolean);
+		if (hasValue(stopCodexSessionIds, codexOwnerSessionId)) return true;
+	}
+
+	const stateThreadId = safeString(
+		state.owner_codex_thread_id ?? state.thread_id,
+	).trim();
+	if (stateThreadId && context.threadId && stateThreadId === context.threadId)
+		return true;
+
+	const statePaneId = safeString(state.tmux_pane_id).trim();
+	return (
+		statePaneId !== "" &&
+		context.tmuxPaneId !== "" &&
+		statePaneId === context.tmuxPaneId
+	);
+}
+
+function textMatchesAny(text: string, patterns: readonly RegExp[]): boolean {
+	return patterns.some((pattern) => pattern.test(text));
+}
+
+function extractRalphTaskText(state: Record<string, unknown>): string {
+	const values: string[] = [];
+	for (const field of RALPH_TASK_TEXT_FIELDS) {
+		const value = safeString(state[field]).trim();
+		if (value) values.push(value);
+	}
+
+	const taskMetadata = state.task_metadata ?? state.taskMetadata;
+	if (taskMetadata && typeof taskMetadata === "object") {
+		const metadata = taskMetadata as Record<string, unknown>;
+		for (const field of RALPH_TASK_TEXT_FIELDS) {
+			const value = safeString(metadata[field]).trim();
+			if (value) values.push(value);
+		}
+	}
+
+	return values.join("\n");
+}
+
+function extractRalphStopUserText(payload?: CodexHookPayload): string {
+	if (!payload) return "";
+	return [
+		payload.prompt,
+		payload.user_prompt,
+		payload.userPrompt,
+		payload.input,
+		payload.last_user_message,
+		payload.lastUserMessage,
+	]
+		.map(safeString)
+		.filter(Boolean)
+		.join("\n");
+}
+
+function tokenizeRalphIntentText(text: string): Set<string> {
+	const tokens = new Set<string>();
+	for (const match of text.toLowerCase().matchAll(/[a-z0-9][a-z0-9_-]{2,}/g)) {
+		const token = match[0].replace(/^issue-/, "");
+		if (!token || RALPH_INTENT_STOPWORDS.has(token)) continue;
+		tokens.add(token);
+	}
+	return tokens;
+}
+
+function countTokenOverlap(left: Set<string>, right: Set<string>): number {
+	let overlap = 0;
+	for (const token of left) {
+		if (right.has(token)) overlap += 1;
+	}
+	return overlap;
+}
+
+function hasCurrentRalphTaskOverlap(
+	state: Record<string, unknown>,
+	userText: string,
+): boolean {
+	const taskText = extractRalphTaskText(state);
+	const taskTokens = tokenizeRalphIntentText(taskText);
+	const userTokens = tokenizeRalphIntentText(userText);
+	if (taskTokens.size === 0) return false;
+	if (userTokens.size === 0) return false;
+
+	const overlap = countTokenOverlap(taskTokens, userTokens);
+	const smallerSide = Math.min(taskTokens.size, userTokens.size);
+	return overlap >= 2 || (smallerSide <= 2 && overlap >= 1);
+}
+
+function hasMeaningfulRalphTaskText(state: Record<string, unknown>): boolean {
+	return tokenizeRalphIntentText(extractRalphTaskText(state)).size > 0;
+}
+
+function isRalphLiveRiskContinuation(
+	state: Record<string, unknown>,
+	userText: string,
+): boolean {
+	return textMatchesAny(
+		`${extractRalphTaskText(state)}\n${userText}`,
+		RALPH_LIVE_RISK_PATTERNS,
+	);
+}
+
+function shouldAllowGlobalRalphStopContinuation(
+	state: Record<string, unknown>,
+	context: RalphStopOwnershipContext,
+): boolean {
+	const userText = extractRalphStopUserText(context.payload);
+	const hasContinuationIntent = textMatchesAny(
+		userText,
+		RALPH_CONTINUATION_INTENT_PATTERNS,
+	);
+	const hasTaskOverlap = hasCurrentRalphTaskOverlap(state, userText);
+	const hasTaskText = hasMeaningfulRalphTaskText(state);
+	const hasUserTaskText = tokenizeRalphIntentText(userText).size > 0;
+	const hasPositiveOwnerMatch = hasPositiveRalphStopOwnerMatch(state, context);
+
+	if (!activeRalphStateMatchesStopOwner(state, context)) return false;
+	if (!userText.trim()) {
+		if (isRalphLiveRiskContinuation(state, userText)) return false;
+		return hasPositiveOwnerMatch || !hasRalphOwnerHint(state);
+	}
+	if (isRalphLiveRiskContinuation(state, userText)) {
+		return hasContinuationIntent && (hasPositiveOwnerMatch || hasTaskOverlap);
+	}
+	if (hasPositiveOwnerMatch && hasContinuationIntent) {
+		return true;
+	}
+	if (hasTaskText && hasUserTaskText) {
+		return hasTaskOverlap;
+	}
+
+	return hasContinuationIntent || hasTaskOverlap;
 }
 
 function activeRalphStateMatchesStopOwner(
@@ -1328,6 +1590,7 @@ async function readActiveRalphState(
 		payloadSessionId?: string;
 		threadId?: string;
 		tmuxPaneId?: string;
+		payload?: CodexHookPayload;
 	},
 ): Promise<ActiveRalphStopState | null> {
 	const [rawSessionInfo, usableSessionInfo] = await Promise.all([
@@ -1434,7 +1697,18 @@ async function readActiveRalphState(
 
 	const directPath = join(stateDir, "ralph-state.json");
 	const direct = await readJsonIfExists(directPath);
-	if (direct?.active === true && shouldContinueRun(direct)) {
+	if (
+		direct?.active === true &&
+		shouldContinueRun(direct) &&
+		shouldAllowGlobalRalphStopContinuation(direct, {
+			sessionId: safeString(ownerContext?.payloadSessionId).trim(),
+			payloadSessionId: safeString(ownerContext?.payloadSessionId).trim(),
+			threadId: safeString(ownerContext?.threadId).trim(),
+			currentNativeSessionId,
+			tmuxPaneId: safeString(ownerContext?.tmuxPaneId).trim(),
+			payload: ownerContext?.payload,
+		})
+	) {
 		return { state: direct, path: directPath };
 	}
 
@@ -3007,9 +3281,108 @@ function reportsBlockedUltragoalCompletedAggregateMicrogoalLoop(
 	);
 }
 
-function looksLikeNewGoalPrompt(text: string): boolean {
-	return /(?:\b(?:start|create|begin|new|another)\b.{0,80}\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b|\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b.{0,80}\b(?:start|create|begin|new|another)\b)/i.test(
-		text,
+function sentenceWindowAround(
+	text: string,
+	start: number,
+	end: number,
+): string {
+	const rawBefore = text.slice(Math.max(0, start - 80), start);
+	const rawAfter = text.slice(end, Math.min(text.length, end + 80));
+	const before = rawBefore.slice(
+		Math.max(
+			rawBefore.lastIndexOf("\n"),
+			rawBefore.lastIndexOf("."),
+			rawBefore.lastIndexOf("!"),
+			rawBefore.lastIndexOf("?"),
+		) + 1,
+	);
+	const sentenceEndOffsets = [
+		rawAfter.indexOf("\n"),
+		rawAfter.indexOf("."),
+		rawAfter.indexOf("!"),
+		rawAfter.indexOf("?"),
+	].filter((index) => index >= 0);
+	const after =
+		sentenceEndOffsets.length > 0
+			? rawAfter.slice(0, Math.min(...sentenceEndOffsets))
+			: rawAfter;
+	return `${before}${text.slice(start, end)}${after}`;
+}
+
+function isNegatedGoalAttemptWindow(window: string): boolean {
+	return (
+		/\b(?:do\s+not|don't|never|must\s+not|should\s+not|cannot|can't|not|no)\b.{0,50}\b(?:start|create|begin|new|another|goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b/i.test(
+			window,
+		) ||
+		/\b(?:without|instead\s+of)\b.{0,30}\b(?:start|create|begin|new|another)?\b.{0,30}\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b/i.test(
+			window,
+		) ||
+		/\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b.{0,30}\b(?:is|was|already)\b.{0,30}\b(?:documented|complete|completed|done|unavailable|not\s+needed)\b/i.test(
+			window,
+		)
+	);
+}
+
+function looksLikeGoalCreationAttempt(text: string): boolean {
+	const candidatePattern =
+		/\b(?:start|create|begin|new|another|goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b/gi;
+	for (const match of text.matchAll(candidatePattern)) {
+		const start = match.index ?? 0;
+		const end = start + match[0].length;
+		const window = sentenceWindowAround(text, start, end);
+		if (isNegatedGoalAttemptWindow(window)) continue;
+		if (
+			/(?:\b(?:start|create|begin|new|another)\b.{0,80}\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b|\b(?:goal|ultragoal|performance[-\s]goal|autoresearch[-\s]goal)\b.{0,80}\b(?:start|create|begin|new|another)\b)/i.test(
+				window,
+			)
+		)
+			return true;
+	}
+	return false;
+}
+
+function looksLikeCreateGoalAttempt(text: string): boolean {
+	const candidatePattern = /\bcreate_goal\s*(?:\(|\b)/gi;
+	for (const match of text.matchAll(candidatePattern)) {
+		const start = match.index ?? 0;
+		const end = start + match[0].length;
+		const window = sentenceWindowAround(text, start, end);
+		if (
+			/(?:\bno\s+create_goal\s+attempt\b|\b(?:do\s+not|don't|never|must\s+not|should\s+not|cannot|can't|not)\b.{0,40}\bcreate_goal\b|\bwithout\s+create_goal\b|\bfailed\s+to\s+call\s+create_goal\b|\bcreate_goal\s+(?:is|was)\s+(?:unavailable|not\s+available|not\s+called)\b)/i.test(
+				window,
+			)
+		) {
+			continue;
+		}
+		if (
+			/\b(?:call|calling|called|invoke|invoking|start|starting|create|creating|begin|beginning|attempt|attempting|try|trying|continue\s+to|proceed\s+to)\b.{0,80}\bcreate_goal\b/i.test(
+				window,
+			) ||
+			/\bcreate_goal\b.{0,80}\b(?:payload|call|tool|now|next|follows|follow|start|starting|create|creating|begin|beginning|attempt|attempting)\b/i.test(
+				window,
+			) ||
+			/\bcreate_goal\s*\(/i.test(match[0])
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function looksLikeCompletedGoalCleanupAttempt(text: string): boolean {
+	return looksLikeGoalCreationAttempt(text) || looksLikeCreateGoalAttempt(text);
+}
+function hasFreshNativeGoalCleanupEvidence(text: string): boolean {
+	return (
+		/\b(?:get_goal|Codex goal|native goal|active goal|thread goal)\b.{0,120}\b(?:reports?|returns?|shows?|status|state|still|attached|pending|cleanup|required|requires?)\b.{0,120}\b(?:complete|completed|attached|pending|cleanup|required|clear)\b/i.test(
+			text,
+		) ||
+		/\b(?:complete|completed|attached|pending|cleanup|required|clear)\b.{0,120}\b(?:get_goal|Codex goal|native goal|active goal|thread goal)\b/i.test(
+			text,
+		) ||
+		/\b(?:pending[-_ ]cleanup|native[-_ ]goal[-_ ]cleanup|completed[-_ ]codex[-_ ]goal[-_ ]cleanup)\b/i.test(
+			text,
+		)
 	);
 }
 
@@ -3072,7 +3445,7 @@ async function buildCompletedGoalCleanupPromptWarning(
 	cwd: string,
 	prompt: string,
 ): Promise<string | null> {
-	if (!looksLikeNewGoalPrompt(prompt)) return null;
+	if (!looksLikeCompletedGoalCleanupAttempt(prompt)) return null;
 	const notice = await findCompletedGoalWorkflowCleanupNotice(cwd);
 	if (!notice) return null;
 	return `${notice} Do not continue into create_goal until cleanup is explicit; hooks only nudge and must not mutate Codex goal state.`;
@@ -3086,7 +3459,8 @@ async function buildCompletedGoalCleanupStopOutput(
 		safeString(payload.last_user_message ?? payload.lastUserMessage),
 		safeString(payload.last_assistant_message ?? payload.lastAssistantMessage),
 	].join("\n");
-	if (!looksLikeNewGoalPrompt(text)) return null;
+	if (!looksLikeCompletedGoalCleanupAttempt(text)) return null;
+	if (!hasFreshNativeGoalCleanupEvidence(text)) return null;
 	const notice = await findCompletedGoalWorkflowCleanupNotice(cwd);
 	if (!notice) return null;
 	const systemMessage = `${notice} Do not continue into create_goal until cleanup is explicit; hooks only nudge and must not mutate Codex goal state.`;
@@ -3125,10 +3499,15 @@ async function findActiveGoalWorkflowReconciliationRequirement(
 	}
 	if (activeUltragoal) {
 		const goalId = safeString(activeUltragoal.id) || "<goal-id>";
+		const codexObjective =
+			safeString(ultragoal?.codexObjective) ||
+			safeString(activeUltragoal.objective) ||
+			"<intended ultragoal objective>";
 		return {
 			workflow: "ultragoal",
 			command: `omx ultragoal checkpoint --goal-id ${goalId} --status complete --codex-goal-json '<get_goal JSON or path>' --evidence '<evidence>'`,
 			remediation: [
+				`If get_goal returns no active goal/null while ${goalId} remains in_progress in .omx/ultragoal/goals.json, do not checkpoint complete or record a blocker from the empty snapshot; call create_goal with objective ${JSON.stringify(codexObjective)} and continue the active OMX story until real completion evidence exists.`,
 				`If get_goal returns a completed task-scoped objective for the same aggregate ultragoal plan, checkpoint ${goalId} with evidence naming ${goalId} plus .omx/ultragoal/goals.json or ledger.jsonl and pass final quality-gate JSON; OMX will reconcile the completed planned scope without mutating Codex goal state.`,
 				`If get_goal instead returns a different completed legacy objective and complete checkpointing fails, do not repeat --status complete in this thread.`,
 				`Record the non-terminal blocker with: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<different completed get_goal JSON or path>' --evidence '<completed legacy Codex goal blocks create_goal in this thread>'.`,
@@ -3627,11 +4006,65 @@ async function resolveInternalSessionIdForPayload(
 	if (!canonicalSessionId) return payloadSessionId;
 
 	const nativeSessionId = safeString(currentSession?.native_session_id).trim();
+	const ownerOmxSessionId = safeString(
+		currentSession?.owner_omx_session_id,
+	).trim();
 	if (!payloadSessionId) return canonicalSessionId;
 	if (payloadSessionId === canonicalSessionId) return canonicalSessionId;
 	if (nativeSessionId && payloadSessionId === nativeSessionId)
 		return canonicalSessionId;
+	if (ownerOmxSessionId && payloadSessionId === ownerOmxSessionId)
+		return canonicalSessionId;
 	return payloadSessionId;
+}
+
+async function readRootSessionStateFromStateDir(
+	stateDir: string,
+): Promise<SessionState | null> {
+	const sessionPath = join(stateDir, "session.json");
+	if (!existsSync(sessionPath)) return null;
+
+	try {
+		const content = await readFile(sessionPath, "utf-8");
+		return JSON.parse(content) as SessionState;
+	} catch {
+		return null;
+	}
+}
+
+function payloadMatchesSessionPointer(
+	payloadSessionId: string,
+	state: SessionState,
+): boolean {
+	const canonicalSessionId = safeString(state.session_id).trim();
+	const nativeSessionId = safeString(state.native_session_id).trim();
+	const ownerOmxSessionId = safeString(state.owner_omx_session_id).trim();
+	if (!payloadSessionId) return true;
+	return (
+		payloadSessionId === canonicalSessionId ||
+		(nativeSessionId !== "" && payloadSessionId === nativeSessionId) ||
+		(ownerOmxSessionId !== "" && payloadSessionId === ownerOmxSessionId)
+	);
+}
+
+function isRootSessionPointerLive(state: SessionState): boolean {
+	const hasPidMetadata = Number.isInteger(state.pid) && state.pid > 0;
+	if (!hasPidMetadata) return false;
+	return !isSessionStale(state, {
+		...(state.platform ? { platform: state.platform } : {}),
+	});
+}
+
+async function readLiveRootSessionPointerConflict(
+	stateDir: string,
+	payloadSessionId: string,
+): Promise<SessionState | null> {
+	if (!payloadSessionId) return null;
+	const rootState = await readRootSessionStateFromStateDir(stateDir);
+	if (!rootState) return null;
+	if (payloadMatchesSessionPointer(payloadSessionId, rootState)) return null;
+	if (!isRootSessionPointerLive(rootState)) return null;
+	return rootState;
 }
 
 async function readUsableSessionStateFromStateDir(
@@ -3677,6 +4110,13 @@ const RALPLAN_ALLOWED_WRITE_PREFIXES = [
 	".omx/state",
 	".beads",
 ] as const;
+
+const PROTECTED_PLANNING_STATE_FILE_NAMES = new Set([
+	"autopilot-state.json",
+	"deep-interview-state.json",
+	"ralplan-state.json",
+	"skill-active-state.json",
+]);
 
 const PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES = new Set([
 	"Write",
@@ -3751,26 +4191,42 @@ function hasExplicitExecutionHandoffSkill(
 	);
 }
 
+function normalizePlanningArtifactRelativePath(
+	cwd: string,
+	rawPath: string,
+): string | null {
+	const trimmed = rawPath.trim().replace(/^['"]|['"]$/g, "");
+	if (!trimmed || trimmed.includes("\0")) return null;
+	try {
+		const absolute = resolve(cwd, trimmed);
+		const relativePath = relative(cwd, absolute).replace(/\\/g, "/");
+		if (
+			!relativePath ||
+			relativePath.startsWith("..") ||
+			relativePath.startsWith("/")
+		)
+			return null;
+		return relativePath;
+	} catch {
+		return null;
+	}
+}
+
+function isProtectedPlanningStatePath(relativePath: string): boolean {
+	if (relativePath !== ".omx/state" && !relativePath.startsWith(".omx/state/"))
+		return false;
+	const fileName = relativePath.split("/").pop() ?? "";
+	return PROTECTED_PLANNING_STATE_FILE_NAMES.has(fileName);
+}
+
 function isAllowedPlanningArtifactPath(
 	cwd: string,
 	rawPath: string,
 	allowedPrefixes: readonly string[],
 ): boolean {
-	const trimmed = rawPath.trim().replace(/^['"]|['"]$/g, "");
-	if (!trimmed || trimmed.includes("\0")) return false;
-	let relativePath: string;
-	try {
-		const absolute = resolve(cwd, trimmed);
-		relativePath = relative(cwd, absolute).replace(/\\/g, "/");
-	} catch {
-		return false;
-	}
-	if (
-		!relativePath ||
-		relativePath.startsWith("..") ||
-		relativePath.startsWith("/")
-	)
-		return false;
+	const relativePath = normalizePlanningArtifactRelativePath(cwd, rawPath);
+	if (!relativePath) return false;
+	if (isProtectedPlanningStatePath(relativePath)) return false;
 	return allowedPrefixes.some(
 		(prefix) =>
 			relativePath === prefix || relativePath.startsWith(`${prefix}/`),
@@ -4094,12 +4550,47 @@ function extractDeepInterviewCommandWriteTargets(command: string): string[] {
 	const targets = extractDeepInterviewCommandRedirectTargets(command).map(
 		(target) => resolveCommandRedirectTarget(target, assignments),
 	);
-	for (const match of command.matchAll(
-		/\btee\s+(?:-a\s+)?(["']?)([^\s&|;<>]+)\1/g,
-	)) {
-		const candidate = safeString(match[2]).trim();
-		if (candidate)
-			targets.push(resolveCommandRedirectTarget(candidate, assignments));
+	for (const segment of splitShellCommandSegments(command)) {
+		const words = tokenizeShellWords(segment);
+		for (let index = 0; index < words.length; index += 1) {
+			if (shellWordBaseName(words[index] ?? "") !== "tee") continue;
+			let afterDoubleDash = false;
+			for (
+				let targetIndex = index + 1;
+				targetIndex < words.length;
+				targetIndex += 1
+			) {
+				const word = words[targetIndex] ?? "";
+				if (
+					!word ||
+					word === "|" ||
+					word === "|&" ||
+					word === "&&" ||
+					word === "||" ||
+					word === ";"
+				)
+					break;
+				if (!afterDoubleDash && word === "--") {
+					afterDoubleDash = true;
+					continue;
+				}
+				if (!afterDoubleDash && word.startsWith("-")) continue;
+				if (
+					word === ">" ||
+					word === ">>" ||
+					word === ">&" ||
+					word === "<" ||
+					word === "<<" ||
+					word === "<<<"
+				) {
+					targetIndex += 1;
+					continue;
+				}
+				if (/^(?:>{1,2}|<)\S+/.test(word)) continue;
+				if (!isNullDeviceRedirectTarget(word))
+					targets.push(resolveCommandRedirectTarget(word, assignments));
+			}
+		}
 	}
 	return targets;
 }
@@ -4115,6 +4606,353 @@ function formatPlanningWriteBlockDetail(
 function isUnresolvedVariableTarget(target: string): boolean {
 	const normalized = target.trim().replace(/^['"]|['"]$/g, "");
 	return /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(normalized);
+}
+
+function normalizeSameCommandScriptTarget(
+	cwd: string,
+	rawPath: string,
+	assignments: Map<string, string>,
+): string | null {
+	const trimmed = resolveCommandRedirectTarget(
+		rawPath.trim().replace(/^['"]|['"]$/g, ""),
+		assignments,
+	);
+	if (!trimmed || trimmed.includes("\0") || isUnresolvedVariableTarget(trimmed))
+		return null;
+	try {
+		return resolve(cwd, trimmed);
+	} catch {
+		return null;
+	}
+}
+
+function normalizeCommandDirectoryTarget(rawPath: string): string | null {
+	const trimmed = rawPath.trim().replace(/^['"]|['"]$/g, "");
+	if (
+		!trimmed ||
+		trimmed.includes("\0") ||
+		trimmed.startsWith("~") ||
+		trimmed.startsWith("-") ||
+		isUnresolvedVariableTarget(trimmed) ||
+		/[`$]/.test(trimmed)
+	) {
+		return null;
+	}
+	return trimmed;
+}
+
+function isEnvCwdChangingOption(word: string): boolean {
+	return (
+		word === "-C" ||
+		word === "--chdir" ||
+		word.startsWith("--chdir=") ||
+		/^-C.+/.test(word)
+	);
+}
+
+function resolveStateWriteInputFileCwd(
+	cwd: string,
+	commandPrefix: string,
+): string | null {
+	const words = tokenizeShellWords(
+		stripHeredocBodiesForCommandScan(commandPrefix),
+	);
+	let effectiveCwd = cwd;
+	let activeWrapper: "env" | "npm" | "pnpm" | "yarn" | null = null;
+
+	for (let index = 0; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellAssignmentWord(word)) continue;
+
+		const wordBase = shellWordBaseName(word);
+		if (
+			wordBase === "env" ||
+			wordBase === "npm" ||
+			wordBase === "pnpm" ||
+			wordBase === "yarn"
+		) {
+			activeWrapper = wordBase;
+			continue;
+		}
+
+		if (!activeWrapper) continue;
+
+		const isEnvChdirOption =
+			activeWrapper === "env" && isEnvCwdChangingOption(word);
+		const isPackageManagerCwdOption =
+			activeWrapper !== "env" &&
+			(word === "-C" ||
+				word === "--prefix" ||
+				word === "--dir" ||
+				word === "--cwd" ||
+				word.startsWith("--prefix=") ||
+				word.startsWith("--dir=") ||
+				word.startsWith("--cwd=") ||
+				/^-C.+/.test(word));
+
+		if (isEnvChdirOption || isPackageManagerCwdOption) {
+			let target = "";
+			if (
+				word === "-C" ||
+				word === "--chdir" ||
+				word === "--prefix" ||
+				word === "--dir" ||
+				word === "--cwd"
+			) {
+				target = words[index + 1] ?? "";
+			} else if (word.startsWith("--chdir=")) {
+				target = word.slice("--chdir=".length);
+			} else if (word.startsWith("--prefix=")) {
+				target = word.slice("--prefix=".length);
+			} else if (word.startsWith("--dir=")) {
+				target = word.slice("--dir=".length);
+			} else if (word.startsWith("--cwd=")) {
+				target = word.slice("--cwd=".length);
+			} else if (word.startsWith("-C") && word.length > 2) {
+				target = word.slice(2);
+			}
+			const normalizedTarget = normalizeCommandDirectoryTarget(target);
+			if (normalizedTarget === null) return null;
+			effectiveCwd = resolve(effectiveCwd, normalizedTarget);
+			if (
+				word === "-C" ||
+				word === "--chdir" ||
+				word === "--prefix" ||
+				word === "--dir" ||
+				word === "--cwd"
+			) {
+				index += 1;
+			}
+		}
+	}
+
+	return effectiveCwd;
+}
+
+function findShellFunctionDefinitionAt(
+	command: string,
+	index: number,
+): { name: string; openBraceIndex: number; bodyOpenChar: "{" | "(" } | null {
+	if (index > 0) {
+		let previous = index - 1;
+		while (previous >= 0 && /\s/.test(command[previous] ?? "")) previous -= 1;
+		if (previous >= 0 && !/[;&|(){}]/.test(command[previous] ?? ""))
+			return null;
+	}
+
+	let cursor = index;
+	while (/\s/.test(command[cursor] ?? "")) cursor += 1;
+	const candidate = command.slice(cursor);
+	const functionKeywordMatch = candidate.match(
+		/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*\))?\s*([\{(])/,
+	);
+	if (functionKeywordMatch) {
+		return {
+			name: functionKeywordMatch[1],
+			openBraceIndex: cursor + functionKeywordMatch[0].length - 1,
+			bodyOpenChar: functionKeywordMatch[2] === "(" ? "(" : "{",
+		};
+	}
+	const bareFunctionMatch = candidate.match(
+		/^([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*([\{(])/,
+	);
+	if (bareFunctionMatch) {
+		return {
+			name: bareFunctionMatch[1],
+			openBraceIndex: cursor + bareFunctionMatch[0].length - 1,
+			bodyOpenChar: bareFunctionMatch[2] === "(" ? "(" : "{",
+		};
+	}
+	return null;
+}
+
+function findShellFunctionBodyEnd(
+	command: string,
+	openBraceIndex: number,
+	bodyOpenChar: "{" | "(",
+): number {
+	let depth = 1;
+	let quote: "'" | '"' | null = null;
+	for (let index = openBraceIndex + 1; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		if (bodyOpenChar === "{" && char === "{") {
+			depth += 1;
+			continue;
+		}
+		if (bodyOpenChar === "{" && char === "}") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+		if (bodyOpenChar === "(" && char === "(") {
+			depth += 1;
+			continue;
+		}
+		if (bodyOpenChar === "(" && char === ")") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+function isShellFunctionInvokedLater(
+	command: string,
+	functionName: string,
+): boolean {
+	for (const segment of splitShellCommandSegments(command)) {
+		const words = tokenizeShellWords(segment);
+		if (isShellFunctionInvokedFromWords(words, 0, functionName)) return true;
+	}
+	return false;
+}
+
+function isShellFunctionInvokedFromWords(
+	words: string[],
+	startIndex: number,
+	functionName: string,
+): boolean {
+	const index = skipShellCommandPositionPrefixWords(words, startIndex);
+	const head = words[index] ?? "";
+	if (head === functionName) return true;
+
+	if (shellWordBaseName(head) === "time") {
+		const timeOperandIndex = findTimeDispatchOperandIndex(words, index + 1);
+		if (timeOperandIndex !== null) {
+			const timeCommandIndex = skipShellCommandPositionPrefixWords(
+				words,
+				timeOperandIndex,
+			);
+			if ((words[timeCommandIndex] ?? "") === functionName) return true;
+		}
+	}
+
+	if (shellWordBaseName(head) === "coproc") {
+		const coprocOperandIndex = findCoprocDispatchOperandIndex(words, index + 1);
+		if (coprocOperandIndex !== null) {
+			return isShellFunctionInvokedFromWords(
+				words,
+				coprocOperandIndex,
+				functionName,
+			);
+		}
+	}
+
+	if (shellWordBaseName(head) === "setsid") {
+		const setsidOperandIndex = findCommandDispatchOperandIndex(
+			words,
+			index + 1,
+		);
+		if (setsidOperandIndex !== null) {
+			return isShellFunctionInvokedFromWords(
+				words,
+				setsidOperandIndex,
+				functionName,
+			);
+		}
+	}
+
+	if (shellWordBaseName(head) === "command") {
+		const commandOperandIndex = findCommandDispatchOperandIndex(
+			words,
+			index + 1,
+		);
+		if (
+			commandOperandIndex !== null &&
+			shellWordBaseName(words[commandOperandIndex] ?? "") === "time"
+		) {
+			return isShellFunctionInvokedFromWords(
+				words,
+				commandOperandIndex,
+				functionName,
+			);
+		}
+	}
+
+	return false;
+}
+
+function firstNonOptionSourceOperand(
+	words: string[],
+	sourceWordIndex: number,
+): string {
+	for (let index = sourceWordIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (word.startsWith("-")) continue;
+		return word;
+	}
+	return "";
+}
+
+function firstShellScriptOperand(
+	words: string[],
+	shellWordIndex: number,
+): string {
+	for (let index = shellWordIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (isShellCommandStringOption(word)) return "";
+		if (isShellOptionWithSeparateValue(word)) {
+			index += 1;
+			continue;
+		}
+		if (word.startsWith("-")) continue;
+		return word;
+	}
+	return "";
+}
+
+function sourcesFileWrittenEarlierInSameCommand(
+	cwd: string,
+	command: string,
+): boolean {
+	const assignments = extractCommandLiteralAssignments(command);
+	const writtenTargets = new Set<string>();
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
+		const words = tokenizeShellWords(segment);
+		for (let index = 0; index < words.length; index += 1) {
+			const word = words[index] ?? "";
+			const operand =
+				word === "source" || word === "."
+					? normalizeSameCommandScriptTarget(
+							cwd,
+							firstNonOptionSourceOperand(words, index),
+							assignments,
+						)
+					: isNestedShellCommandWord(word)
+						? normalizeSameCommandScriptTarget(
+								cwd,
+								firstShellScriptOperand(words, index),
+								assignments,
+							)
+						: null;
+			if (operand && writtenTargets.has(operand)) return true;
+		}
+		for (const target of extractDeepInterviewCommandWriteTargets(segment)) {
+			const normalizedTarget = normalizeSameCommandScriptTarget(
+				cwd,
+				target,
+				assignments,
+			);
+			if (normalizedTarget) writtenTargets.add(normalizedTarget);
+		}
+	}
+	return false;
 }
 
 function describeImplementationToolBlock(
@@ -4138,14 +4976,2064 @@ function describeImplementationToolBlock(
 	);
 }
 
+// `omx state` mutations normally route through the gate-enforcing `state_write`
+// backend, so the hook defers to that gate rather than blocking the transport.
+// The backend does NOT gate standalone deep-interview/ralplan *deactivation*,
+// and it normalizes non-terminal tracked-workflow writes to `active=true`, so
+// commands that would implicitly activate a tracked workflow while planning is
+// still protected are blocked here. Broader backend authority belongs to a
+// separate follow-up; this PR keeps the model/tool-originated guard at the
+// native-hook transport boundary.
+function readStateWriteInputPayload(
+	cwd: string,
+	command: string,
+	sourceCommand: string = command,
+): Record<string, unknown> | null {
+	const stateWriteOperations = collectOmxStateCommandOperations(
+		command,
+		"write",
+	);
+	if (stateWriteOperations.length === 0) return null;
+	if (stateWriteOperations.length > 1) return null;
+
+	const stateWriteOperation = stateWriteOperations[0];
+	if (!stateWriteOperation) return null;
+	const stateWriteArgs = stateWriteOperation.args;
+
+	const mergeModeFlag = (
+		payload: Record<string, unknown>,
+	): Record<string, unknown> => {
+		const mode = readStateWriteFlagValue(stateWriteArgs, "--mode");
+		return normalizeStateWriteClassificationPayload(
+			mode ? { ...payload, mode } : payload,
+		);
+	};
+
+	const inlineInput = readStateWriteFlagValue(stateWriteArgs, "--input");
+	const inputFile = readStateWriteFlagValue(stateWriteArgs, "--input-file");
+	if (inlineInput !== undefined && inputFile !== undefined) return null;
+
+	if (inlineInput !== undefined) {
+		try {
+			const parsed = JSON.parse(inlineInput);
+			return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+				? mergeModeFlag(parsed as Record<string, unknown>)
+				: null;
+		} catch {
+			return null;
+		}
+	}
+
+	if (inputFile === undefined) return null;
+	if (stateWriteOperation.nested) return null;
+	if (hasPriorExecutableCommand(stateWriteOperation.prefix)) return null;
+
+	const canonicalCommandPrefix =
+		stateWriteOperation.commandPrefix || stateWriteOperation.prefix || "";
+	const rawCommandPrefix =
+		sourceCommand !== command
+			? (() => {
+					const sourceCommandIndex = sourceCommand.lastIndexOf(command);
+					return sourceCommandIndex >= 0
+						? sourceCommand.slice(0, sourceCommandIndex)
+						: "";
+				})()
+			: "";
+	const resolvedInputFileCwd = resolveStateWriteInputFileCwd(
+		cwd,
+		canonicalCommandPrefix || rawCommandPrefix,
+	);
+	if (resolvedInputFileCwd === null) return null;
+
+	try {
+		const raw = readFileSync(
+			resolve(resolvedInputFileCwd, inputFile.trim()),
+			"utf-8",
+		);
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? mergeModeFlag(parsed as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function envCommandHasCwdChangingOption(
+	words: string[],
+	startIndex: number,
+): boolean {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (isEnvCwdChangingOption(token)) return true;
+		if (
+			token === "-S" ||
+			token === "--split-string" ||
+			token.startsWith("-S") ||
+			token.startsWith("--split-string=")
+		) {
+			return false;
+		}
+		if (
+			token === "-u" ||
+			token === "--unset" ||
+			token === "-a" ||
+			token === "--argv0"
+		) {
+			index += 1;
+			continue;
+		}
+		if (token.startsWith("--unset=") || token.startsWith("--argv0=")) continue;
+		if (/^-u.+/.test(token) || /^-a.+/.test(token)) continue;
+		if (token.startsWith("-")) continue;
+		return false;
+	}
+	return false;
+}
+
+function hasPriorExecutableCommand(commandPrefix: string): boolean {
+	const words = tokenizeShellWords(
+		stripHeredocBodiesForCommandScan(commandPrefix),
+	);
+	let commandStart = true;
+	for (let index = 0; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word) continue;
+		if (
+			word === "&&" ||
+			word === "||" ||
+			word === ";" ||
+			word === "&" ||
+			word === "|" ||
+			word === "|&"
+		) {
+			commandStart = true;
+			continue;
+		}
+		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+		if (commandStart) return true;
+		commandStart = false;
+	}
+	return false;
+}
+
+function tokenizeShellWords(segment: string): string[] {
+	segment = normalizeShellLineContinuations(segment);
+	const words: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < segment.length; index += 1) {
+		const char = segment[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			current += segment[index] ?? "";
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			} else {
+				current += char;
+			}
+			continue;
+		}
+		if (!quote && /\s/.test(char)) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			continue;
+		}
+		if (
+			!quote &&
+			(char === "(" || char === ")" || char === "{" || char === "}")
+		) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			words.push(char);
+			continue;
+		}
+		if (!quote && char === "|") {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			const next = segment[index + 1] ?? "";
+			if (next === "&" || next === "|") {
+				words.push(`${char}${next}`);
+				index += 1;
+			} else {
+				words.push(char);
+			}
+			continue;
+		}
+		if (!quote && (char === "<" || char === ">")) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			const next = segment[index + 1] ?? "";
+			if (next === char) {
+				const third = segment[index + 2] ?? "";
+				if (char === "<" && third === "<") {
+					words.push("<<<");
+					index += 2;
+				} else {
+					words.push(`${char}${next}`);
+					index += 1;
+				}
+			} else if (char === ">" && next === "&") {
+				words.push(">&");
+				index += 1;
+			} else {
+				words.push(char);
+			}
+			continue;
+		}
+		current += char;
+	}
+	if (current) words.push(current);
+	return words;
+}
+
+function isOmxCliEntryPath(
+	token: string,
+	runtimeWrapper: string | null,
+): boolean {
+	const trimmed = token.trim().replace(/^['"]|['"]$/g, "");
+	if (!trimmed || trimmed.includes("\0")) return false;
+
+	const normalized = trimmed.replace(/\\/g, "/");
+	const entryBasename = normalized.split("/").filter(Boolean).pop() ?? "";
+	if (entryBasename === "omx" || entryBasename === "omx.js") return true;
+	if (
+		normalized.endsWith("/node_modules/.bin/omx") ||
+		normalized === "node_modules/.bin/omx"
+	)
+		return true;
+	if (
+		normalized.endsWith("/dist/cli/omx.js") ||
+		normalized === "dist/cli/omx.js"
+	)
+		return true;
+	if (
+		runtimeWrapper === "tsx" &&
+		(normalized.endsWith("/src/cli/omx.ts") || normalized === "src/cli/omx.ts")
+	)
+		return true;
+	if (
+		runtimeWrapper === "tsx" &&
+		(normalized.endsWith("/dist/cli/omx.js") ||
+			normalized === "dist/cli/omx.js")
+	)
+		return true;
+	return false;
+}
+
+function extractEnvSplitStringCommand(
+	words: string[],
+	startIndex: number,
+): string {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token) continue;
+		if (token === "-S" || token === "--split-string") {
+			const operand = words[index + 1] ?? "";
+			if (!operand) return "";
+			const tail = words.slice(index + 2).join(" ");
+			return tail ? `${operand} ${tail}` : operand;
+		}
+		if (
+			token.startsWith("--split-string=") ||
+			(token.startsWith("-S") && token.length > 2)
+		) {
+			const operand = token.startsWith("--split-string=")
+				? token.slice("--split-string=".length)
+				: token.slice(2);
+			if (!operand) return "";
+			const tail = words.slice(index + 1).join(" ");
+			return tail ? `${operand} ${tail}` : operand;
+		}
+		if (isShellAssignmentWord(token)) continue;
+		if (
+			token === "-u" ||
+			token === "--unset" ||
+			token === "-C" ||
+			token === "--chdir" ||
+			token === "-a" ||
+			token === "--argv0"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token.startsWith("--unset=") ||
+			token.startsWith("--chdir=") ||
+			token.startsWith("--argv0=")
+		)
+			continue;
+		if (/^-u.+/.test(token) || /^-C.+/.test(token) || /^-a.+/.test(token))
+			continue;
+		if (token.startsWith("-")) continue;
+		break;
+	}
+	return "";
+}
+
+function extractPackageManagerExecCommand(
+	command: string,
+	words: string[],
+	startIndex: number,
+	headBase: string,
+): string {
+	let index = startIndex;
+	if (headBase === "npm" || headBase === "pnpm" || headBase === "yarn") {
+		const subcommandIndex = findPackageManagerExecSubcommandIndex(
+			words,
+			startIndex,
+			headBase,
+		);
+		if (subcommandIndex === null) return "";
+		index = subcommandIndex + 1;
+	} else if (headBase !== "npx" && headBase !== "pnpx") {
+		return "";
+	}
+
+	for (; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token) continue;
+		if (token === "--") {
+			const tail = sliceShellWordsTailPreservingQuoting(command, index + 1);
+			return tail || "";
+		}
+		if (isShellAssignmentWord(token)) continue;
+		if (token === "-c" || token === "--call") {
+			return words[index + 1] ?? "";
+		}
+		if (token.startsWith("-c") && token.length > 2) return token.slice(2);
+		if (token.startsWith("--call=")) return token.slice("--call=".length);
+		if (
+			token === "--package" ||
+			token === "-w" ||
+			token === "--workspace" ||
+			token === "--allow-scripts"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token.startsWith("--package=") ||
+			token.startsWith("--workspace=") ||
+			token.startsWith("--allow-scripts=")
+		)
+			continue;
+		if (token.startsWith("-w") && token.length > 2) continue;
+		if (token.startsWith("-")) continue;
+		const tail = sliceShellWordsTailPreservingQuoting(command, index);
+		return tail || "";
+	}
+	return "";
+}
+
+function findPackageManagerExecSubcommandIndex(
+	words: string[],
+	startIndex: number,
+	headBase: string,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token) continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (
+			token === "-C" ||
+			token === "--prefix" ||
+			token === "--dir" ||
+			token === "-w" ||
+			token === "--workspace" ||
+			token === "--package" ||
+			token === "--allow-scripts"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token.startsWith("--prefix=") ||
+			token.startsWith("--dir=") ||
+			token.startsWith("--workspace=") ||
+			token.startsWith("--package=") ||
+			token.startsWith("--allow-scripts=")
+		)
+			continue;
+		if (/^-C.+/.test(token) || /^-w.+/.test(token)) continue;
+		if (token.startsWith("-")) continue;
+		if (
+			token === "exec" ||
+			(headBase === "npm" && token === "x") ||
+			((headBase === "pnpm" || headBase === "yarn") && token === "dlx")
+		) {
+			return index;
+		}
+		return null;
+	}
+	return null;
+}
+
+function unwrapOmxStateTransportCommandOnce(command: string): string | null {
+	const words = tokenizeShellWords(
+		normalizeShellLineContinuations(command).trim(),
+	);
+	if (words.length === 0) return null;
+
+	let index = 0;
+	while (index < words.length && isShellAssignmentWord(words[index] ?? ""))
+		index += 1;
+	if (index >= words.length) return null;
+
+	const head = words[index] ?? "";
+	if (!head) return null;
+	const headBase = shellWordBaseName(head);
+
+	if (
+		headBase === "command" ||
+		headBase === "builtin" ||
+		headBase === "exec" ||
+		headBase === "nohup" ||
+		headBase === "setsid"
+	) {
+		let remainderIndex = index + 1;
+		while (remainderIndex < words.length) {
+			const token = words[remainderIndex] ?? "";
+			if (!token) {
+				remainderIndex += 1;
+				continue;
+			}
+			if (token === "--") {
+				remainderIndex += 1;
+				continue;
+			}
+			if (head === "exec" && token === "-a") {
+				remainderIndex += 2;
+				continue;
+			}
+			if (token.startsWith("-")) {
+				remainderIndex += 1;
+				continue;
+			}
+			break;
+		}
+		const remainder = sliceShellWordsTailPreservingQuoting(
+			command,
+			remainderIndex,
+		);
+		return remainder || null;
+	}
+
+	if (headBase === "env") {
+		if (envCommandHasCwdChangingOption(words, index + 1)) {
+			return null;
+		}
+		const splitOperand = extractEnvSplitStringCommand(words, index + 1);
+		if (splitOperand) {
+			return splitOperand;
+		}
+		const envCommandIndex = findEnvDispatchOperandIndex(words, index + 1);
+		if (envCommandIndex !== null) {
+			const remainder = sliceShellWordsTailPreservingQuoting(
+				command,
+				envCommandIndex,
+			);
+			return remainder || null;
+		}
+		const remainder = sliceShellWordsTailPreservingQuoting(command, index + 1);
+		return remainder || null;
+	}
+
+	if (headBase === "time") {
+		const operandIndex = findTimeDispatchOperandIndex(words, index + 1);
+		if (operandIndex !== null) {
+			const remainder = sliceShellWordsTailPreservingQuoting(
+				command,
+				operandIndex,
+			);
+			return remainder || null;
+		}
+		return null;
+	}
+
+	if (headBase === "nice") {
+		const operandIndex = findNiceDispatchOperandIndex(words, index + 1);
+		if (operandIndex !== null) {
+			const remainder = sliceShellWordsTailPreservingQuoting(
+				command,
+				operandIndex,
+			);
+			return remainder || null;
+		}
+		return null;
+	}
+
+	if (headBase === "stdbuf") {
+		const operandIndex = findStdbufDispatchOperandIndex(words, index + 1);
+		if (operandIndex !== null) {
+			const remainder = sliceShellWordsTailPreservingQuoting(
+				command,
+				operandIndex,
+			);
+			return remainder || null;
+		}
+		return null;
+	}
+
+	if (
+		headBase === "npm" ||
+		headBase === "pnpm" ||
+		headBase === "yarn" ||
+		headBase === "npx" ||
+		headBase === "pnpx"
+	) {
+		const packageManagerCommand = extractPackageManagerExecCommand(
+			command,
+			words,
+			index + 1,
+			headBase,
+		);
+		if (packageManagerCommand) {
+			return packageManagerCommand;
+		}
+	}
+
+	if (isNestedShellCommandWord(headBase)) {
+		const commandStringIndex = findShellCommandStringArgIndex(words, index + 1);
+		if (commandStringIndex !== null) {
+			const nestedCommand = words[commandStringIndex] ?? "";
+			if (nestedCommand && !isDynamicNestedCommandString(nestedCommand)) {
+				const remainder = sliceShellWordsTailPreservingQuoting(
+					command,
+					commandStringIndex + 1,
+				);
+				return remainder ? `${nestedCommand} ${remainder}` : nestedCommand;
+			}
+		}
+	}
+
+	if (headBase === "eval") {
+		const nestedCommand = words.slice(index + 1).join(" ");
+		if (nestedCommand && !isDynamicNestedCommandString(nestedCommand))
+			return nestedCommand;
+	}
+
+	if (headBase === "node" || headBase === "bun" || headBase === "tsx") {
+		const entryIndex = (() => {
+			for (
+				let candidateIndex = index + 1;
+				candidateIndex < words.length;
+				candidateIndex += 1
+			) {
+				const candidate = words[candidateIndex] ?? "";
+				if (!candidate) continue;
+				if (candidate.startsWith("-")) continue;
+				return candidateIndex;
+			}
+			return -1;
+		})();
+		if (entryIndex >= 0) {
+			const entryPath = words[entryIndex] ?? "";
+			if (entryPath && isOmxCliEntryPath(entryPath, headBase)) {
+				const remainder = sliceShellWordsTailPreservingQuoting(
+					command,
+					entryIndex + 1,
+				);
+				return remainder ? `omx ${remainder}` : "omx";
+			}
+		}
+		return null;
+	}
+
+	if (isOmxCliEntryPath(head, null)) {
+		const remainder = sliceShellWordsTailPreservingQuoting(command, index + 1);
+		return remainder ? `omx ${remainder}` : "omx";
+	}
+
+	return null;
+}
+
+function canonicalizeOmxStateTransportCommand(command: string): string {
+	let current = normalizeShellLineContinuations(command).trim();
+	for (let passes = 0; passes < 8; passes += 1) {
+		const next = unwrapOmxStateTransportCommandOnce(current);
+		if (!next || next === current) return current;
+		current = next.trim();
+	}
+	return current;
+}
+
+function sliceShellWordsTailPreservingQuoting(
+	command: string,
+	startWordIndex: number,
+): string | null {
+	const normalized = normalizeShellLineContinuations(command);
+	let quote: "'" | '"' | null = null;
+	let wordIndex = 0;
+	let currentWordStart: number | null = null;
+
+	for (let index = 0; index < normalized.length; index += 1) {
+		const char = normalized[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			if (currentWordStart === null) currentWordStart = index;
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+				if (currentWordStart === null) currentWordStart = index;
+			} else if (currentWordStart === null) {
+				currentWordStart = index;
+			}
+			continue;
+		}
+		if (!quote && /\s/.test(char)) {
+			if (currentWordStart !== null) {
+				if (wordIndex === startWordIndex)
+					return normalized.slice(currentWordStart);
+				wordIndex += 1;
+				currentWordStart = null;
+			}
+			continue;
+		}
+		if (currentWordStart === null) currentWordStart = index;
+	}
+
+	if (currentWordStart !== null && wordIndex === startWordIndex) {
+		return normalized.slice(currentWordStart);
+	}
+	return null;
+}
+
+function normalizeShellLineContinuations(command: string): string {
+	let normalized = "";
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			normalized += char;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			const next = command[index + 1] ?? "";
+			if (next === "\r" && command[index + 2] === "\n") {
+				index += 2;
+				continue;
+			}
+			if (next === "\n") {
+				index += 1;
+				continue;
+			}
+		}
+		normalized += char;
+	}
+	return normalized;
+}
+
+function readStateWriteFlagValue(
+	args: string[],
+	flagName: "--input" | "--input-file" | "--mode",
+): string | undefined {
+	let value: string | undefined;
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (arg === flagName) {
+			value = args[index + 1];
+			index += 1;
+			continue;
+		}
+		if (arg.startsWith(`${flagName}=`)) value = arg.slice(flagName.length + 1);
+	}
+	return value;
+}
+
+interface OmxStateCommandOperation {
+	args: string[];
+	prefix: string;
+	commandPrefix: string;
+	nested: boolean;
+}
+
+interface StateScanSegment {
+	segment: string;
+	prefix: string;
+}
+
+function shellWordBaseName(word: string): string {
+	return word.replace(/\\/g, "/").split("/").pop() ?? word;
+}
+
+function isOmxCliWrapperRuntime(word: string): boolean {
+	const base = shellWordBaseName(word);
+	return base === "node" || base === "bun" || base === "tsx";
+}
+
+function isOmxCliWrapperScript(word: string): boolean {
+	const base = shellWordBaseName(word);
+	return base === "omx" || base === "omx.js";
+}
+
+function runtimeOptionConsumesNextWord(option: string): boolean {
+	return (
+		option === "-r" ||
+		option === "--require" ||
+		option === "--import" ||
+		option === "--loader" ||
+		option === "--experimental-loader" ||
+		option === "--env-file" ||
+		option === "--conditions" ||
+		option === "--title" ||
+		option === "-C"
+	);
+}
+
+function runtimeOptionIsInlineCode(option: string): boolean {
+	return (
+		option === "-e" ||
+		option === "--eval" ||
+		option.startsWith("--eval=") ||
+		option === "-p" ||
+		option === "--print" ||
+		option.startsWith("--print=")
+	);
+}
+
+function findOmxCliWrapperRuntimeScriptIndex(words: string[]): number | null {
+	if (!isOmxCliWrapperRuntime(words[0] ?? "")) return null;
+	for (let index = 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word) continue;
+		if (word === "--") continue;
+		if (runtimeOptionIsInlineCode(word)) return null;
+		if (runtimeOptionConsumesNextWord(word)) {
+			index += 1;
+			continue;
+		}
+		if (word.startsWith("-r") && word.length > 2) continue;
+		if (word.startsWith("--") && word.includes("=")) continue;
+		if (word.startsWith("-")) continue;
+		return isOmxCliWrapperScript(word) ? index : null;
+	}
+	return null;
+}
+
+function readOmxStateCommandArgsFromWords(
+	words: string[],
+	operation: "write" | "clear",
+): string[] | null {
+	if (
+		isOmxCliWrapperScript(words[0] ?? "") &&
+		words[1] === "state" &&
+		words[2] === operation
+	) {
+		return words.slice(3);
+	}
+	const runtimeScriptIndex = findOmxCliWrapperRuntimeScriptIndex(words);
+	if (
+		runtimeScriptIndex !== null &&
+		words[runtimeScriptIndex + 1] === "state" &&
+		words[runtimeScriptIndex + 2] === operation
+	) {
+		return words.slice(runtimeScriptIndex + 3);
+	}
+	return null;
+}
+
+// Shell compound-command introducers can occupy command position after wrappers
+// such as `time`/`command`; skip them before matching the protected `omx state`
+// operation so wrapper-unwrapping keeps scanning the actual command body.
+function isShellCommandPositionPrefixWord(word: string): boolean {
+	return (
+		word === "(" ||
+		word === "{" ||
+		word === "!" ||
+		word === "if" ||
+		word === "then" ||
+		word === "else" ||
+		word === "elif" ||
+		word === "do" ||
+		word === "while" ||
+		word === "until"
+	);
+}
+
+function findEnvDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option || option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (
+			option === "-S" ||
+			option === "--split-string" ||
+			option.startsWith("-S") ||
+			option.startsWith("--split-string=")
+		) {
+			return null;
+		}
+		if (
+			option === "-u" ||
+			option === "--unset" ||
+			option === "-C" ||
+			option === "--chdir" ||
+			option === "-a" ||
+			option === "--argv0"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			option.startsWith("--unset=") ||
+			option.startsWith("--chdir=") ||
+			option.startsWith("--argv0=")
+		)
+			continue;
+		if (/^-u.+/.test(option) || /^-C.+/.test(option) || /^-a.+/.test(option))
+			continue;
+		if (option.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findCommandDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option || option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (option.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findExecDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option || option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (option === "-a") {
+			index += 1;
+			continue;
+		}
+		if (option.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findTimeDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option || option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (
+			option === "-f" ||
+			option === "--format" ||
+			option === "-o" ||
+			option === "--output"
+		) {
+			index += 1;
+			continue;
+		}
+		if (option.startsWith("--format=") || option.startsWith("--output="))
+			continue;
+		if (/^-[^-]/.test(option)) {
+			const shortOptions = option.slice(1);
+			const lastValueOptionIndex = Math.max(
+				shortOptions.lastIndexOf("f"),
+				shortOptions.lastIndexOf("o"),
+			);
+			if (
+				lastValueOptionIndex >= 0 &&
+				lastValueOptionIndex === shortOptions.length - 1
+			) {
+				index += 1;
+			}
+			continue;
+		}
+		if (option.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findTimeoutDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	let durationSeen = false;
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (!durationSeen) {
+			if (
+				token === "-k" ||
+				token === "--kill-after" ||
+				token === "-s" ||
+				token === "--signal" ||
+				token.startsWith("--kill-after=") ||
+				token.startsWith("--signal=") ||
+				token.startsWith("-k") ||
+				token.startsWith("-s")
+			) {
+				if (
+					token === "-k" ||
+					token === "--kill-after" ||
+					token === "-s" ||
+					token === "--signal"
+				) {
+					index += 1;
+				}
+				continue;
+			}
+			if (
+				token === "-f" ||
+				token === "--foreground" ||
+				token === "-p" ||
+				token === "--preserve-status" ||
+				token === "-v" ||
+				token === "--verbose"
+			) {
+				continue;
+			}
+			if (token.startsWith("-")) continue;
+			durationSeen = true;
+			continue;
+		}
+		return index;
+	}
+	return null;
+}
+
+function findNiceDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (token === "-n" || token === "--adjustment") {
+			index += 1;
+			continue;
+		}
+		if (token.startsWith("--adjustment=") || /^-n.+/.test(token)) continue;
+		if (token.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findStdbufDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (
+			token === "-i" ||
+			token === "-o" ||
+			token === "-e" ||
+			token === "--input" ||
+			token === "--output" ||
+			token === "--error"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token.startsWith("--input=") ||
+			token.startsWith("--output=") ||
+			token.startsWith("--error=") ||
+			/^-[ioe].+/.test(token)
+		) {
+			continue;
+		}
+		if (token.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function isXargsOptionWithNextValue(option: string): boolean {
+	return (
+		option === "-a" ||
+		option === "--arg-file" ||
+		option === "-d" ||
+		option === "--delimiter" ||
+		option === "-E" ||
+		option === "--eof" ||
+		option === "-I" ||
+		option === "--replace" ||
+		option === "-J" ||
+		option === "-L" ||
+		option === "--max-lines" ||
+		option === "-n" ||
+		option === "--max-args" ||
+		option === "-P" ||
+		option === "--max-procs" ||
+		option === "-s" ||
+		option === "--max-chars"
+	);
+}
+
+function isXargsStandaloneOption(option: string): boolean {
+	return (
+		option === "-0" ||
+		option === "--null" ||
+		option === "-r" ||
+		option === "--no-run-if-empty" ||
+		option === "-t" ||
+		option === "--verbose" ||
+		option === "-p" ||
+		option === "--interactive" ||
+		option === "-x" ||
+		option === "--exit" ||
+		option === "-o" ||
+		option === "--open-tty" ||
+		option === "--show-limits"
+	);
+}
+
+function findXargsDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option || option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (isXargsOptionWithNextValue(option)) {
+			index += 1;
+			continue;
+		}
+		if (
+			option.startsWith("--arg-file=") ||
+			option.startsWith("--delimiter=") ||
+			option.startsWith("--eof=") ||
+			option.startsWith("--replace=") ||
+			option.startsWith("--max-lines=") ||
+			option.startsWith("--max-args=") ||
+			option.startsWith("--max-procs=") ||
+			option.startsWith("--max-chars=") ||
+			/^-[aAdDEIJLnPs][^-\s]*$/.test(option)
+		) {
+			continue;
+		}
+		if (isXargsStandaloneOption(option)) continue;
+		if (option.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findCoprocDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	const firstIndex = findDispatchWordIndex(words, startIndex);
+	if (firstIndex === null) return null;
+	const firstWord = words[firstIndex] ?? "";
+	if (isShellCommandPositionPrefixWord(firstWord)) return firstIndex;
+
+	const secondIndex = findDispatchWordIndex(words, firstIndex + 1);
+	if (
+		secondIndex !== null &&
+		isShellCommandPositionPrefixWord(words[secondIndex] ?? "")
+	) {
+		return secondIndex;
+	}
+	return firstIndex;
+}
+
+function findCaseArmCommandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	let index = startIndex;
+	while (index < words.length && isShellAssignmentWord(words[index] ?? ""))
+		index += 1;
+	const head = words[index] ?? "";
+	if (!head) return null;
+
+	if (head === "case") {
+		let inIndex = -1;
+		for (let scanIndex = index + 1; scanIndex < words.length; scanIndex += 1) {
+			const token = words[scanIndex] ?? "";
+			if (!token) continue;
+			if (token === "in") {
+				inIndex = scanIndex;
+				break;
+			}
+			if (token === "esac") return null;
+		}
+		if (inIndex < 0) return null;
+		for (
+			let scanIndex = inIndex + 1;
+			scanIndex < words.length;
+			scanIndex += 1
+		) {
+			const token = words[scanIndex] ?? "";
+			if (!token) continue;
+			if (token === "esac") return null;
+			if (token === ")" || token.endsWith(")")) return scanIndex + 1;
+		}
+		return null;
+	}
+
+	if (head === ")" || head.endsWith(")")) {
+		return index + 1;
+	}
+
+	return null;
+}
+
+function isShellRedirectionWord(word: string): boolean {
+	return (
+		word === ">" ||
+		word === ">>" ||
+		word === "<" ||
+		word === "<<" ||
+		word === "<<<" ||
+		word === ">&" ||
+		word === "<&"
+	);
+}
+
+function skipShellCommandPositionPrefixWords(
+	words: string[],
+	startIndex: number,
+): number {
+	let commandWordIndex = startIndex;
+	while (
+		isShellAssignmentWord(words[commandWordIndex] ?? "") ||
+		isShellCommandPositionPrefixWord(words[commandWordIndex] ?? "")
+	) {
+		commandWordIndex += 1;
+	}
+	while (commandWordIndex < words.length) {
+		const word = words[commandWordIndex] ?? "";
+		const nextWord = words[commandWordIndex + 1] ?? "";
+		if (isShellRedirectionWord(word)) {
+			commandWordIndex += 2;
+			continue;
+		}
+		if (/^\d+$/.test(word) && isShellRedirectionWord(nextWord)) {
+			commandWordIndex += 3;
+			continue;
+		}
+		break;
+	}
+	return commandWordIndex;
+}
+
+function readOmxStateCommandFromSegmentWords(
+	words: string[],
+	operation: "write" | "clear",
+): { args: string[]; commandWords: string[]; prefixWords: string[] } | null {
+	let commandWordIndex = skipShellCommandPositionPrefixWords(words, 0);
+
+	for (let unwrapCount = 0; unwrapCount < 8; unwrapCount += 1) {
+		commandWordIndex = skipShellCommandPositionPrefixWords(
+			words,
+			commandWordIndex,
+		);
+		const caseArmCommandIndex = findCaseArmCommandIndex(
+			words,
+			commandWordIndex,
+		);
+		if (caseArmCommandIndex !== null) {
+			commandWordIndex = skipShellCommandPositionPrefixWords(
+				words,
+				caseArmCommandIndex,
+			);
+		}
+		const directArgs = readOmxStateCommandArgsFromWords(
+			words.slice(commandWordIndex),
+			operation,
+		);
+		if (directArgs) {
+			return {
+				args: directArgs,
+				commandWords: words.slice(commandWordIndex),
+				prefixWords: words.slice(0, commandWordIndex),
+			};
+		}
+
+		const commandWord = words[commandWordIndex] ?? "";
+		const operandIndex =
+			shellWordBaseName(commandWord) === "env"
+				? findEnvDispatchOperandIndex(words, commandWordIndex + 1)
+				: shellWordBaseName(commandWord) === "command"
+					? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+					: shellWordBaseName(commandWord) === "exec"
+						? findExecDispatchOperandIndex(words, commandWordIndex + 1)
+						: shellWordBaseName(commandWord) === "nohup"
+							? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+							: shellWordBaseName(commandWord) === "timeout"
+								? findTimeoutDispatchOperandIndex(words, commandWordIndex + 1)
+								: shellWordBaseName(commandWord) === "coproc"
+									? findCoprocDispatchOperandIndex(words, commandWordIndex + 1)
+									: shellWordBaseName(commandWord) === "xargs"
+										? findXargsDispatchOperandIndex(words, commandWordIndex + 1)
+										: shellWordBaseName(commandWord) === "time"
+											? findTimeDispatchOperandIndex(
+													words,
+													commandWordIndex + 1,
+												)
+											: null;
+		if (operandIndex === null) return null;
+		commandWordIndex = operandIndex;
+	}
+
+	return null;
+}
+
+function splitStateScanSegments(command: string): StateScanSegment[] {
+	const segments: StateScanSegment[] = [];
+	let current = "";
+	let segmentStart = 0;
+	let quote: "'" | '"' | null = null;
+	const pushSegment = (endIndex: number): void => {
+		if (current.trim()) {
+			segments.push({
+				segment: current,
+				prefix: command.slice(0, segmentStart),
+			});
+		}
+		current = "";
+		segmentStart = endIndex;
+	};
+
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			current += char;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			current += char;
+			index += 1;
+			current += command[index] ?? "";
+			continue;
+		}
+		if (quote) {
+			current += char;
+			continue;
+		}
+		if (char === ";" || char === "\n" || char === "\r") {
+			pushSegment(index + 1);
+			continue;
+		}
+		if (char === "&" && command[index + 1] === "&") {
+			pushSegment(index + 2);
+			index += 1;
+			continue;
+		}
+		if (char === "&") {
+			const previous = command[index - 1] ?? "";
+			const next = command[index + 1] ?? "";
+			if (previous === ">" || previous === "<" || next === ">") {
+				current += char;
+			} else {
+				pushSegment(index + 1);
+			}
+			continue;
+		}
+		if (char === "|" && command[index + 1] === "|") {
+			pushSegment(index + 2);
+			index += 1;
+			continue;
+		}
+		if (char === "|") {
+			const next = command[index + 1] ?? "";
+			if (next === "&") {
+				pushSegment(index + 2);
+				index += 1;
+			} else {
+				pushSegment(index + 1);
+			}
+			continue;
+		}
+		current += char;
+	}
+
+	if (current.trim()) {
+		segments.push({
+			segment: current,
+			prefix: command.slice(0, segmentStart),
+		});
+	}
+	return segments.length > 0 ? segments : [{ segment: command, prefix: "" }];
+}
+
+function collectOmxStateCommandOperations(
+	command: string,
+	operation: "write" | "clear",
+	nested = false,
+): OmxStateCommandOperation[] {
+	command = normalizeShellLineContinuations(
+		stripHeredocBodiesForCommandScan(command),
+	);
+	const operations: OmxStateCommandOperation[] = [];
+	const addOperation = (candidate: OmxStateCommandOperation): void => {
+		operations.push(candidate);
+	};
+
+	const scanNestedSubstitutions = (): void => {
+		let quote: "'" | '"' | null = null;
+		for (let index = 0; index < command.length; index += 1) {
+			const char = command[index];
+			if (char === "\\" && quote !== "'") {
+				index += 1;
+				continue;
+			}
+			if (quote !== "'" && char === "$" && command[index + 1] === "(") {
+				const substitutionEnd = findCommandSubstitutionEnd(command, index + 2);
+				const substitutionBodyEnd =
+					substitutionEnd >= 0 ? substitutionEnd : command.length;
+				const substitutionBody = command.slice(index + 2, substitutionBodyEnd);
+				for (const nestedOperation of collectOmxStateCommandOperations(
+					substitutionBody,
+					operation,
+					true,
+				)) {
+					addOperation(nestedOperation);
+				}
+				index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+				continue;
+			}
+			if (quote !== "'" && char === "<" && command[index + 1] === "(") {
+				const substitutionEnd = findProcessSubstitutionEnd(command, index + 2);
+				const substitutionBodyEnd =
+					substitutionEnd >= 0 ? substitutionEnd : command.length;
+				const substitutionBody = command.slice(index + 2, substitutionBodyEnd);
+				for (const nestedOperation of collectOmxStateCommandOperations(
+					substitutionBody,
+					operation,
+					true,
+				)) {
+					addOperation(nestedOperation);
+				}
+				index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+				continue;
+			}
+			if (quote !== "'" && char === ">" && command[index + 1] === "(") {
+				const substitutionEnd = findProcessSubstitutionEnd(command, index + 2);
+				const substitutionBodyEnd =
+					substitutionEnd >= 0 ? substitutionEnd : command.length;
+				const substitutionBody = command.slice(index + 2, substitutionBodyEnd);
+				for (const nestedOperation of collectOmxStateCommandOperations(
+					substitutionBody,
+					operation,
+					true,
+				)) {
+					addOperation(nestedOperation);
+				}
+				index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+				continue;
+			}
+			if (quote !== "'" && char === "`") {
+				const substitutionEnd = findBacktickCommandSubstitutionEnd(
+					command,
+					index + 1,
+				);
+				const substitutionBodyEnd =
+					substitutionEnd >= 0 ? substitutionEnd : command.length;
+				const substitutionBody = command.slice(index + 1, substitutionBodyEnd);
+				for (const nestedOperation of collectOmxStateCommandOperations(
+					substitutionBody,
+					operation,
+					true,
+				)) {
+					addOperation(nestedOperation);
+				}
+				index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+				continue;
+			}
+			if (char === "'" || char === '"') {
+				if (quote === char) {
+					quote = null;
+				} else if (!quote) {
+					quote = char;
+				}
+			}
+		}
+	};
+
+	scanNestedSubstitutions();
+
+	for (const functionBody of extractInvokedShellFunctionBodiesForStateScan(
+		command,
+	)) {
+		for (const nestedOperation of collectOmxStateCommandOperations(
+			functionBody,
+			operation,
+			true,
+		)) {
+			addOperation(nestedOperation);
+		}
+	}
+
+	for (const scanSegment of splitStateScanSegments(command)) {
+		const words = tokenizeShellWords(scanSegment.segment);
+		const stateCommand = readOmxStateCommandFromSegmentWords(words, operation);
+		if (stateCommand) {
+			addOperation({
+				args: stateCommand.args,
+				prefix: scanSegment.prefix,
+				commandPrefix: stateCommand.prefixWords.join(" "),
+				nested,
+			});
+		}
+	}
+
+	for (const nestedCommand of extractNestedShellCommandStringsForStateScan(
+		command,
+	)) {
+		for (const nestedOperation of collectOmxStateCommandOperations(
+			nestedCommand,
+			operation,
+			true,
+		)) {
+			addOperation(nestedOperation);
+		}
+	}
+
+	return operations;
+}
+
+function extractInvokedShellFunctionBodiesForStateScan(
+	command: string,
+): string[] {
+	const bodies: string[] = [];
+	command = stripHeredocBodiesForCommandScan(
+		normalizeShellLineContinuations(command),
+	);
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		const functionDefinition = findShellFunctionDefinitionAt(command, index);
+		if (!functionDefinition) continue;
+		const functionBodyEnd = findShellFunctionBodyEnd(
+			command,
+			functionDefinition.openBraceIndex,
+			functionDefinition.bodyOpenChar,
+		);
+		if (functionBodyEnd < 0) continue;
+		if (
+			isShellFunctionInvokedLater(
+				command.slice(functionBodyEnd + 1),
+				functionDefinition.name,
+			)
+		) {
+			bodies.push(
+				command.slice(functionDefinition.openBraceIndex + 1, functionBodyEnd),
+			);
+		}
+		index = functionBodyEnd;
+	}
+	return bodies;
+}
+
+function findUnquotedOmxStateCommandIndexes(
+	command: string,
+	operation: "write" | "clear",
+): number[] {
+	return collectOmxStateCommandOperations(command, operation).map(
+		(_, index) => index,
+	);
+}
+
+function extractNestedShellCommandStringsForStateScan(
+	command: string,
+): string[] {
+	const words = tokenizeShellWords(stripHeredocBodiesForCommandScan(command));
+	const nested: string[] = [];
+	for (let index = 0; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (isNestedShellCommandWord(word)) {
+			const commandStringIndex = findShellCommandStringArgIndex(
+				words,
+				index + 1,
+			);
+			if (commandStringIndex !== null) {
+				const nestedCommand = words[commandStringIndex];
+				if (nestedCommand) nested.push(nestedCommand);
+			}
+		}
+		if (word === "eval") {
+			const nestedCommand = words.slice(index + 1).join(" ");
+			if (nestedCommand) nested.push(nestedCommand);
+		}
+		if (shellWordBaseName(word) === "env") {
+			const splitStringCommand = extractEnvSplitStringCommand(words, index + 1);
+			if (splitStringCommand) {
+				nested.push(splitStringCommand);
+			}
+		} else if (isPackageManagerCommandWord(word)) {
+			const packageManagerCommand = extractPackageManagerExecCommand(
+				command,
+				words,
+				index + 1,
+				shellWordBaseName(word),
+			);
+			if (packageManagerCommand) {
+				nested.push(packageManagerCommand);
+			}
+		}
+	}
+	return nested;
+}
+
+function isPackageManagerCommandWord(word: string): boolean {
+	const base = shellWordBaseName(word);
+	return (
+		base === "npm" ||
+		base === "pnpm" ||
+		base === "yarn" ||
+		base === "npx" ||
+		base === "pnpx"
+	);
+}
+
+function hasDynamicNestedShellExecution(command: string): boolean {
+	const commands = splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	);
+	for (const segment of commands) {
+		const words = tokenizeShellWords(segment);
+		let sawCommandWord = false;
+		for (let index = 0; index < words.length; index += 1) {
+			const word = words[index] ?? "";
+			if (!sawCommandWord) {
+				if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+				sawCommandWord = true;
+				if (isDynamicNestedCommandString(word)) return true;
+			}
+			if (isCommandDispatchBuiltin(word)) {
+				const dispatchedCommand = extractDispatchBuiltinOperand(
+					words,
+					index + 1,
+					word,
+				);
+				if (
+					dispatchedCommand &&
+					hasDynamicNestedShellExecution(dispatchedCommand)
+				)
+					return true;
+			}
+			if (
+				containsUnquotedProcessSubstitution(segment) &&
+				(isNestedShellCommandWord(word) || word === "." || word === "source")
+			)
+				return true;
+			if (isNestedShellCommandWord(word)) {
+				const commandStringIndex = findShellCommandStringArgIndex(
+					words,
+					index + 1,
+				);
+				if (
+					commandStringIndex === null &&
+					(hasUnquotedShellStdinFlowAroundShellWord(words, index) ||
+						segment.includes("<<"))
+				)
+					return true;
+				if (commandStringIndex !== null) {
+					const nestedCommand = words[commandStringIndex] ?? "";
+					if (isDynamicNestedCommandString(nestedCommand)) return true;
+				}
+			}
+			if (word === "eval") {
+				const nestedCommand = words.slice(index + 1).join(" ");
+				if (isDynamicNestedCommandString(nestedCommand)) return true;
+			}
+		}
+	}
+	return false;
+}
+
+function isCommandDispatchBuiltin(word: string): boolean {
+	return (
+		word === "exec" ||
+		word === "command" ||
+		word === "." ||
+		word === "source" ||
+		word === "env" ||
+		word === "nohup"
+	);
+}
+
+function extractDispatchBuiltinOperand(
+	words: string[],
+	startIndex: number,
+	builtin: string,
+): string {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (!option) continue;
+		if (option === "--") continue;
+		if (isShellAssignmentWord(option)) continue;
+		if (builtin === "exec" && option === "-a") {
+			index += 1;
+			continue;
+		}
+		if (builtin === "env" && (option === "-S" || option === "--split-string")) {
+			const splitOperand = words[index + 1] ?? "";
+			return splitOperand;
+		}
+		if (builtin === "env" && option.startsWith("--split-string=")) {
+			return option.slice("--split-string=".length);
+		}
+		if (builtin === "env" && option.startsWith("-S") && option.length > 2) {
+			return option.slice(2);
+		}
+		if (option.startsWith("-")) continue;
+		return words.slice(index).join(" ");
+	}
+	return "";
+}
+
+function isNestedShellCommandWord(word: string): boolean {
+	const base = word.split(/[\\/]/).pop() ?? word;
+	return /^(?:bash|sh|zsh|dash|ksh|mksh|ash)$/.test(base);
+}
+
+function findShellCommandStringArgIndex(
+	words: string[],
+	optionStartIndex: number,
+): number | null {
+	for (let index = optionStartIndex; index < words.length; index += 1) {
+		const option = words[index] ?? "";
+		if (option === "--") return null;
+		if (isShellCommandStringOption(option)) return index + 1;
+		if (isShellOptionWithSeparateValue(option)) {
+			index += 1;
+			continue;
+		}
+		if (option.startsWith("-")) continue;
+		return null;
+	}
+	return null;
+}
+
+function isShellCommandStringOption(option: string): boolean {
+	return /^-[^-]*c[^-]*$/.test(option);
+}
+
+function isShellOptionWithSeparateValue(option: string): boolean {
+	return (
+		option === "--rcfile" ||
+		option === "--init-file" ||
+		option === "-o" ||
+		option === "-O"
+	);
+}
+
+function isDynamicNestedCommandString(command: string): boolean {
+	return (
+		/(?:^|[^\\])\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\}|\()/.test(command) ||
+		/(?:^|[^\\])`/.test(command)
+	);
+}
+
+function splitShellCommandSegments(command: string): string[] {
+	const segments: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			current += char;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			current += char;
+			index += 1;
+			current += command[index] ?? "";
+			continue;
+		}
+		if (quote) {
+			current += char;
+			continue;
+		}
+		if (char === ";" || char === "\n" || char === "\r") {
+			if (current.trim()) segments.push(current);
+			current = "";
+			continue;
+		}
+		if (char === "&" && command[index + 1] === "&") {
+			if (current.trim()) segments.push(current);
+			current = "";
+			index += 1;
+			continue;
+		}
+		if (char === "|" && command[index + 1] === "|") {
+			if (current.trim()) segments.push(current);
+			current = "";
+			index += 1;
+			continue;
+		}
+		current += char;
+	}
+	if (current.trim()) segments.push(current);
+	return segments.length > 0 ? segments : [command];
+}
+
+function findDispatchWordIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		return index;
+	}
+	return null;
+}
+
+function isShellAssignmentWord(word: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
+function hasUnquotedShellStdinFlowAroundShellWord(
+	words: string[],
+	wordIndex: number,
+): boolean {
+	for (let index = 0; index < wordIndex; index += 1) {
+		const word = words[index] ?? "";
+		if (word === "|" || word === "|&") return true;
+		if (word === "<" || word === "<<" || word === "<<<" || word.startsWith("<"))
+			return true;
+	}
+	for (let index = wordIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (word === "<" || word === "<<" || word === "<<<" || word.startsWith("<"))
+			return true;
+	}
+	return false;
+}
+
+function findCommandSubstitutionEnd(
+	command: string,
+	bodyStartIndex: number,
+): number {
+	let depth = 1;
+	let quote: "'" | '"' | null = null;
+	for (let index = bodyStartIndex; index < command.length; index += 1) {
+		const char = command[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		if (char === "$" && command[index + 1] === "(") {
+			depth += 1;
+			index += 1;
+			continue;
+		}
+		if (char === ")") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+function findBacktickCommandSubstitutionEnd(
+	command: string,
+	bodyStartIndex: number,
+): number {
+	for (let index = bodyStartIndex; index < command.length; index += 1) {
+		const char = command[index];
+		if (char === "\\") {
+			index += 1;
+			continue;
+		}
+		if (char === "`") return index;
+	}
+	return -1;
+}
+
+function findProcessSubstitutionEnd(
+	command: string,
+	bodyStartIndex: number,
+): number {
+	let depth = 1;
+	let quote: "'" | '"' | null = null;
+	for (let index = bodyStartIndex; index < command.length; index += 1) {
+		const char = command[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		if (char === "(") {
+			depth += 1;
+			continue;
+		}
+		if (char === ")") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+function containsUnquotedProcessSubstitution(command: string): boolean {
+	command = normalizeShellLineContinuations(command);
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length - 1; index += 1) {
+		const char = command[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		if ((char === "<" || char === ">") && command[index + 1] === "(")
+			return true;
+	}
+	return false;
+}
+
+function stripHeredocBodiesForCommandScan(command: string): string {
+	const lines = command.split("\n");
+	const kept: string[] = [];
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		kept.push(line);
+		const heredocMatch = line.match(
+			/<<-?\s*(?:"([^"]+)"|'([^']+)'|([^\s"'<>|;&]+))/,
+		);
+		const delimiter = safeString(
+			heredocMatch?.[1] ?? heredocMatch?.[2] ?? heredocMatch?.[3],
+		).trim();
+		if (!delimiter) continue;
+		index += 1;
+		while (index < lines.length && (lines[index] ?? "").trim() !== delimiter) {
+			kept.push("");
+			index += 1;
+		}
+		if (index < lines.length) kept.push(lines[index] ?? "");
+	}
+	return kept.join("\n");
+}
+
+function hasUnsafeUnquotedHeredocExpansion(command: string): boolean {
+	const lines = normalizeShellLineContinuations(command).split("\n");
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		const heredocMatch = line.match(
+			/<<-?\s*(?:"([^"]+)"|'([^']+)'|([^\s"'<>|;&]+))/,
+		);
+		if (!heredocMatch) continue;
+		const quoted = Boolean(heredocMatch[1] || heredocMatch[2]);
+		const delimiter = safeString(
+			heredocMatch[1] ?? heredocMatch[2] ?? heredocMatch[3],
+		).trim();
+		if (!delimiter || quoted) continue;
+		index += 1;
+		const bodyLines: string[] = [];
+		while (index < lines.length && (lines[index] ?? "").trim() !== delimiter) {
+			bodyLines.push(lines[index] ?? "");
+			index += 1;
+		}
+		if (isDynamicNestedCommandString(bodyLines.join("\n"))) return true;
+	}
+	return false;
+}
+
+function normalizeStateWriteClassificationPayload(
+	payload: Record<string, unknown>,
+): Record<string, unknown> {
+	const targetMode = safeString(payload.mode).trim();
+	const {
+		mode: _mode,
+		workingDirectory: _workingDirectory,
+		session_id: _sessionId,
+		state,
+		...fields
+	} = payload;
+	const normalized: Record<string, unknown> = {
+		...fields,
+		...safeObject(state),
+		...(targetMode ? { mode: targetMode } : {}),
+	};
+	if (
+		normalized.current_phase === undefined &&
+		normalized.currentPhase !== undefined
+	) {
+		normalized.current_phase = normalized.currentPhase;
+	}
+	if (
+		normalized.run_outcome === undefined &&
+		normalized.runOutcome !== undefined
+	) {
+		normalized.run_outcome = normalized.runOutcome;
+	}
+	if (
+		normalized.lifecycle_outcome === undefined &&
+		normalized.lifecycleOutcome !== undefined
+	) {
+		normalized.lifecycle_outcome = normalized.lifecycleOutcome;
+	}
+	if (
+		normalized.terminal_outcome === undefined &&
+		normalized.terminalOutcome !== undefined
+	) {
+		normalized.terminal_outcome = normalized.terminalOutcome;
+	}
+	return {
+		...normalized,
+	};
+}
+
+function isPlanningPhaseDeactivationPayload(
+	payload: Record<string, unknown>,
+): boolean {
+	const mode = safeString(payload.mode).trim().toLowerCase();
+	if (!mode) return false;
+	if (mode !== "deep-interview" && mode !== "ralplan") {
+		if (!isTrackedWorkflowMode(mode)) return false;
+		if (payload.active === true) return true;
+		const currentPhase = safeString(
+			payload.current_phase ?? payload.currentPhase,
+		)
+			.trim()
+			.toLowerCase();
+		if (
+			mode === "autopilot" &&
+			(currentPhase === "deep-interview" ||
+				currentPhase === "ralplan" ||
+				currentPhase === "ultragoal")
+		) {
+			return false;
+		}
+		return (
+			inferTerminalLifecycleOutcome(payload, {
+				includeQuestionEnforcement: false,
+			}) === undefined
+		);
+	}
+
+	if (payload.active === false) return true;
+	return (
+		inferTerminalLifecycleOutcome(payload, {
+			includeQuestionEnforcement: false,
+		}) !== undefined
+	);
+}
+
+function commandEndsPlanningPhase(cwd: string, command: string): boolean {
+	const canonicalCommand = canonicalizeOmxStateTransportCommand(command);
+	if (hasUnsafeUnquotedHeredocExpansion(canonicalCommand)) return true;
+	if (sourcesFileWrittenEarlierInSameCommand(cwd, canonicalCommand))
+		return true;
+	if (findUnquotedOmxStateCommandIndexes(canonicalCommand, "clear").length > 0)
+		return true;
+	if (hasDynamicNestedShellExecution(canonicalCommand)) return true;
+	const stateWriteCount = findUnquotedOmxStateCommandIndexes(
+		canonicalCommand,
+		"write",
+	).length;
+	if (stateWriteCount > 1) return true;
+	if (stateWriteCount === 0) return false;
+	const payload = readStateWriteInputPayload(cwd, canonicalCommand, command);
+	return payload ? isPlanningPhaseDeactivationPayload(payload) : true;
+}
+
 function isAllowedDeepInterviewBashWrite(
 	cwd: string,
 	command: string,
 ): boolean {
+	if (commandEndsPlanningPhase(cwd, command)) return false;
 	if (!commandHasDeepInterviewWriteIntent(command)) return true;
-	if (/\bomx\s+(?:state\s+(?:write|read|clear)|question)\b/.test(command))
-		return true;
 	const targets = extractDeepInterviewCommandWriteTargets(command);
+	if (
+		targets.some((target) => !isAllowedDeepInterviewArtifactPath(cwd, target))
+	)
+		return false;
 	return (
 		targets.length > 0 &&
 		targets.every((target) => isAllowedDeepInterviewArtifactPath(cwd, target))
@@ -4197,13 +7085,6 @@ async function readActiveDeepInterviewStateForPreToolUse(
 	if (autopilotMode && autopilotMode !== "autopilot") return null;
 	if (!modeStateMatchesSkillStopContext(autopilotState, cwd, sessionId))
 		return null;
-	const terminalAutopilotRunState = await readCanonicalTerminalRunStateForStop(
-		cwd,
-		sessionId,
-		"autopilot",
-	);
-	if (terminalAutopilotRunState) return null;
-
 	const autopilotStatePhase = safeString(
 		autopilotState.current_phase ?? autopilotState.currentPhase,
 	)
@@ -4277,12 +7158,6 @@ async function readActiveRalplanStateForPreToolUse(
 	if (autopilotMode && autopilotMode !== "autopilot") return null;
 	if (!modeStateMatchesSkillStopContext(autopilotState, cwd, sessionId))
 		return null;
-	const terminalAutopilotRunState = await readCanonicalTerminalRunStateForStop(
-		cwd,
-		sessionId,
-		"autopilot",
-	);
-	if (terminalAutopilotRunState) return null;
 	if (!canonicalState) return null;
 	const hasActiveAutopilotSkill = listActiveSkills(canonicalState).some(
 		(entry) =>
@@ -4324,9 +7199,10 @@ function isAllowedRalplanBashWrite(cwd: string, command: string): boolean {
 	if (beadsCommand.present) {
 		return beadsCommand.allowed && (targets.length === 0 || hasAllowedTargets);
 	}
+	if (commandEndsPlanningPhase(cwd, command)) return false;
 	if (!commandHasDeepInterviewWriteIntent(command)) return true;
-	if (/\bomx\s+(?:state\s+(?:write|read|clear)|question)\b/.test(command))
-		return true;
+	if (targets.some((target) => !isAllowedRalplanArtifactPath(cwd, target)))
+		return false;
 	return hasAllowedTargets;
 }
 
@@ -4387,6 +7263,17 @@ async function buildRalplanPreToolUseBoundaryOutput(
 		if (blocked) {
 			blockedDetail = buildRalplanBashBlockedDetail(cwd, command);
 		}
+	} else if (
+		toolName === "mcp__omx_state__state_clear" ||
+		(toolName === "mcp__omx_state__state_write" &&
+			isPlanningPhaseDeactivationPayload(
+				normalizeStateWriteClassificationPayload(
+					safeObject(payload.tool_input),
+				),
+			))
+	) {
+		blocked = true;
+		blockedDetail = `${toolName} would deactivate protected planning state`;
 	} else if (PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
 		const toolPathCandidates = collectImplementationToolPathCandidates(
 			payload,
@@ -4467,6 +7354,16 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 
 	if (toolName === "Bash") {
 		blocked = !isAllowedDeepInterviewBashWrite(cwd, command);
+	} else if (
+		toolName === "mcp__omx_state__state_clear" ||
+		(toolName === "mcp__omx_state__state_write" &&
+			isPlanningPhaseDeactivationPayload(
+				normalizeStateWriteClassificationPayload(
+					safeObject(payload.tool_input),
+				),
+			))
+	) {
+		blocked = true;
 	} else if (DEEP_INTERVIEW_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
 		const candidates = collectImplementationToolPathCandidates(
 			payload,
@@ -4494,6 +7391,151 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 			additionalContext: `Deep-interview is requirements/spec mode. Treat detailed user answers as interview/spec material, not implicit implementation authorization. You may write only deep-interview artifacts under \`.omx/context/\`, \`.omx/interviews/\`, \`.omx/specs/\`, or required \`.omx/state/\` files. To implement, first ask for or process an explicit transition such as \`$ralplan\`, \`$autopilot\`, ${formatExecutionHandoffList(cwd)}.`,
 		},
 	};
+}
+
+function blocksDeepInterviewImplementationWrite(
+	payload: CodexHookPayload,
+	cwd: string,
+): boolean {
+	const toolName = safeString(payload.tool_name).trim();
+	if (toolName === "Bash") {
+		return !isAllowedDeepInterviewBashWrite(
+			cwd,
+			readPreToolUseCommand(payload),
+		);
+	}
+	if (!DEEP_INTERVIEW_IMPLEMENTATION_TOOL_NAMES.has(toolName)) return false;
+	const candidates = collectImplementationToolPathCandidates(
+		payload,
+		toolName,
+		readPreToolUsePathCandidates(payload),
+	);
+	return (
+		candidates.length === 0 ||
+		!candidates.every((candidate) =>
+			isAllowedDeepInterviewArtifactPath(cwd, candidate),
+		)
+	);
+}
+
+// Shared builder for the "live root session pointer owned by another session"
+// fail-closed block. Deep-interview and ralplan/autopilot only differ in the
+// human-readable mode label and phase-description fragment; the decision,
+// structure, and guidance are identical.
+function buildRootPointerConflictBlock(
+	activeState: Record<string, unknown>,
+	planningModeLabel: string,
+	planningPhaseDescription: string,
+): Record<string, unknown> {
+	const phase = formatPhase(
+		activeState.current_phase ?? activeState.currentPhase,
+		"planning",
+	);
+	return {
+		decision: "block",
+		reason: `${planningModeLabel} is active in the live root session pointer (phase: ${phase}), but the current native session could not be authoritatively resolved to that owner; failing closed for planning-write protection.`,
+		hookSpecificOutput: {
+			hookEventName: "PreToolUse",
+			additionalContext:
+				`OMX detected a live root session pointer owned by another session while a ${planningPhaseDescription} is active. ` +
+				"This indicates collapsed session-root isolation. Do not perform implementation writes from this unresolved session; use the owning OMX session or restart with an isolated OMX_ROOT.",
+		},
+	};
+}
+
+function buildDeepInterviewRootPointerConflictBlock(
+	activeState: Record<string, unknown>,
+): Record<string, unknown> {
+	return buildRootPointerConflictBlock(
+		activeState,
+		"Deep-interview",
+		"deep-interview planning phase",
+	);
+}
+
+function buildRalplanRootPointerConflictBlock(
+	activeState: Record<string, unknown>,
+): Record<string, unknown> {
+	const activeMode = safeString(activeState.mode).trim().toLowerCase();
+	const planningModeLabel =
+		activeMode === "autopilot" ? "Autopilot planning" : "Ralplan";
+	return buildRootPointerConflictBlock(
+		activeState,
+		planningModeLabel,
+		"ralplan/autopilot planning phase",
+	);
+}
+
+async function buildPlanningRootPointerConflictPreToolUseOutput(
+	payload: CodexHookPayload,
+	cwd: string,
+	stateDir: string,
+	rootState: SessionState | null,
+): Promise<Record<string, unknown> | null> {
+	const rootSessionId = safeString(rootState?.session_id).trim();
+	if (!rootSessionId) return null;
+	const ownerCwd = safeString(rootState?.cwd).trim() || cwd;
+
+	const deepInterviewState = await readActiveDeepInterviewStateForPreToolUse(
+		ownerCwd,
+		stateDir,
+		rootSessionId,
+		"",
+	);
+	if (deepInterviewState) {
+		const conflictToolName = safeString(payload.tool_name).trim();
+		if (
+			conflictToolName === "mcp__omx_state__state_clear" ||
+			(conflictToolName === "mcp__omx_state__state_write" &&
+				isPlanningPhaseDeactivationPayload(
+					normalizeStateWriteClassificationPayload(
+						safeObject(payload.tool_input),
+					),
+				))
+		) {
+			return buildDeepInterviewRootPointerConflictBlock(deepInterviewState);
+		}
+		if (blocksDeepInterviewImplementationWrite(payload, cwd)) {
+			return buildDeepInterviewRootPointerConflictBlock(deepInterviewState);
+		}
+	}
+
+	const ralplanState = await readActiveRalplanStateForPreToolUse(
+		ownerCwd,
+		stateDir,
+		rootSessionId,
+		"",
+	);
+	if (!ralplanState) return null;
+
+	const toolName = safeString(payload.tool_name).trim();
+	let blocked = false;
+	if (toolName === "Bash") {
+		blocked = !isAllowedRalplanBashWrite(cwd, readPreToolUseCommand(payload));
+	} else if (
+		toolName === "mcp__omx_state__state_clear" ||
+		(toolName === "mcp__omx_state__state_write" &&
+			isPlanningPhaseDeactivationPayload(
+				normalizeStateWriteClassificationPayload(
+					safeObject(payload.tool_input),
+				),
+			))
+	) {
+		blocked = true;
+	} else if (PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
+		const toolPathCandidates = collectImplementationToolPathCandidates(
+			payload,
+			toolName,
+			readPreToolUsePathCandidates(payload),
+		);
+		blocked =
+			toolPathCandidates.length === 0 ||
+			toolPathCandidates.some(
+				(candidate) => !isAllowedRalplanArtifactPath(cwd, candidate),
+			);
+	}
+
+	return blocked ? buildRalplanRootPointerConflictBlock(ralplanState) : null;
 }
 
 function matchesSkillStopContext(
@@ -4547,6 +7589,25 @@ function modeStateMatchesSkillStopContext(
 	}
 
 	return true;
+}
+
+function modeStateHasExplicitMatchingCwd(
+	state: Record<string, unknown>,
+	cwd: string,
+): boolean {
+	const stateCwd = safeString(
+		state.cwd ??
+			state.workingDirectory ??
+			state.working_directory ??
+			state.project_path,
+	).trim();
+	if (!stateCwd) return false;
+
+	try {
+		return resolve(stateCwd) === resolve(cwd);
+	} catch {
+		return false;
+	}
 }
 
 async function readBlockingSkillForStop(
@@ -4718,6 +7779,78 @@ function rootModeStateIsCanonicalForStopContext(
 	return true;
 }
 
+function hasExplicitSessionScope(state: Record<string, unknown>): boolean {
+	return (
+		safeString(
+			state.owner_omx_session_id ??
+				state.session_id ??
+				state.codex_session_id ??
+				state.owner_codex_session_id,
+		).trim() !== ""
+	);
+}
+
+async function readStateTimestampMs(
+	state: Record<string, unknown>,
+	path: string,
+): Promise<number | null> {
+	return (
+		parseTimestampMs(state.updated_at) ??
+		parseTimestampMs(state.completed_at) ??
+		parseTimestampMs(state.created_at) ??
+		(await stat(path).then(
+			(info) => info.mtimeMs,
+			() => null,
+		))
+	);
+}
+
+async function unscopedRootRalplanStateIsNewerTerminalPlanningCompletion(
+	rootState: Record<string, unknown>,
+	rootPath: string,
+	sessionPath: string,
+	cwd: string,
+	threadId: string,
+): Promise<boolean> {
+	if (hasExplicitSessionScope(rootState)) return false;
+
+	const stateThreadId = safeString(
+		rootState.owner_codex_thread_id ?? rootState.thread_id,
+	).trim();
+	if (threadId && stateThreadId && stateThreadId !== threadId) return false;
+
+	if (!modeStateHasExplicitMatchingCwd(rootState, cwd)) return false;
+
+	const phase = safeString(rootState.current_phase ?? rootState.currentPhase)
+		.trim()
+		.toLowerCase();
+	if (phase !== "complete" && phase !== "completed") return false;
+
+	const planningComplete =
+		rootState.planning_complete === true || rootState.planningComplete === true;
+	const latestPlanPath = safeString(
+		rootState.latest_plan_path ?? rootState.latestPlanPath,
+	).trim();
+	if (!planningComplete || !latestPlanPath) return false;
+
+	const sessionState = await readJsonIfExists(sessionPath);
+	if (!sessionState) return false;
+	const sessionPhase = safeString(
+		sessionState.current_phase ?? sessionState.currentPhase,
+	)
+		.trim()
+		.toLowerCase();
+	if (sessionPhase && TERMINAL_MODE_PHASES.has(sessionPhase)) return false;
+
+	const rootTimestamp = await readStateTimestampMs(rootState, rootPath);
+	const sessionTimestamp = await readStateTimestampMs(
+		sessionState,
+		sessionPath,
+	);
+	if (rootTimestamp === null || sessionTimestamp === null) return false;
+	return rootTimestamp > sessionTimestamp;
+}
+
 async function shouldIgnoreSessionSkillBlockerForCanonicalInactiveRoot(
 	cwd: string,
 	stateDir: string,
@@ -4725,20 +7858,31 @@ async function shouldIgnoreSessionSkillBlockerForCanonicalInactiveRoot(
 	sessionId: string,
 	threadId: string,
 ): Promise<boolean> {
-	const rootModeState = await readJsonIfExists(
-		join(stateDir, `${skill}-state.json`),
-	);
+	const rootModeStatePath = join(stateDir, `${skill}-state.json`);
+	const rootModeState = await readJsonIfExists(rootModeStatePath);
 	if (!rootModeState) return false;
-	if (
-		!rootModeStateIsCanonicalForStopContext(
+	if (!isTerminalOrInactiveModeState(rootModeState)) return false;
+
+	const canonicalRoot =
+		rootModeStateIsCanonicalForStopContext(
 			rootModeState,
 			cwd,
 			sessionId,
 			threadId,
-		)
-	)
-		return false;
-	if (!isTerminalOrInactiveModeState(rootModeState)) return false;
+		) &&
+		(skill !== "ralplan" ||
+			modeStateHasExplicitMatchingCwd(rootModeState, cwd));
+	const freshUnscopedRoot =
+		canonicalRoot || skill !== "ralplan"
+			? false
+			: await unscopedRootRalplanStateIsNewerTerminalPlanningCompletion(
+					rootModeState,
+					rootModeStatePath,
+					join(stateDir, "sessions", sessionId, `${skill}-state.json`),
+					cwd,
+					threadId,
+				);
+	if (!canonicalRoot && !freshUnscopedRoot) return false;
 
 	const { rootPath } = getSkillActiveStatePathsForStateDir(stateDir);
 	const rootSkillState = await readSkillActiveState(rootPath);
@@ -5628,6 +8772,7 @@ async function buildStopHookOutput(
 		payloadSessionId: sessionId,
 		threadId,
 		tmuxPaneId: safeString(process.env.TMUX_PANE).trim(),
+		payload,
 	};
 	const ralphCompletionAuditBlock =
 		options.skipRalphStopBlock === true
@@ -6406,6 +9551,10 @@ export async function dispatchCodexNativeHook(
 		}
 	} else if (hookEventName === "PreToolUse") {
 		const payloadSessionId = readPayloadSessionId(payload);
+		const rootPointerConflict = await readLiveRootSessionPointerConflict(
+			stateDir,
+			payloadSessionId,
+		);
 		const preToolUseSessionId = payloadSessionId
 			? await resolveInternalSessionIdForPayload(
 					cwd,
@@ -6426,11 +9575,18 @@ export async function dispatchCodexNativeHook(
 				stateDir,
 				preToolUseSessionId,
 			)) ??
+			(await buildPlanningRootPointerConflictPreToolUseOutput(
+				payload,
+				cwd,
+				stateDir,
+				rootPointerConflict,
+			)) ??
 			(await buildNativeSubagentCapacityCloseGuardOutput(
 				payload,
 				cwd,
 				stateDir,
 			)) ??
+			buildMalformedPreToolUseBlockTestOutput(payload) ??
 			buildNativePreToolUseOutput(payload);
 	} else if (hookEventName === "PostToolUse") {
 		await recordNativeSubagentCapacityBlocker(cwd, stateDir, payload).catch(
@@ -6630,6 +9786,10 @@ async function buildOversizedStopActiveWorkflowOutput(
 	};
 }
 
+function buildOversizedStopInactiveWorkflowOutput(): Record<string, unknown> {
+	return {};
+}
+
 async function buildOversizedStdinHookOutput(
 	rawHookEventName: CodexHookEventName | null,
 	cwd: string,
@@ -6639,7 +9799,10 @@ async function buildOversizedStdinHookOutput(
 		return { systemMessage };
 	}
 	if (rawHookEventName === "Stop") {
-		return (await buildOversizedStopActiveWorkflowOutput(cwd)) ?? {};
+		return (
+			(await buildOversizedStopActiveWorkflowOutput(cwd)) ??
+			buildOversizedStopInactiveWorkflowOutput()
+		);
 	}
 	return {
 		continue: false,
@@ -6719,6 +9882,36 @@ function isDispatchFailureTestTrigger(): boolean {
 		process.env.NODE_ENV === "test" &&
 		process.env.OMX_NATIVE_HOOK_TEST_THROW_DISPATCH === "1"
 	);
+}
+
+function buildMalformedPreToolUseBlockTestOutput(
+	payload: CodexHookPayload,
+): Record<string, unknown> | null {
+	if (
+		process.env.NODE_ENV !== "test" ||
+		readHookEventName(payload) !== "PreToolUse"
+	)
+		return null;
+	switch (process.env.OMX_NATIVE_HOOK_TEST_MALFORMED_PRETOOL_BLOCK) {
+		case "legacy":
+			return {
+				decision: "block",
+				systemMessage:
+					"This advisory text must not validate a malformed legacy PreToolUse block.",
+			};
+		case "deny":
+			return {
+				hookSpecificOutput: {
+					hookEventName: "PreToolUse",
+					permissionDecision: "deny",
+					permissionDecisionReason: "   ",
+				},
+				systemMessage:
+					"This advisory text must not validate a malformed deny PreToolUse block.",
+			};
+		default:
+			return null;
+	}
 }
 
 function buildStopDispatchFailureOutput(
