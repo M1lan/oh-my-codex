@@ -461,6 +461,201 @@ describe("readUltragoalState", { concurrency: false }, () => {
 		});
 	});
 
+	it("treats superseded pending ultragoal goals as terminal for HUD activity", async () => {
+		await withTempRepo(
+			"omx-hud-ultragoal-superseded-terminal-",
+			async (cwd) => {
+				const ultragoalDir = join(cwd, ".omx", "ultragoal");
+				await mkdir(ultragoalDir, { recursive: true });
+				await writeFile(
+					join(ultragoalDir, "goals.json"),
+					JSON.stringify({
+						version: 1,
+						activeGoalId: "G002-old-pending",
+						goals: [
+							{
+								id: "G001-done",
+								title: "Done",
+								objective: "Completed accepted replacement",
+								status: "complete",
+							},
+							{
+								id: "G002-old-pending",
+								title: "Old pending",
+								objective:
+									"Superseded work that should not remain active in HUD",
+								status: "pending",
+								steeringStatus: "superseded",
+								supersededBy: ["G001-done"],
+							},
+						],
+					}),
+				);
+
+				const state = await readUltragoalState(cwd);
+
+				assert.equal(state?.active, false);
+				assert.equal(state?.status, "complete");
+				assert.equal(state?.pending, 0);
+				assert.equal(state?.activeGoal, undefined);
+				assert.deepEqual(state?.ongoingGoals, []);
+				assert.deepEqual(state?.nextGoals, []);
+			},
+		);
+	});
+
+	it("keeps superseded ultragoal goals active until replacements are declared", async () => {
+		await withTempRepo(
+			"omx-hud-ultragoal-superseded-without-replacements-",
+			async (cwd) => {
+				const ultragoalDir = join(cwd, ".omx", "ultragoal");
+				await mkdir(ultragoalDir, { recursive: true });
+				await writeFile(
+					join(ultragoalDir, "goals.json"),
+					JSON.stringify({
+						version: 1,
+						activeGoalId: "G002-old-pending",
+						goals: [
+							{
+								id: "G001-done",
+								title: "Done",
+								objective: "Completed prior work",
+								status: "complete",
+							},
+							{
+								id: "G002-old-pending",
+								title: "Old pending",
+								objective: "Superseded work without an auditable replacement",
+								status: "pending",
+								steeringStatus: "superseded",
+							},
+						],
+					}),
+				);
+
+				const state = await readUltragoalState(cwd);
+
+				assert.equal(state?.active, true);
+				assert.equal(state?.status, "pending");
+				assert.equal(state?.pending, 1);
+				assert.equal(state?.activeGoal?.id, "G002-old-pending");
+				assert.deepEqual(
+					state?.ongoingGoals?.map((goal) => goal.id),
+					["G002-old-pending"],
+				);
+			},
+		);
+	});
+
+	it("keeps superseded ultragoal goals active until every replacement is resolved", async () => {
+		await withTempRepo(
+			"omx-hud-ultragoal-superseded-unresolved-replacement-",
+			async (cwd) => {
+				const ultragoalDir = join(cwd, ".omx", "ultragoal");
+				await mkdir(ultragoalDir, { recursive: true });
+				await writeFile(
+					join(ultragoalDir, "goals.json"),
+					JSON.stringify({
+						version: 1,
+						activeGoalId: "G002-old-pending",
+						goals: [
+							{
+								id: "G001-done",
+								title: "Done",
+								objective: "Completed prior work",
+								status: "complete",
+							},
+							{
+								id: "G002-old-pending",
+								title: "Old pending",
+								objective: "Superseded work with unfinished replacements",
+								status: "pending",
+								steeringStatus: "superseded",
+								supersededBy: ["G003-real-pending"],
+							},
+							{
+								id: "G003-real-pending",
+								title: "Real pending",
+								objective: "Finish replacement work",
+								status: "pending",
+								supersedes: ["G002-old-pending"],
+							},
+						],
+					}),
+				);
+
+				const state = await readUltragoalState(cwd);
+
+				assert.equal(state?.active, true);
+				assert.equal(state?.status, "pending");
+				assert.equal(state?.pending, 2);
+				assert.equal(state?.activeGoal?.id, "G002-old-pending");
+				assert.deepEqual(
+					state?.ongoingGoals?.map((goal) => goal.id),
+					["G002-old-pending", "G003-real-pending"],
+				);
+			},
+		);
+	});
+
+	it("falls through resolved superseded activeGoalId to genuinely active pending ultragoal goals", async () => {
+		await withTempRepo(
+			"omx-hud-ultragoal-superseded-with-active-pending-",
+			async (cwd) => {
+				const ultragoalDir = join(cwd, ".omx", "ultragoal");
+				await mkdir(ultragoalDir, { recursive: true });
+				await writeFile(
+					join(ultragoalDir, "goals.json"),
+					JSON.stringify({
+						version: 1,
+						activeGoalId: "G002-old-pending",
+						goals: [
+							{
+								id: "G001-done",
+								title: "Done",
+								objective: "Completed old work",
+								status: "complete",
+							},
+							{
+								id: "G002-old-pending",
+								title: "Old pending",
+								objective:
+									"Superseded work that should not remain active in HUD",
+								status: "pending",
+								steeringStatus: "superseded",
+								supersededBy: ["G003-replacement-done"],
+							},
+							{
+								id: "G003-replacement-done",
+								title: "Replacement done",
+								objective: "Completed replacement work",
+								status: "complete",
+								supersedes: ["G002-old-pending"],
+							},
+							{
+								id: "G004-real-pending",
+								title: "Real pending",
+								objective: "Still-active follow-up work",
+								status: "pending",
+							},
+						],
+					}),
+				);
+
+				const state = await readUltragoalState(cwd);
+
+				assert.equal(state?.active, true);
+				assert.equal(state?.status, "pending");
+				assert.equal(state?.pending, 1);
+				assert.equal(state?.activeGoal?.id, "G004-real-pending");
+				assert.deepEqual(
+					state?.ongoingGoals?.map((goal) => goal.id),
+					["G004-real-pending"],
+				);
+			},
+		);
+	});
+
 	it("shows active ultragoal plus the next three pending goals", async () => {
 		await withTempRepo("omx-hud-ultragoal-next-pending-", async (cwd) => {
 			const ultragoalDir = join(cwd, ".omx", "ultragoal");

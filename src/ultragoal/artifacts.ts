@@ -15,6 +15,7 @@ import {
 	parseCodexGoalSnapshot,
 	reconcileCodexGoalSnapshot,
 } from "../goal-workflows/codex-goal-snapshot.js";
+import { LEADER_CONDUCTOR_BLOCK } from "../leader/contract.js";
 
 export const ULTRAGOAL_DIR = ".omx/ultragoal";
 export const ULTRAGOAL_BRIEF = "brief.md";
@@ -2620,6 +2621,8 @@ function buildPerStoryCodexGoalInstruction(
 	};
 	const finalStory = isFinalRunCompletionCandidate(plan, goal);
 	return [
+		LEADER_CONDUCTOR_BLOCK,
+		"",
 		"Ultragoal active-goal handoff",
 		`Plan: ${plan.goalsPath}`,
 		`Ledger: ${plan.ledgerPath}`,
@@ -2678,6 +2681,8 @@ function buildAggregateCodexGoalInstruction(
 	const createPayload = { objective };
 	const checkpointStatus = finalStory ? "complete" : "active";
 	return [
+		LEADER_CONDUCTOR_BLOCK,
+		"",
 		"Ultragoal aggregate-goal handoff",
 		`Plan: ${plan.goalsPath}`,
 		`Ledger: ${plan.ledgerPath}`,

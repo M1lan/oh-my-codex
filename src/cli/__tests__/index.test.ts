@@ -61,6 +61,7 @@ import {
 	resolveOmxRootForLaunch,
 	resolveDisposableWorktreeOmxRootForLaunch,
 	prepareCodexHomeForLaunch,
+	captureMadmaxWorktreeRuntimeContext,
 	persistProjectLaunchRuntimeAuthState,
 	persistProjectLaunchRuntimeProjectTrustState,
 	cleanupRuntimeCodexHome,
@@ -273,6 +274,65 @@ describe("madmax state isolation", () => {
 				"/repo",
 			),
 			false,
+		);
+	});
+
+	it("captures madmax worktree context from parsed worktree state, not remaining args", () => {
+		const sourceCwd = "/repo/source";
+		const worktreeCwd = "/repo/.worktrees/session";
+		const runDir = "/runs/run-issue-3043";
+		const context = captureMadmaxWorktreeRuntimeContext({
+			originalLaunchArgs: ["--madmax", "--worktree", "--version"],
+			worktreeEnabled: true,
+			sourceCwd,
+			worktreeCwd,
+			env: {
+				OMX_ROOT: runDir,
+				OMXBOX_ACTIVE: "1",
+				OMX_SOURCE_CWD: sourceCwd,
+				OMX_MADMAX_DETACHED_CONTEXT: "ctx-3043",
+			},
+		});
+
+		assert.deepEqual(context, {
+			omxRoot: runDir,
+			sourceCwd,
+			worktreeCwd,
+			madmaxDetachedContext: "ctx-3043",
+			boxedActive: true,
+		});
+	});
+
+	it("does not capture ordinary worktree or unboxed madmax launches", () => {
+		assert.equal(
+			captureMadmaxWorktreeRuntimeContext({
+				originalLaunchArgs: ["--worktree"],
+				worktreeEnabled: true,
+				sourceCwd: "/repo/source",
+				worktreeCwd: "/repo/.worktrees/session",
+				env: { OMX_ROOT: "/runs/run", OMXBOX_ACTIVE: "1" },
+			}),
+			undefined,
+		);
+		assert.equal(
+			captureMadmaxWorktreeRuntimeContext({
+				originalLaunchArgs: ["--madmax", "--worktree"],
+				worktreeEnabled: true,
+				sourceCwd: "/repo/source",
+				worktreeCwd: "/repo/.worktrees/session",
+				env: { OMX_ROOT: "/runs/run" },
+			}),
+			undefined,
+		);
+		assert.equal(
+			captureMadmaxWorktreeRuntimeContext({
+				originalLaunchArgs: ["--madmax", "--worktree"],
+				worktreeEnabled: false,
+				sourceCwd: "/repo/source",
+				worktreeCwd: "/repo/.worktrees/session",
+				env: { OMX_ROOT: "/runs/run", OMXBOX_ACTIVE: "1" },
+			}),
+			undefined,
 		);
 	});
 
@@ -2205,7 +2265,7 @@ describe("resolveCliInvocation", () => {
 		);
 		assert.match(
 			HELP,
-			/omx update --stable\s+Install\/rollback to npm stable \(oh-my-codex@latest\), then refresh setup/,
+			/omx update --stable\s+Install\/rollback to the stable release \(oh-my-codex@latest\), then refresh setup/,
 		);
 		assert.match(
 			HELP,
@@ -4470,11 +4530,11 @@ exit 0
 		);
 		assert.match(
 			source,
-			/const hudRuntimeRoot = resolveHudRuntimeRootForLaunch\(cwd, process\.env\);/,
+			/const hudRuntimeRoot: HudRuntimeRootForLaunch = runtimeContext\s*\? \{ omxRoot: runtimeContext\.omxRoot, rootSource: 'omx-root-env' \}\s*: resolveHudRuntimeRootForLaunch\(cwd, process\.env\);/,
 		);
 		assert.match(
 			source,
-			/const hudEnvArgs = Object\.entries\(buildHudRuntimeEnv\(\{\s*sessionId,\s*leaderPaneId: currentPaneId,\s*\.\.\.hudRuntimeRoot,\s*\}\)\.env\)\.map\(\(\[key, value\]\) => `\$\{key\}=\$\{value\}`\)/,
+			/const hudRuntimeEnv = \{\s*\.\.\.buildHudRuntimeEnv\(\{\s*sessionId,\s*leaderPaneId: currentPaneId,\s*\.\.\.hudRuntimeRoot,\s*\}\)\.env,\s*\.\.\.runtimeEnvOverlay,\s*\};\s*const hudEnvArgs = Object\.entries\(hudRuntimeEnv\)\.map\(\(\[key, value\]\) => `\$\{key\}=\$\{value\}`\)/,
 		);
 		assert.match(
 			source,
@@ -4493,7 +4553,7 @@ exit 0
 		);
 		assert.match(
 			source,
-			/registerInsideTmuxHudResizeHook\(\{\s*hudPaneId,\s*currentPaneId,\s*cwd,\s*sessionId,\s*omxRootOverride,\s*\}\)/,
+			/registerInsideTmuxHudResizeHook\(\{\s*hudPaneId,\s*currentPaneId,\s*cwd,\s*sessionId,\s*omxRootOverride,\s*baseEnv: runtimeHookEnv,\s*\}\)/,
 		);
 		assert.match(
 			source,

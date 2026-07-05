@@ -37,7 +37,10 @@ import {
 	getStatePath,
 	resolveStateScope,
 } from "../mcp/state-paths.js";
-import { completeRalplanSession } from "../state/operations.js";
+import {
+	completeRalplanSession,
+	validateRalplanTerminalConsensus,
+} from "../state/operations.js";
 
 export interface ModeState {
 	active: boolean;
@@ -364,6 +367,14 @@ export async function updateModeState(
 		mode,
 		updatedBase as ModeState,
 	);
+	if (mode === "ralplan") {
+		const validationError = validateRalplanTerminalConsensus(
+			projectRoot ?? process.cwd(),
+			normalizedBase as Record<string, unknown>,
+			scope.sessionId,
+		);
+		if (validationError) throw new Error(validationError);
+	}
 	if (mode === "autopilot") {
 		const isPipelineOrchestratorProgressWrite =
 			options.trustedPipelineProgress === true;

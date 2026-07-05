@@ -20,6 +20,7 @@ import {
 	type UltragoalPlan,
 	type UltragoalSteeringProposal,
 } from "../artifacts.js";
+import { LEADER_CONDUCTOR_BLOCK } from "../../leader/contract.js";
 import {
 	steeringFixtures,
 	type SteeringFixtureProposal,
@@ -68,6 +69,10 @@ function cleanQualityGate(): object {
 				"architect verified no additional architecture invariants were declared in the brief",
 		},
 	};
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function writeFixturePlan(
@@ -374,6 +379,10 @@ describe("ultragoal artifacts", () => {
 			assert.match(instruction, /Complete the durable ultragoal plan/);
 			assert.match(instruction, /including later accepted\/appended stories/);
 			assert.match(instruction, /\.omx\/ultragoal\/ledger\.jsonl/);
+			assert.match(
+				instruction,
+				new RegExp(escapeRegExp(LEADER_CONDUCTOR_BLOCK)),
+			);
 			assert.match(instruction, /Complete first milestone/);
 			assert.match(instruction, /does not call \/goal clear/);
 			assert.match(instruction, /manually run \/goal clear/);
@@ -410,6 +419,10 @@ describe("ultragoal artifacts", () => {
 				aggregateInstruction,
 				/APPROVE \+ CLEAR \+ independent code-reviewer and architect subagent evidence/,
 			);
+			assert.match(
+				aggregateInstruction,
+				new RegExp(escapeRegExp(LEADER_CONDUCTOR_BLOCK)),
+			);
 
 			await createUltragoalPlan(cwd, {
 				brief: "brief",
@@ -434,6 +447,10 @@ describe("ultragoal artifacts", () => {
 			assert.match(
 				perStoryInstruction,
 				/APPROVE \+ CLEAR \+ independent code-reviewer and architect subagent evidence/,
+			);
+			assert.match(
+				perStoryInstruction,
+				new RegExp(escapeRegExp(LEADER_CONDUCTOR_BLOCK)),
 			);
 		});
 	});

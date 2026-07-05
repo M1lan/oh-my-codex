@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-04
+
+Reliability and safety-hardening train after `0.18.17`: planning-gate and handoff-artifact execution transports are locked down, the conductor contract and typed subagent/lane provenance are hardened, Ralplan consensus/terminal-state handling is tightened, madmax worktree and resume paths are fixed, and a long-standing parallel-test flake in the Rust suite is eliminated. The CLI/package/plugin contract is preserved.
+
+### Changed
+
+- **Planning and handoff execution transports are locked down** — `.omx/tmp` planning artifacts, same-command handoff artifact scripts, and planning-guard Python/read-only-Bash writes can no longer be used as execution transports, while legitimate deep-interview→ralplan artifact handoff is still allowed.
+- **Conductor and typed-lane contracts are hardened** — conductor contract, typed subagent provenance, typed-lane fences, shell-guard target parsing, and the conductor reuse ledger reduce unsafe or ambiguous delegation.
+
+### Fixed
+
+- **Test flakiness eliminated** — the Rust sparkshell test helper `unique_temp_dir()` now uses a per-process monotonic counter so parallel same-process tests can no longer collide on a shared temp state root, fixing intermittent `json_mode_reports_failed_worker_status` failures.
+- **Ralplan consensus and terminal state are safer** — consensus review evidence, terminal closeout state writes, and heredoc redirect scanning are hardened against stale or unsafe writes.
+- **Autopilot and madmax paths are sturdier** — Autopilot ralplan handoff, madmax worktree runtime roots, and madmax resume plugin cache preflight are corrected.
+- **HUD Ultragoal status is accurate** — superseded Ultragoal goals render correctly in the HUD.
+
+### PRs
+
+- #3056, #3055, #3054, #3051, #3050, #3048, #3047, #3046, #3045, #3042, #3040, #3038, #3037, #3035, #3032, #3031, #3030, #3025, #3022, #3018
+
+### Verification
+
+- Release readiness evidence is tracked in `docs/qa/release-readiness-0.19.0.md`.
+
 ## [0.18.17] - 2026-07-01
 
 Patch release for the post-`0.18.16` runtime reliability train: Ultragoal null-goal recovery, MSYS/Windows Team startup handling, Ralplan terminal state, planning-gate write guards, and profile mention fallback behavior are tightened while preserving the existing CLI/package contract.

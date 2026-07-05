@@ -5,6 +5,7 @@ import {
 	openSync,
 	readFileSync,
 	readSync,
+	readdirSync,
 	statSync,
 } from "fs";
 import {
@@ -15,7 +16,7 @@ import {
 	stat,
 	writeFile,
 } from "fs/promises";
-import { extname, join, relative, resolve } from "path";
+import { extname, isAbsolute, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import {
 	readModeStateForActiveDecision,
@@ -62,7 +63,12 @@ import {
 	writeTeamLeaderAttention,
 	writeTeamPhase,
 } from "../team/state.js";
-import { omxNotepadPath, resolveProjectMemoryPath } from "../utils/paths.js";
+import {
+	codexAgentsDir,
+	omxNotepadPath,
+	projectCodexAgentsDir,
+	resolveProjectMemoryPath,
+} from "../utils/paths.js";
 import { findGitLayout } from "../utils/git-layout.js";
 import {
 	getBaseStateDir,
@@ -118,7 +124,19 @@ import {
 	readAutoresearchCompletionStatus,
 	readAutoresearchModeStateForActiveDecision,
 } from "../autoresearch/skill-validation.js";
-import { normalizeAutopilotPhase } from "../autopilot/fsm.js";
+import { AGENT_DEFINITIONS } from "../agents/definitions.js";
+import {
+	deriveAutopilotChildPhase,
+	normalizeAutopilotPhase,
+} from "../autopilot/fsm.js";
+import {
+	CONDUCTOR_ORCHESTRATION_METADATA_PREFIXES,
+	LEADER_CONDUCTOR_BLOCK,
+	LEADER_CONDUCTOR_REUSE_AND_LEDGER_GUIDANCE,
+	actionKindForConductorArtifact,
+	authorizeConductorAction,
+	classifyConductorArtifactKind,
+} from "../leader/contract.js";
 import { readRunState } from "../runtime/run-state.js";
 import {
 	evaluateRalphCompletionAuditEvidence,
@@ -203,6 +221,8 @@ const TEAM_WORKER_TERMINAL_RUN_STATES = new Set([
 	"stopped",
 	"cancelled",
 ]);
+const LEADER_CONDUCTOR_GOLDEN_RULE =
+	"Main-root Conductor golden rule: delegate implementation work; do not self-execute source or plan edits.";
 const NATIVE_STOP_STATE_FILE = "native-stop-state.json";
 const NATIVE_SUBAGENT_CAPACITY_BLOCKER_FILE =
 	"native-subagent-capacity-blocker.json";
@@ -244,6 +264,9 @@ const RALPH_LIVE_RISK_PATTERNS = [
 	/\b(?:database|db|terraform|kubectl|kubernetes|aws|gcp|azure|external|destructive)\b/i,
 	/\b(?:telegram|vps|service|restart|send|notify|notification|notifications|cron)\b/i,
 ] as const;
+const KNOWN_TYPED_AGENT_ROLES = new Set(Object.keys(AGENT_DEFINITIONS));
+let installedTypedAgentRoleNamesCacheKey = "";
+let installedTypedAgentRoleNamesCache: Set<string> = new Set();
 const RALPH_TASK_TEXT_FIELDS = [
 	"task_description",
 	"taskDescription",
@@ -1867,6 +1890,29 @@ const SOURCE_DIFF_EXTENSIONS = new Set([
 	".tsx",
 ]);
 
+const PLANNING_TMP_SCRIPT_LIKE_EXTENSIONS = new Set([
+	".bash",
+	".bat",
+	".cjs",
+	".cmd",
+	".cts",
+	".fish",
+	".js",
+	".jsx",
+	".ksh",
+	".mjs",
+	".mts",
+	".php",
+	".pl",
+	".ps1",
+	".py",
+	".rb",
+	".sh",
+	".ts",
+	".tsx",
+	".zsh",
+]);
+
 function gitOutput(cwd: string, args: string[]): string {
 	try {
 		return execFileSync("git", args, {
@@ -2572,6 +2618,8 @@ function buildAutopilotPromptActivationNote(
 		"The ralplan phase is not complete until Planner output has been reviewed sequentially by Architect and then Critic; do not hand off to Ultragoal or implementation until the ralplan state/artifact records both ralplan_architect_review and ralplan_critic_review with approval or an explicit blocker.",
 		"Do not silently fall back to ordinary $plan/ralplan-only handling; keep autopilot-state.json, skill-active-state.json, HUD/statusline, and Codex goal-mode handoff guidance visible while the workflow is active.",
 		"When Codex goal tools are available, call get_goal/create_goal only from the active thread handoff and treat the active goal as the completion contract until code-review and ultraqa are clean.",
+		LEADER_CONDUCTOR_BLOCK,
+		LEADER_CONDUCTOR_REUSE_AND_LEDGER_GUIDANCE,
 	]
 		.filter(Boolean)
 		.join(" ");
@@ -2591,6 +2639,9 @@ function buildAdditionalContextMessage(
 ): string | null {
 	if (!prompt) return null;
 	const promptPriorityMessage = buildPromptPriorityMessage(prompt);
+	if (payload && isTypedAgentRolePayload(payload)) {
+		return promptPriorityMessage;
+	}
 	const teamMode = readTeamModeConfig(cwd);
 	const matches = detectKeywords(prompt).filter(
 		(entry) => teamMode.enabled || entry.skill !== "team",
@@ -2818,6 +2869,14 @@ function parseTeamWorkerEnv(
 		teamName: match[1] || "",
 		workerName: match[2] || "",
 	};
+}
+
+function hasTeamWorkerEnvironment(): boolean {
+	return (
+		parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_INTERNAL_WORKER)) !==
+			null ||
+		parseTeamWorkerEnv(safeString(process.env.OMX_TEAM_WORKER)) !== null
+	);
 }
 
 async function resolveTeamStateDirForWorkerContext(
@@ -3499,15 +3558,10 @@ async function findActiveGoalWorkflowReconciliationRequirement(
 	}
 	if (activeUltragoal) {
 		const goalId = safeString(activeUltragoal.id) || "<goal-id>";
-		const codexObjective =
-			safeString(ultragoal?.codexObjective) ||
-			safeString(activeUltragoal.objective) ||
-			"<intended ultragoal objective>";
 		return {
 			workflow: "ultragoal",
 			command: `omx ultragoal checkpoint --goal-id ${goalId} --status complete --codex-goal-json '<get_goal JSON or path>' --evidence '<evidence>'`,
 			remediation: [
-				`If get_goal returns no active goal/null while ${goalId} remains in_progress in .omx/ultragoal/goals.json, do not checkpoint complete or record a blocker from the empty snapshot; call create_goal with objective ${JSON.stringify(codexObjective)} and continue the active OMX story until real completion evidence exists.`,
 				`If get_goal returns a completed task-scoped objective for the same aggregate ultragoal plan, checkpoint ${goalId} with evidence naming ${goalId} plus .omx/ultragoal/goals.json or ledger.jsonl and pass final quality-gate JSON; OMX will reconcile the completed planned scope without mutating Codex goal state.`,
 				`If get_goal instead returns a different completed legacy objective and complete checkpointing fails, do not repeat --status complete in this thread.`,
 				`Record the non-terminal blocker with: omx ultragoal checkpoint --goal-id ${goalId} --status blocked --codex-goal-json '<different completed get_goal JSON or path>' --evidence '<completed legacy Codex goal blocks create_goal in this thread>'.`,
@@ -3813,6 +3867,61 @@ function readPayloadThreadId(payload: CodexHookPayload): string {
 	).trim();
 }
 
+function readPayloadAgentRole(payload: CodexHookPayload): string {
+	const directRole = safeString(
+		payload.agent_role ??
+			payload.agentRole ??
+			payload.agent_type ??
+			payload.agentType,
+	)
+		.trim()
+		.toLowerCase();
+	if (directRole) return directRole;
+
+	const source = safeObject(payload.source);
+	const subagent = safeObject(source?.subagent);
+	const threadSpawn = safeObject(subagent?.thread_spawn);
+	return safeString(
+		threadSpawn?.agent_role ??
+			threadSpawn?.agentRole ??
+			threadSpawn?.agent_type ??
+			threadSpawn?.agentType,
+	)
+		.trim()
+		.toLowerCase();
+}
+
+function readInstalledTypedAgentRoleNames(): Set<string> {
+	const cacheKey = [codexAgentsDir(), projectCodexAgentsDir()].join("|");
+	if (installedTypedAgentRoleNamesCacheKey === cacheKey)
+		return installedTypedAgentRoleNamesCache;
+
+	const installedRoleNames = new Set<string>();
+	for (const agentsDir of [codexAgentsDir(), projectCodexAgentsDir()]) {
+		try {
+			for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
+				if (!entry.isFile() || !entry.name.endsWith(".toml")) continue;
+				installedRoleNames.add(entry.name.slice(0, -5).trim().toLowerCase());
+			}
+		} catch {
+			// Ignore missing or unreadable agent directories; built-in definitions remain authoritative.
+		}
+	}
+
+	installedTypedAgentRoleNamesCacheKey = cacheKey;
+	installedTypedAgentRoleNamesCache = installedRoleNames;
+	return installedTypedAgentRoleNamesCache;
+}
+
+function isTypedAgentRolePayload(payload: CodexHookPayload): boolean {
+	const agentRole = readPayloadAgentRole(payload);
+	return (
+		agentRole !== "" &&
+		(KNOWN_TYPED_AGENT_ROLES.has(agentRole) ||
+			readInstalledTypedAgentRoleNames().has(agentRole))
+	);
+}
+
 function readPayloadTurnId(payload: CodexHookPayload): string {
 	return safeString(payload.turn_id ?? payload.turnId).trim();
 }
@@ -4100,6 +4209,7 @@ const DEEP_INTERVIEW_ALLOWED_WRITE_PREFIXES = [
 	".omx/context",
 	".omx/interviews",
 	".omx/specs",
+	".omx/tmp",
 	".omx/state",
 ] as const;
 
@@ -4107,6 +4217,7 @@ const RALPLAN_ALLOWED_WRITE_PREFIXES = [
 	".omx/context",
 	".omx/plans",
 	".omx/specs",
+	".omx/tmp",
 	".omx/state",
 	".beads",
 ] as const;
@@ -4219,6 +4330,18 @@ function isProtectedPlanningStatePath(relativePath: string): boolean {
 	return PROTECTED_PLANNING_STATE_FILE_NAMES.has(fileName);
 }
 
+function isPlanningTmpRelativePath(relativePath: string): boolean {
+	return relativePath === ".omx/tmp" || relativePath.startsWith(".omx/tmp/");
+}
+
+function isAllowedPlanningTmpScratchPath(relativePath: string): boolean {
+	if (!isPlanningTmpRelativePath(relativePath)) return true;
+	const fileName = relativePath.split("/").pop() ?? "";
+	if (!fileName || fileName === "tmp") return true;
+	const extension = extname(fileName).toLowerCase();
+	return !PLANNING_TMP_SCRIPT_LIKE_EXTENSIONS.has(extension);
+}
+
 function isAllowedPlanningArtifactPath(
 	cwd: string,
 	rawPath: string,
@@ -4227,6 +4350,12 @@ function isAllowedPlanningArtifactPath(
 	const relativePath = normalizePlanningArtifactRelativePath(cwd, rawPath);
 	if (!relativePath) return false;
 	if (isProtectedPlanningStatePath(relativePath)) return false;
+	if (isPlanningTmpRelativePath(relativePath)) {
+		return (
+			allowedPrefixes.includes(".omx/tmp") &&
+			isAllowedPlanningTmpScratchPath(relativePath)
+		);
+	}
 	return allowedPrefixes.some(
 		(prefix) =>
 			relativePath === prefix || relativePath.startsWith(`${prefix}/`),
@@ -4520,7 +4649,8 @@ function resolveCommandRedirectTarget(
 
 function extractDeepInterviewCommandRedirectTargets(command: string): string[] {
 	const targets: string[] = [];
-	for (const match of command.matchAll(
+	const commandOutsideHeredocBodies = stripHeredocBodiesForCommandScan(command);
+	for (const match of commandOutsideHeredocBodies.matchAll(
 		/(?:^|[^>])>{1,2}\s*(["']?)([^\s&|;<>]+)\1/g,
 	)) {
 		const candidate = safeString(match[2]).trim();
@@ -4530,18 +4660,176 @@ function extractDeepInterviewCommandRedirectTargets(command: string): string[] {
 	return targets;
 }
 
+function commandHasDestructiveGitSubcommand(command: string): boolean {
+	const destructiveSubcommands = new Set([
+		"am",
+		"apply",
+		"checkout",
+		"clean",
+		"merge",
+		"rebase",
+		"reset",
+		"restore",
+		"rm",
+		"switch",
+	]);
+
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
+		const words = tokenizeShellWords(segment);
+		for (let index = 0; index < words.length; index += 1) {
+			if (shellWordBaseName(words[index] ?? "") !== "git") continue;
+			const subcommandIndex = findGitSubcommandIndex(words, index + 1);
+			if (subcommandIndex === null) continue;
+			const subcommand = words[subcommandIndex] ?? "";
+			if (destructiveSubcommands.has(subcommand)) return true;
+			if (subcommand === "worktree") {
+				const worktreeSubcommandIndex = findGitSubcommandIndex(
+					words,
+					subcommandIndex + 1,
+				);
+				if (worktreeSubcommandIndex === null) continue;
+				const worktreeSubcommand = words[worktreeSubcommandIndex] ?? "";
+				if (
+					worktreeSubcommand === "add" ||
+					worktreeSubcommand === "move" ||
+					worktreeSubcommand === "mv" ||
+					worktreeSubcommand === "remove" ||
+					worktreeSubcommand === "rm" ||
+					worktreeSubcommand === "prune" ||
+					worktreeSubcommand === "repair" ||
+					worktreeSubcommand === "clean"
+				)
+					return true;
+			}
+			if (subcommand.startsWith("checkout-")) return true;
+			if (subcommand.startsWith("merge-") && subcommand !== "merge-base")
+				return true;
+		}
+	}
+	return false;
+}
+function commandHasPackageInstallIntent(command: string): boolean {
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
+		const words = tokenizeShellWords(segment);
+		for (let index = 0; index < words.length; index += 1) {
+			const headBase = shellWordBaseName(words[index] ?? "");
+			if (headBase !== "npm" && headBase !== "pnpm" && headBase !== "yarn")
+				continue;
+			const subcommandIndex = findPackageInstallSubcommandIndex(
+				words,
+				index + 1,
+			);
+			if (subcommandIndex === null) continue;
+			const subcommand = words[subcommandIndex] ?? "";
+			if (
+				headBase === "npm" &&
+				(subcommand === "install" || subcommand === "i" || subcommand === "ci")
+			)
+				return true;
+			if (
+				headBase === "pnpm" &&
+				(subcommand === "install" || subcommand === "i" || subcommand === "add")
+			)
+				return true;
+			if (
+				headBase === "yarn" &&
+				(subcommand === "install" || subcommand === "add")
+			)
+				return true;
+		}
+	}
+	return false;
+}
+
+function findPackageInstallSubcommandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (isShellAssignmentWord(word)) continue;
+		if (
+			word === "-C" ||
+			word === "--prefix" ||
+			word === "--dir" ||
+			word === "--cwd" ||
+			word === "-w" ||
+			word === "--workspace"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			word.startsWith("--prefix=") ||
+			word.startsWith("--dir=") ||
+			word.startsWith("--cwd=") ||
+			word.startsWith("--workspace=")
+		)
+			continue;
+		if (/^-C.+/.test(word) || /^-w.+/.test(word)) continue;
+		if (word.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function commandHasUntargetedPlanningForbiddenIntent(command: string): boolean {
+	return (
+		commandHasDestructiveGitSubcommand(command) ||
+		commandHasPackageInstallIntent(command)
+	);
+}
+
+function findGitSubcommandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (isShellAssignmentWord(word)) continue;
+		if (
+			word === "-C" ||
+			word === "-c" ||
+			word === "--git-dir" ||
+			word === "--work-tree" ||
+			word === "--namespace"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			word.startsWith("--git-dir=") ||
+			word.startsWith("--work-tree=") ||
+			word.startsWith("--namespace=")
+		)
+			continue;
+		if (word.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
 function commandHasDeepInterviewWriteIntent(command: string): boolean {
 	return (
 		commandInvokesApplyPatch(command) ||
 		extractDeepInterviewCommandRedirectTargets(command).length > 0 ||
 		/\btee\s+(?:-a\s+)?[^\s&|;]+/.test(command) ||
+		extractConductorEditorWriteTargets(command).length > 0 ||
 		/\bsed\s+(?:[^\n;&|]*\s)?-i(?:\b|['"])/.test(command) ||
+		/\bperl\s+(?:[^\n;&|]*\s)?-[^-\s]*i(?:\b|['"])/.test(command) ||
 		/\b(?:python3?|node|perl|ruby)\b[\s\S]{0,260}\b(?:writeFileSync|writeFile|write_text|open\([^)]*["']w|File\.write|Path\()/.test(
 			command,
 		) ||
-		/\b(?:git\s+(?:checkout|switch|restore|reset|apply|am|merge|rebase)|npm\s+(?:install|i|ci)|pnpm\s+(?:install|i)|yarn\s+(?:install|add))\b/.test(
-			command,
-		)
+		extractConductorBashMutations(command).length > 0 ||
+		extractConductorInterpreterWrites(command).length > 0 ||
+		commandHasDestructiveGitSubcommand(command) ||
+		commandHasPackageInstallIntent(command)
 	);
 }
 
@@ -4550,7 +4838,16 @@ function extractDeepInterviewCommandWriteTargets(command: string): string[] {
 	const targets = extractDeepInterviewCommandRedirectTargets(command).map(
 		(target) => resolveCommandRedirectTarget(target, assignments),
 	);
-	for (const segment of splitShellCommandSegments(command)) {
+	targets.push(...extractConductorEditorWriteTargets(command));
+	for (const mutation of extractConductorBashMutations(command)) {
+		targets.push(...mutation.targets);
+	}
+	for (const write of extractConductorInterpreterWrites(command)) {
+		targets.push(...write.targets);
+	}
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
 		const words = tokenizeShellWords(segment);
 		for (let index = 0; index < words.length; index += 1) {
 			if (shellWordBaseName(words[index] ?? "") !== "tee") continue;
@@ -4591,6 +4888,16 @@ function extractDeepInterviewCommandWriteTargets(command: string): string[] {
 					targets.push(resolveCommandRedirectTarget(word, assignments));
 			}
 		}
+	}
+	for (const nestedCommand of extractNestedShellCommandStringsForStateScan(
+		command,
+	)) {
+		targets.push(...extractDeepInterviewCommandWriteTargets(nestedCommand));
+	}
+	for (const nestedCommand of extractNestedCommandSubstitutionStringsForStateScan(
+		command,
+	)) {
+		targets.push(...extractDeepInterviewCommandWriteTargets(nestedCommand));
 	}
 	return targets;
 }
@@ -4641,6 +4948,35 @@ function normalizeCommandDirectoryTarget(rawPath: string): string | null {
 	return trimmed;
 }
 
+function resolveSimpleCdCommandCwd(
+	currentCwd: string,
+	words: string[],
+): string | null {
+	const commandIndex = findWrappedCommandPositionIndex(words, 0);
+	if (
+		commandIndex === null ||
+		shellWordBaseName(words[commandIndex] ?? "") !== "cd"
+	)
+		return null;
+
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (word === "-L" || word === "-P" || word === "-e") continue;
+		if (word.startsWith("-")) return null;
+
+		const normalizedTarget = normalizeCommandDirectoryTarget(word);
+		if (normalizedTarget === null) return null;
+		try {
+			return resolve(currentCwd, normalizedTarget);
+		} catch {
+			return null;
+		}
+	}
+
+	return null;
+}
+
 function isEnvCwdChangingOption(word: string): boolean {
 	return (
 		word === "-C" ||
@@ -4648,6 +4984,138 @@ function isEnvCwdChangingOption(word: string): boolean {
 		word.startsWith("--chdir=") ||
 		/^-C.+/.test(word)
 	);
+}
+
+interface WrappedCommandExecutionContext {
+	index: number;
+	cwd: string;
+}
+
+function resolveEnvWrappedCommandCwd(
+	currentCwd: string,
+	words: string[],
+	envWordIndex: number,
+	operandIndex: number,
+): string | null {
+	let effectiveCwd = currentCwd;
+	for (let index = envWordIndex + 1; index < operandIndex; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--" || isShellAssignmentWord(word)) continue;
+		if (
+			word === "-S" ||
+			word === "--split-string" ||
+			word.startsWith("-S") ||
+			word.startsWith("--split-string=")
+		)
+			return null;
+		if (
+			word === "-u" ||
+			word === "--unset" ||
+			word === "-a" ||
+			word === "--argv0"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			word.startsWith("--unset=") ||
+			word.startsWith("--argv0=") ||
+			/^-u.+/.test(word) ||
+			/^-a.+/.test(word)
+		)
+			continue;
+		if (isEnvCwdChangingOption(word)) {
+			let target = "";
+			if (word === "-C" || word === "--chdir") {
+				target = words[index + 1] ?? "";
+				index += 1;
+			} else if (word.startsWith("--chdir=")) {
+				target = word.slice("--chdir=".length);
+			} else if (word.startsWith("-C") && word.length > 2) {
+				target = word.slice(2);
+			}
+			const normalizedTarget = normalizeCommandDirectoryTarget(target);
+			if (normalizedTarget === null) return null;
+			try {
+				effectiveCwd = resolve(effectiveCwd, normalizedTarget);
+			} catch {
+				return null;
+			}
+		}
+	}
+	return effectiveCwd;
+}
+
+function resolveWrappedCommandExecutionContext(
+	words: string[],
+	currentCwd: string,
+	startIndex = 0,
+): WrappedCommandExecutionContext | null {
+	let commandWordIndex = skipShellCommandPositionPrefixWords(words, startIndex);
+	let effectiveCwd = currentCwd;
+	for (let unwrapCount = 0; unwrapCount < 8; unwrapCount += 1) {
+		const commandWord = words[commandWordIndex] ?? "";
+		if (!commandWord) return null;
+
+		const commandWordBase = shellWordBaseName(commandWord);
+		const operandIndex =
+			commandWordBase === "env"
+				? findEnvDispatchOperandIndex(words, commandWordIndex + 1)
+				: commandWordBase === "command"
+					? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+					: commandWordBase === "exec"
+						? findExecDispatchOperandIndex(words, commandWordIndex + 1)
+						: commandWordBase === "time"
+							? findTimeDispatchOperandIndex(words, commandWordIndex + 1)
+							: commandWordBase === "timeout"
+								? findTimeoutDispatchOperandIndex(words, commandWordIndex + 1)
+								: commandWordBase === "nohup" || commandWordBase === "setsid"
+									? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+									: commandWordBase === "coproc"
+										? findCoprocDispatchOperandIndex(
+												words,
+												commandWordIndex + 1,
+											)
+										: commandWordBase === "xargs"
+											? findXargsDispatchOperandIndex(
+													words,
+													commandWordIndex + 1,
+												)
+											: commandWordBase === "nice"
+												? findNiceDispatchOperandIndex(
+														words,
+														commandWordIndex + 1,
+													)
+												: commandWordBase === "stdbuf"
+													? findStdbufDispatchOperandIndex(
+															words,
+															commandWordIndex + 1,
+														)
+													: null;
+		if (operandIndex === null)
+			return { index: commandWordIndex, cwd: effectiveCwd };
+
+		if (commandWordBase === "env") {
+			const envCwd = resolveEnvWrappedCommandCwd(
+				effectiveCwd,
+				words,
+				commandWordIndex,
+				operandIndex,
+			);
+			if (envCwd === null) return null;
+			effectiveCwd = envCwd;
+		}
+
+		const nextCommandWordIndex = skipShellCommandPositionPrefixWords(
+			words,
+			operandIndex,
+		);
+		if (nextCommandWordIndex === commandWordIndex)
+			return { index: commandWordIndex, cwd: effectiveCwd };
+		commandWordIndex = nextCommandWordIndex;
+	}
+
+	return null;
 }
 
 function resolveStateWriteInputFileCwd(
@@ -4897,62 +5365,466 @@ function firstNonOptionSourceOperand(
 	return "";
 }
 
+function stdinRedirectOperands(words: string[]): string[] {
+	const operands: string[] = [];
+	for (let index = 0; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (word === "<") {
+			const operand = words[index + 1] ?? "";
+			if (operand) operands.push(operand);
+			index += 1;
+			continue;
+		}
+		if (/^\d*<[^<&].+/.test(word)) {
+			operands.push(word.replace(/^\d*</, ""));
+		}
+	}
+	return operands;
+}
+
+function firstShellScriptOperands(
+	words: string[],
+	shellWordIndex: number,
+): string[] {
+	const operands: string[] = [];
+	for (let index = shellWordIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || word === "--") continue;
+		if (isShellCommandStringOption(word)) return operands;
+		if (isShellOptionWithSeparateValue(word)) {
+			const value = words[index + 1] ?? "";
+			if (value) operands.push(value);
+			index += 1;
+			continue;
+		}
+		if (word.startsWith("--init-file=") || word.startsWith("--rcfile=")) {
+			operands.push(word.slice(word.indexOf("=") + 1));
+			continue;
+		}
+		if (word.startsWith("-")) continue;
+		operands.push(word);
+		return operands;
+	}
+	return operands;
+}
+
 function firstShellScriptOperand(
 	words: string[],
 	shellWordIndex: number,
 ): string {
-	for (let index = shellWordIndex + 1; index < words.length; index += 1) {
+	return firstShellScriptOperands(words, shellWordIndex)[0] ?? "";
+}
+
+function isPythonInterpreterCommandWord(base: string): boolean {
+	return /^python(?:[0-9]+(?:\.[0-9]+)*)?$/.test(base);
+}
+
+function isNodeInterpreterCommandWord(base: string): boolean {
+	return /^(?:node|nodejs)$/.test(base);
+}
+
+function isPythonRuntimeOptionWithSeparateValue(word: string): boolean {
+	return (
+		word === "-B" ||
+		word === "-b" ||
+		word === "-d" ||
+		word === "-E" ||
+		word === "-i" ||
+		word === "-I" ||
+		word === "-O" ||
+		word === "-OO" ||
+		word === "-P" ||
+		word === "-q" ||
+		word === "-R" ||
+		word === "-s" ||
+		word === "-S" ||
+		word === "-u" ||
+		word === "-v" ||
+		word === "-V" ||
+		word === "--check-hash-based-pycs" ||
+		word === "-W" ||
+		word === "-X"
+	);
+}
+
+function isScriptInterpreterCommandWord(word: string): boolean {
+	const base = shellWordBaseName(word);
+	return (
+		isNestedShellCommandWord(base) ||
+		isNodeInterpreterCommandWord(base) ||
+		base === "bun" ||
+		base === "tsx" ||
+		base === "deno" ||
+		isPythonInterpreterCommandWord(base) ||
+		base === "perl" ||
+		base === "ruby" ||
+		base === "php" ||
+		base === "lua" ||
+		base === "go" ||
+		base === "npx" ||
+		base === "npm" ||
+		base === "pnpm" ||
+		base === "yarn"
+	);
+}
+
+function isTsxRuntimeOptionWithSeparateValue(word: string): boolean {
+	return word === "--tsconfig";
+}
+
+function isTsxRuntimeModeWord(word: string): boolean {
+	return word === "watch";
+}
+
+function firstInterpreterScriptOperands(
+	words: string[],
+	interpreterWordIndex: number,
+): string[] {
+	const base = shellWordBaseName(words[interpreterWordIndex] ?? "");
+	if (isNestedShellCommandWord(base))
+		return firstShellScriptOperands(words, interpreterWordIndex);
+
+	const operands: string[] = [];
+	let sawGoRun = false;
+	let sawPackageRunner = base === "npx";
+	for (let index = interpreterWordIndex + 1; index < words.length; index += 1) {
 		const word = words[index] ?? "";
 		if (!word || word === "--") continue;
-		if (isShellCommandStringOption(word)) return "";
-		if (isShellOptionWithSeparateValue(word)) {
-			index += 1;
-			continue;
+		if (isPythonInterpreterCommandWord(base)) {
+			if (word === "-c" || word === "-m") return operands;
+			if (isPythonRuntimeOptionWithSeparateValue(word)) {
+				index += 1;
+				continue;
+			}
+			if (word.startsWith("-W") || word.startsWith("-X")) continue;
+			if (word.startsWith("-")) continue;
+			operands.push(word);
+			return operands;
 		}
-		if (word.startsWith("-")) continue;
-		return word;
+		if (
+			isNodeInterpreterCommandWord(base) ||
+			base === "bun" ||
+			base === "tsx"
+		) {
+			if (
+				word === "-e" ||
+				word === "--eval" ||
+				word === "-p" ||
+				word === "--print"
+			)
+				return operands;
+			if (
+				runtimeOptionConsumesNextWord(word) ||
+				(base === "tsx" && isTsxRuntimeOptionWithSeparateValue(word))
+			) {
+				const value = words[index + 1] ?? "";
+				if (
+					value &&
+					(word === "-r" ||
+						word === "--require" ||
+						word === "--import" ||
+						word === "--loader" ||
+						word === "--experimental-loader")
+				) {
+					operands.push(value);
+				}
+				index += 1;
+				continue;
+			}
+			if (
+				word.startsWith("--require=") ||
+				word.startsWith("--import=") ||
+				word.startsWith("--loader=") ||
+				word.startsWith("--experimental-loader=")
+			) {
+				operands.push(word.slice(word.indexOf("=") + 1));
+				continue;
+			}
+			if (word.startsWith("--eval=") || word.startsWith("--print="))
+				return operands;
+			if (base === "tsx" && isTsxRuntimeModeWord(word)) continue;
+			if (word.startsWith("-")) continue;
+			operands.push(word);
+			return operands;
+		}
+		if (base === "deno") {
+			if (word === "eval" || word === "repl") return operands;
+			if (word === "run") continue;
+			if (word.startsWith("-")) continue;
+			operands.push(word);
+			return operands;
+		}
+		if (base === "go") {
+			if (!sawGoRun) {
+				if (word === "run") {
+					sawGoRun = true;
+					continue;
+				}
+				return operands;
+			}
+			if (word.startsWith("-")) continue;
+			operands.push(word);
+			return operands;
+		}
+		if (
+			base === "npm" ||
+			base === "pnpm" ||
+			base === "yarn" ||
+			base === "npx"
+		) {
+			if (!sawPackageRunner) {
+				if (word === "exec" || word === "x" || word === "dlx") {
+					sawPackageRunner = true;
+					continue;
+				}
+				return operands;
+			}
+			if (word.startsWith("-")) continue;
+			if (
+				word === "tsx" ||
+				word === "node" ||
+				word === "bun" ||
+				word === "deno"
+			)
+				continue;
+			operands.push(word);
+			return operands;
+		}
+		if (
+			base === "perl" ||
+			base === "ruby" ||
+			base === "php" ||
+			base === "lua"
+		) {
+			if (word === "-e" || word.startsWith("-e")) return operands;
+			if (word.startsWith("-")) continue;
+			operands.push(word);
+			return operands;
+		}
 	}
-	return "";
+	return operands;
+}
+
+function firstPlanningTmpScriptExecutionTarget(
+	cwd: string,
+	command: string,
+): string | null {
+	const scanCommand = (
+		currentCwd: string,
+		currentCommand: string,
+		activeCommands: Set<string>,
+	): string | null => {
+		const normalizedCommand = stripHeredocBodiesForCommandScan(
+			normalizeShellLineContinuations(currentCommand),
+		);
+		const commandKey = `${currentCwd}\0${normalizedCommand.trim()}`;
+		if (!normalizedCommand.trim() || activeCommands.has(commandKey))
+			return null;
+
+		const assignments = extractCommandLiteralAssignments(normalizedCommand);
+		const nextActiveCommands = new Set(activeCommands);
+		nextActiveCommands.add(commandKey);
+		let effectiveCwd = currentCwd;
+		const normalizeExecutionTarget = (
+			operandCwd: string,
+			rawPath: string,
+		): string | null => {
+			const absoluteTarget = normalizeSameCommandScriptTarget(
+				operandCwd,
+				rawPath,
+				assignments,
+			);
+			if (!absoluteTarget) return null;
+			const relativePath = relative(cwd, absoluteTarget).replace(/\\/g, "/");
+			if (
+				!relativePath ||
+				relativePath.startsWith("..") ||
+				relativePath.startsWith("/")
+			)
+				return null;
+			return relativePath;
+		};
+
+		for (const segment of splitShellCommandSegments(normalizedCommand)) {
+			const words = tokenizeShellWords(segment);
+			const cdCwd = resolveSimpleCdCommandCwd(effectiveCwd, words);
+			if (cdCwd !== null) {
+				effectiveCwd = cdCwd;
+				continue;
+			}
+
+			const wrappedCommandContext = resolveWrappedCommandExecutionContext(
+				words,
+				effectiveCwd,
+			);
+			for (let index = 0; index < words.length; index += 1) {
+				const word = words[index] ?? "";
+				const operandCwd =
+					wrappedCommandContext && index >= wrappedCommandContext.index
+						? wrappedCommandContext.cwd
+						: effectiveCwd;
+				const operands =
+					word === "source" || word === "."
+						? [firstNonOptionSourceOperand(words, index)].filter(Boolean)
+						: isScriptInterpreterCommandWord(word)
+							? [
+									...firstInterpreterScriptOperands(words, index),
+									...stdinRedirectOperands(words),
+								]
+							: [];
+				for (const operand of operands) {
+					const relativePath = normalizeExecutionTarget(operandCwd, operand);
+					if (relativePath && isPlanningTmpRelativePath(relativePath))
+						return relativePath;
+				}
+			}
+
+			if (wrappedCommandContext !== null) {
+				const directTarget = words[wrappedCommandContext.index] ?? "";
+				const relativePath = normalizeExecutionTarget(
+					wrappedCommandContext.cwd,
+					directTarget,
+				);
+				if (relativePath && isPlanningTmpRelativePath(relativePath))
+					return relativePath;
+			}
+
+			for (const nestedCommand of extractNestedShellCommandStringsForStateScan(
+				segment,
+			)) {
+				const nestedTarget = scanCommand(
+					effectiveCwd,
+					nestedCommand,
+					nextActiveCommands,
+				);
+				if (nestedTarget) return nestedTarget;
+			}
+			for (const nestedCommand of extractNestedCommandSubstitutionStringsForStateScan(
+				segment,
+			)) {
+				const nestedTarget = scanCommand(
+					effectiveCwd,
+					nestedCommand,
+					nextActiveCommands,
+				);
+				if (nestedTarget) return nestedTarget;
+			}
+		}
+
+		return null;
+	};
+
+	return scanCommand(cwd, command, new Set());
 }
 
 function sourcesFileWrittenEarlierInSameCommand(
 	cwd: string,
 	command: string,
 ): boolean {
-	const assignments = extractCommandLiteralAssignments(command);
-	const writtenTargets = new Set<string>();
-	for (const segment of splitShellCommandSegments(
-		stripHeredocBodiesForCommandScan(command),
-	)) {
-		const words = tokenizeShellWords(segment);
-		for (let index = 0; index < words.length; index += 1) {
-			const word = words[index] ?? "";
-			const operand =
-				word === "source" || word === "."
-					? normalizeSameCommandScriptTarget(
-							cwd,
-							firstNonOptionSourceOperand(words, index),
-							assignments,
-						)
-					: isNestedShellCommandWord(word)
+	const scanCommand = (
+		currentCwd: string,
+		currentCommand: string,
+		activeCommands: Set<string>,
+		writtenTargets: Set<string>,
+	): boolean => {
+		const normalizedCommand = stripHeredocBodiesForCommandScan(
+			normalizeShellLineContinuations(currentCommand),
+		);
+		const commandKey = `${currentCwd}\0${normalizedCommand.trim()}`;
+		if (!normalizedCommand.trim() || activeCommands.has(commandKey))
+			return false;
+
+		const assignments = extractCommandLiteralAssignments(normalizedCommand);
+		const nextActiveCommands = new Set(activeCommands);
+		nextActiveCommands.add(commandKey);
+
+		for (const write of extractConductorInterpreterWrites(currentCommand)) {
+			for (const target of write.targets) {
+				const normalizedTarget = normalizeSameCommandScriptTarget(
+					currentCwd,
+					target,
+					assignments,
+				);
+				if (normalizedTarget) writtenTargets.add(normalizedTarget);
+			}
+		}
+		let effectiveCwd = currentCwd;
+
+		for (const segment of splitShellCommandSegments(normalizedCommand)) {
+			const words = tokenizeShellWords(segment);
+			const cdCwd = resolveSimpleCdCommandCwd(effectiveCwd, words);
+			if (cdCwd !== null) {
+				effectiveCwd = cdCwd;
+				continue;
+			}
+
+			const wrappedCommandContext = resolveWrappedCommandExecutionContext(
+				words,
+				effectiveCwd,
+			);
+
+			for (let index = 0; index < words.length; index += 1) {
+				const word = words[index] ?? "";
+				const operandCwd =
+					wrappedCommandContext && index >= wrappedCommandContext.index
+						? wrappedCommandContext.cwd
+						: effectiveCwd;
+				const operand =
+					word === "source" || word === "."
 						? normalizeSameCommandScriptTarget(
-								cwd,
-								firstShellScriptOperand(words, index),
+								operandCwd,
+								firstNonOptionSourceOperand(words, index),
 								assignments,
 							)
-						: null;
-			if (operand && writtenTargets.has(operand)) return true;
+						: isNestedShellCommandWord(word)
+							? normalizeSameCommandScriptTarget(
+									operandCwd,
+									firstShellScriptOperand(words, index),
+									assignments,
+								)
+							: null;
+				if (operand && writtenTargets.has(operand)) return true;
+			}
+
+			const directExecutionTarget =
+				wrappedCommandContext === null
+					? null
+					: normalizeSameCommandScriptTarget(
+							wrappedCommandContext.cwd,
+							words[wrappedCommandContext.index] ?? "",
+							assignments,
+						);
+			if (directExecutionTarget && writtenTargets.has(directExecutionTarget))
+				return true;
+
+			for (const nestedCommand of extractNestedShellCommandStringsForStateScan(
+				segment,
+			)) {
+				if (
+					scanCommand(
+						effectiveCwd,
+						nestedCommand,
+						nextActiveCommands,
+						writtenTargets,
+					)
+				)
+					return true;
+			}
+
+			for (const target of extractDeepInterviewCommandWriteTargets(segment)) {
+				const normalizedTarget = normalizeSameCommandScriptTarget(
+					effectiveCwd,
+					target,
+					assignments,
+				);
+				if (normalizedTarget) writtenTargets.add(normalizedTarget);
+			}
 		}
-		for (const target of extractDeepInterviewCommandWriteTargets(segment)) {
-			const normalizedTarget = normalizeSameCommandScriptTarget(
-				cwd,
-				target,
-				assignments,
-			);
-			if (normalizedTarget) writtenTargets.add(normalizedTarget);
-		}
-	}
-	return false;
+
+		return false;
+	};
+
+	return scanCommand(cwd, command, new Set(), new Set());
 }
 
 function describeImplementationToolBlock(
@@ -4978,12 +5850,13 @@ function describeImplementationToolBlock(
 
 // `omx state` mutations normally route through the gate-enforcing `state_write`
 // backend, so the hook defers to that gate rather than blocking the transport.
-// The backend does NOT gate standalone deep-interview/ralplan *deactivation*,
-// and it normalizes non-terminal tracked-workflow writes to `active=true`, so
-// commands that would implicitly activate a tracked workflow while planning is
-// still protected are blocked here. Broader backend authority belongs to a
-// separate follow-up; this PR keeps the model/tool-originated guard at the
-// native-hook transport boundary.
+// The backend does NOT gate generic standalone deep-interview/ralplan
+// *deactivation*, and it normalizes non-terminal tracked-workflow writes to
+// `active=true`, so commands that would implicitly activate a tracked workflow
+// while planning is still protected are blocked here. Ralplan terminal closeout
+// is the narrow exception: the backend has a dedicated completeRalplanSession
+// path that coherently terminalizes root and session state when the payload is a
+// complete consensus-approved terminal state.
 function readStateWriteInputPayload(
 	cwd: string,
 	command: string,
@@ -5141,6 +6014,20 @@ function tokenizeShellWords(segment: string): string[] {
 			}
 			continue;
 		}
+		if (!quote && (char === ";" || char === "&")) {
+			if (current) {
+				words.push(current);
+				current = "";
+			}
+			const next = segment[index + 1] ?? "";
+			if (char === "&" && next === "&") {
+				words.push("&&");
+				index += 1;
+			} else {
+				words.push(char);
+			}
+			continue;
+		}
 		if (!quote && /\s/.test(char)) {
 			if (current) {
 				words.push(current);
@@ -5247,7 +6134,7 @@ function extractEnvSplitStringCommand(
 			const operand = words[index + 1] ?? "";
 			if (!operand) return "";
 			const tail = words.slice(index + 2).join(" ");
-			return tail ? `${operand} ${tail}` : operand;
+			return tail ? `env ${operand} ${tail}` : `env ${operand}`;
 		}
 		if (
 			token.startsWith("--split-string=") ||
@@ -5258,7 +6145,7 @@ function extractEnvSplitStringCommand(
 				: token.slice(2);
 			if (!operand) return "";
 			const tail = words.slice(index + 1).join(" ");
-			return tail ? `${operand} ${tail}` : operand;
+			return tail ? `env ${operand} ${tail}` : `env ${operand}`;
 		}
 		if (isShellAssignmentWord(token)) continue;
 		if (
@@ -6118,6 +7005,10 @@ function findCaseArmCommandIndex(
 		return index + 1;
 	}
 
+	if (words[index + 1] === ")") {
+		return index + 2;
+	}
+
 	return null;
 }
 
@@ -6158,6 +7049,63 @@ function skipShellCommandPositionPrefixWords(
 		break;
 	}
 	return commandWordIndex;
+}
+
+function findWrappedCommandPositionIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	let commandWordIndex = skipShellCommandPositionPrefixWords(words, startIndex);
+	for (let unwrapCount = 0; unwrapCount < 8; unwrapCount += 1) {
+		const commandWord = words[commandWordIndex] ?? "";
+		if (!commandWord) return null;
+
+		const commandWordBase = shellWordBaseName(commandWord);
+		const operandIndex =
+			commandWordBase === "env"
+				? findEnvDispatchOperandIndex(words, commandWordIndex + 1)
+				: commandWordBase === "command" || commandWordBase === "builtin"
+					? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+					: commandWordBase === "exec"
+						? findExecDispatchOperandIndex(words, commandWordIndex + 1)
+						: commandWordBase === "time"
+							? findTimeDispatchOperandIndex(words, commandWordIndex + 1)
+							: commandWordBase === "timeout"
+								? findTimeoutDispatchOperandIndex(words, commandWordIndex + 1)
+								: commandWordBase === "nohup" || commandWordBase === "setsid"
+									? findCommandDispatchOperandIndex(words, commandWordIndex + 1)
+									: commandWordBase === "coproc"
+										? findCoprocDispatchOperandIndex(
+												words,
+												commandWordIndex + 1,
+											)
+										: commandWordBase === "xargs"
+											? findXargsDispatchOperandIndex(
+													words,
+													commandWordIndex + 1,
+												)
+											: commandWordBase === "nice"
+												? findNiceDispatchOperandIndex(
+														words,
+														commandWordIndex + 1,
+													)
+												: commandWordBase === "stdbuf"
+													? findStdbufDispatchOperandIndex(
+															words,
+															commandWordIndex + 1,
+														)
+													: null;
+		if (operandIndex === null) return commandWordIndex;
+
+		const nextCommandWordIndex = skipShellCommandPositionPrefixWords(
+			words,
+			operandIndex,
+		);
+		if (nextCommandWordIndex === commandWordIndex) return commandWordIndex;
+		commandWordIndex = nextCommandWordIndex;
+	}
+
+	return null;
 }
 
 function readOmxStateCommandFromSegmentWords(
@@ -6510,7 +7458,16 @@ function extractNestedShellCommandStringsForStateScan(
 			);
 			if (commandStringIndex !== null) {
 				const nestedCommand = words[commandStringIndex];
-				if (nestedCommand) nested.push(nestedCommand);
+				if (nestedCommand) {
+					nested.push(nestedCommand);
+					const positionalArgs = words.slice(commandStringIndex + 1);
+					const expandedNestedCommand = expandShellPositionalParameters(
+						nestedCommand,
+						positionalArgs,
+					);
+					if (expandedNestedCommand !== nestedCommand)
+						nested.push(expandedNestedCommand);
+				}
 			}
 		}
 		if (word === "eval") {
@@ -6531,6 +7488,84 @@ function extractNestedShellCommandStringsForStateScan(
 			);
 			if (packageManagerCommand) {
 				nested.push(packageManagerCommand);
+			}
+		}
+	}
+	return nested;
+}
+
+function extractNestedCommandSubstitutionStringsForStateScan(
+	command: string,
+): string[] {
+	const nested: string[] = [];
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (quote !== "'" && char === "$" && command[index + 1] === "(") {
+			const substitutionEnd = findCommandSubstitutionEnd(command, index + 2);
+			const substitutionBodyEnd =
+				substitutionEnd >= 0 ? substitutionEnd : command.length;
+			const substitutionBody = command.slice(index + 2, substitutionBodyEnd);
+			if (substitutionBody) nested.push(substitutionBody);
+			index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+			continue;
+		}
+		if (quote !== "'" && char === "`") {
+			const substitutionEnd = findBacktickCommandSubstitutionEnd(
+				command,
+				index + 1,
+			);
+			const substitutionBodyEnd =
+				substitutionEnd >= 0 ? substitutionEnd : command.length;
+			const substitutionBody = command.slice(index + 1, substitutionBodyEnd);
+			if (substitutionBody) nested.push(substitutionBody);
+			index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+		}
+	}
+	return nested;
+}
+
+function extractNestedProcessSubstitutionStringsForStateScan(
+	command: string,
+): string[] {
+	const nested: string[] = [];
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index];
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (
+			quote !== "'" &&
+			(char === "<" || char === ">") &&
+			command[index + 1] === "("
+		) {
+			const substitutionEnd = findProcessSubstitutionEnd(command, index + 2);
+			const substitutionBodyEnd =
+				substitutionEnd >= 0 ? substitutionEnd : command.length;
+			const substitutionBody = command.slice(index + 2, substitutionBodyEnd);
+			if (substitutionBody) nested.push(substitutionBody);
+			index = substitutionEnd >= 0 ? substitutionEnd : command.length;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
 			}
 		}
 	}
@@ -6688,6 +7723,100 @@ function isDynamicNestedCommandString(command: string): boolean {
 	);
 }
 
+function shellQuoteForStateScan(value: string): string {
+	if (value === "") return "''";
+	return `'${value.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function expandShellPositionalParameters(
+	command: string,
+	positionalArgs: string[],
+): string {
+	if (!command.includes("$") || positionalArgs.length === 0) return command;
+
+	let expanded = "";
+	let replaced = false;
+
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "\\" && index + 1 < command.length) {
+			expanded += char;
+			index += 1;
+			expanded += command[index] ?? "";
+			continue;
+		}
+		if (char !== "$") {
+			expanded += char;
+			continue;
+		}
+
+		const next = command[index + 1] ?? "";
+		if (next === "{") {
+			let endIndex = index + 2;
+			let digits = "";
+			while (endIndex < command.length) {
+				const bodyChar = command[endIndex] ?? "";
+				if (bodyChar === "}") break;
+				digits += bodyChar;
+				endIndex += 1;
+			}
+			if (command[endIndex] === "}" && /^\d+$/.test(digits)) {
+				const positionalIndex = Number.parseInt(digits, 10);
+				const replacement = positionalArgs[positionalIndex];
+				if (replacement !== undefined) {
+					expanded += shellQuoteForStateScan(replacement);
+					replaced = true;
+					index = endIndex;
+					continue;
+				}
+			}
+			if (command[endIndex] === "}" && (digits === "@" || digits === "*")) {
+				const expansionArgs = positionalArgs.slice(1);
+				const replacement = expansionArgs
+					.map((arg) => shellQuoteForStateScan(arg))
+					.join(" ");
+				expanded += replacement;
+				replaced = true;
+				index = endIndex;
+				continue;
+			}
+		} else if (next === "@" || next === "*") {
+			const replacement = positionalArgs
+				.slice(1)
+				.map((arg) => shellQuoteForStateScan(arg))
+				.join(" ");
+			if (replacement) {
+				expanded += replacement;
+				replaced = true;
+				index += 1;
+				continue;
+			}
+		} else if (/[0-9]/.test(next)) {
+			let endIndex = index + 1;
+			let digits = "";
+			while (
+				endIndex < command.length &&
+				/[0-9]/.test(command[endIndex] ?? "")
+			) {
+				digits += command[endIndex] ?? "";
+				endIndex += 1;
+			}
+			const positionalIndex = Number.parseInt(digits, 10);
+			const replacement = positionalArgs[positionalIndex];
+			if (replacement !== undefined) {
+				expanded += shellQuoteForStateScan(replacement);
+				replaced = true;
+				index = endIndex - 1;
+				continue;
+			}
+		}
+
+		expanded += char;
+	}
+
+	return replaced ? expanded : command;
+}
+
 function splitShellCommandSegments(command: string): string[] {
 	const segments: string[] = [];
 	let current = "";
@@ -6718,10 +7847,10 @@ function splitShellCommandSegments(command: string): string[] {
 			current = "";
 			continue;
 		}
-		if (char === "&" && command[index + 1] === "&") {
+		if (char === "&" && command[index - 1] !== "|") {
 			if (current.trim()) segments.push(current);
 			current = "";
-			index += 1;
+			if (command[index + 1] === "&") index += 1;
 			continue;
 		}
 		if (char === "|" && command[index + 1] === "|") {
@@ -6877,25 +8006,102 @@ function containsUnquotedProcessSubstitution(command: string): boolean {
 	return false;
 }
 
+interface ShellHeredocOpener {
+	delimiter: string;
+	quoted: boolean;
+}
+
+function parseShellHeredocDelimiter(
+	line: string,
+	startIndex: number,
+): ShellHeredocOpener | null {
+	let index = startIndex;
+	while (/\s/.test(line[index] ?? "")) index += 1;
+
+	let delimiter = "";
+	let quoted = false;
+	let quote: "'" | '"' | null = null;
+	for (; index < line.length; index += 1) {
+		const char = line[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			quoted = true;
+			index += 1;
+			delimiter += line[index] ?? "";
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+				quoted = true;
+			} else {
+				delimiter += char;
+			}
+			continue;
+		}
+		if (
+			!quote &&
+			(/\s/.test(char) ||
+				char === "|" ||
+				char === ";" ||
+				char === "&" ||
+				char === "<" ||
+				char === ">")
+		)
+			break;
+		delimiter += char;
+	}
+
+	return delimiter ? { delimiter, quoted } : null;
+}
+
+function extractShellHeredocOpeners(line: string): ShellHeredocOpener[] {
+	const openers: ShellHeredocOpener[] = [];
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < line.length - 1; index += 1) {
+		const char = line[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote) continue;
+		if (char !== "<" || line[index + 1] !== "<" || line[index + 2] === "<")
+			continue;
+		const delimiterStart = line[index + 2] === "-" ? index + 3 : index + 2;
+		const opener = parseShellHeredocDelimiter(line, delimiterStart);
+		if (opener) openers.push(opener);
+		index = delimiterStart;
+	}
+	return openers;
+}
+
 function stripHeredocBodiesForCommandScan(command: string): string {
 	const lines = command.split("\n");
 	const kept: string[] = [];
 	for (let index = 0; index < lines.length; index += 1) {
 		const line = lines[index] ?? "";
 		kept.push(line);
-		const heredocMatch = line.match(
-			/<<-?\s*(?:"([^"]+)"|'([^']+)'|([^\s"'<>|;&]+))/,
-		);
-		const delimiter = safeString(
-			heredocMatch?.[1] ?? heredocMatch?.[2] ?? heredocMatch?.[3],
-		).trim();
-		if (!delimiter) continue;
-		index += 1;
-		while (index < lines.length && (lines[index] ?? "").trim() !== delimiter) {
-			kept.push("");
+		const openers = extractShellHeredocOpeners(line);
+		for (const { delimiter } of openers) {
 			index += 1;
+			while (
+				index < lines.length &&
+				(lines[index] ?? "").trim() !== delimiter
+			) {
+				kept.push("");
+				index += 1;
+			}
+			if (index < lines.length) kept.push(lines[index] ?? "");
 		}
-		if (index < lines.length) kept.push(lines[index] ?? "");
 	}
 	return kept.join("\n");
 }
@@ -6904,22 +8110,45 @@ function hasUnsafeUnquotedHeredocExpansion(command: string): boolean {
 	const lines = normalizeShellLineContinuations(command).split("\n");
 	for (let index = 0; index < lines.length; index += 1) {
 		const line = lines[index] ?? "";
-		const heredocMatch = line.match(
-			/<<-?\s*(?:"([^"]+)"|'([^']+)'|([^\s"'<>|;&]+))/,
-		);
-		if (!heredocMatch) continue;
-		const quoted = Boolean(heredocMatch[1] || heredocMatch[2]);
-		const delimiter = safeString(
-			heredocMatch[1] ?? heredocMatch[2] ?? heredocMatch[3],
-		).trim();
-		if (!delimiter || quoted) continue;
-		index += 1;
-		const bodyLines: string[] = [];
-		while (index < lines.length && (lines[index] ?? "").trim() !== delimiter) {
-			bodyLines.push(lines[index] ?? "");
+		for (const { delimiter, quoted } of extractShellHeredocOpeners(line)) {
 			index += 1;
+			const bodyLines: string[] = [];
+			while (
+				index < lines.length &&
+				(lines[index] ?? "").trim() !== delimiter
+			) {
+				bodyLines.push(lines[index] ?? "");
+				index += 1;
+			}
+			if (!quoted && isDynamicNestedCommandString(bodyLines.join("\n")))
+				return true;
 		}
-		if (isDynamicNestedCommandString(bodyLines.join("\n"))) return true;
+	}
+	return false;
+}
+
+function hasUnquotedShellSubstitution(command: string): boolean {
+	command = normalizeShellLineContinuations(command);
+	let quote: "'" | '"' | null = null;
+	for (let index = 0; index < command.length; index += 1) {
+		const char = command[index] ?? "";
+		if (char === "\\" && quote !== "'") {
+			index += 1;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			if (quote === char) {
+				quote = null;
+			} else if (!quote) {
+				quote = char;
+			}
+			continue;
+		}
+		if (quote === "'") continue;
+		if (char === "$" && command[index + 1] === "(") return true;
+		if (char === "`") return true;
+		if ((char === "<" || char === ">") && command[index + 1] === "(")
+			return true;
 	}
 	return false;
 }
@@ -6928,10 +8157,10 @@ function normalizeStateWriteClassificationPayload(
 	payload: Record<string, unknown>,
 ): Record<string, unknown> {
 	const targetMode = safeString(payload.mode).trim();
+	const targetSessionId = safeString(payload.session_id).trim();
 	const {
 		mode: _mode,
 		workingDirectory: _workingDirectory,
-		session_id: _sessionId,
 		state,
 		...fields
 	} = payload;
@@ -6939,6 +8168,7 @@ function normalizeStateWriteClassificationPayload(
 		...fields,
 		...safeObject(state),
 		...(targetMode ? { mode: targetMode } : {}),
+		...(targetSessionId ? { session_id: targetSessionId } : {}),
 	};
 	if (
 		normalized.current_phase === undefined &&
@@ -6976,20 +8206,21 @@ function isPlanningPhaseDeactivationPayload(
 	if (!mode) return false;
 	if (mode !== "deep-interview" && mode !== "ralplan") {
 		if (!isTrackedWorkflowMode(mode)) return false;
-		if (payload.active === true) return true;
 		const currentPhase = safeString(
 			payload.current_phase ?? payload.currentPhase,
 		)
 			.trim()
 			.toLowerCase();
+		const normalizedAutopilotPhase = normalizeAutopilotPhase(currentPhase);
 		if (
 			mode === "autopilot" &&
-			(currentPhase === "deep-interview" ||
-				currentPhase === "ralplan" ||
-				currentPhase === "ultragoal")
+			(normalizedAutopilotPhase === "deep-interview" ||
+				normalizedAutopilotPhase === "ralplan" ||
+				normalizedAutopilotPhase === "ultragoal")
 		) {
-			return false;
+			return payload.active === false;
 		}
+		if (payload.active === true) return true;
 		return (
 			inferTerminalLifecycleOutcome(payload, {
 				includeQuestionEnforcement: false,
@@ -7005,7 +8236,256 @@ function isPlanningPhaseDeactivationPayload(
 	);
 }
 
+function hasCompleteDeepInterviewGateMetadata(
+	state: Record<string, unknown>,
+): boolean {
+	const nestedState = safeObject(state.state);
+	const gate =
+		safeObject(state.deep_interview_gate) ??
+		safeObject(nestedState?.deep_interview_gate);
+	if (!gate) return false;
+	const status = safeString(gate.status)
+		.trim()
+		.toLowerCase()
+		.replace(/_/g, "-");
+	if (status === "complete" || gate.complete === true) {
+		return [
+			"rationale",
+			"completion_rationale",
+			"handoff_summary",
+			"summary",
+			"reason",
+		].some((key) => safeString(gate[key]).trim().length > 0);
+	}
+	if (status !== "skipped") return false;
+	const reason =
+		safeString(gate.reason).trim() ||
+		safeString(gate.skip_reason).trim() ||
+		safeString(gate.rationale).trim();
+	const timestamp =
+		safeString(gate.skipped_at).trim() ||
+		safeString(gate.timestamp).trim() ||
+		safeString(gate.updated_at).trim();
+	const source = safeString(gate.source).trim();
+	return (
+		(gate.skip_authorized_by_user === true ||
+			gate.authorized_by_user === true) &&
+		reason.length > 0 &&
+		timestamp.length > 0 &&
+		source.length > 0
+	);
+}
+
+function isDeepInterviewRalplanHandoffStatePayload(
+	payload: Record<string, unknown>,
+): boolean {
+	const mode = safeString(payload.mode).trim().toLowerCase();
+	if (mode !== "autopilot") return false;
+	const phase = normalizeAutopilotPhase(
+		safeString(payload.current_phase ?? payload.currentPhase)
+			.trim()
+			.toLowerCase(),
+	);
+	if (phase !== "ralplan" || payload.active === false) return false;
+	return hasCompleteDeepInterviewGateMetadata(payload);
+}
+
+function hasOnlyAllowedDeepInterviewRalplanHandoffMutations(
+	cwd: string,
+	command: string,
+): boolean {
+	for (const mutation of extractConductorBashMutations(command)) {
+		if (mutation.targets.length === 0) return false;
+		if (
+			mutation.targets.some(
+				(target) => !isAllowedDeepInterviewArtifactPath(cwd, target),
+			)
+		)
+			return false;
+	}
+	for (const write of extractConductorInterpreterWrites(command)) {
+		if (write.unresolved || write.targets.length === 0) return false;
+		if (
+			write.targets.some(
+				(target) => !isAllowedDeepInterviewArtifactPath(cwd, target),
+			)
+		)
+			return false;
+	}
+	return true;
+}
+
+function isDurableDeepInterviewHandoffEvidencePath(
+	cwd: string,
+	rawPath: string,
+): boolean {
+	const relativePath = normalizePlanningArtifactRelativePath(cwd, rawPath);
+	if (!relativePath) return false;
+	return (
+		relativePath === ".omx/context" ||
+		relativePath.startsWith(".omx/context/") ||
+		relativePath === ".omx/interviews" ||
+		relativePath.startsWith(".omx/interviews/") ||
+		relativePath === ".omx/specs" ||
+		relativePath.startsWith(".omx/specs/")
+	);
+}
+
+function hasExistingDurableDeepInterviewHandoffEvidence(cwd: string): boolean {
+	const roots = [".omx/context", ".omx/interviews", ".omx/specs"] as const;
+	const maxEntries = 2_000;
+	let visited = 0;
+
+	for (const root of roots) {
+		const stack = [resolve(cwd, root)];
+		while (stack.length > 0 && visited < maxEntries) {
+			const current = stack.pop();
+			if (!current) continue;
+			visited += 1;
+			try {
+				const stat = statSync(current);
+				if (stat.isFile()) return true;
+				if (!stat.isDirectory()) continue;
+				for (const entry of readdirSync(current)) {
+					stack.push(join(current, entry));
+				}
+			} catch {
+				// Missing or unreadable roots are not completion evidence.
+			}
+		}
+	}
+
+	return false;
+}
+
+function isAllowedDeepInterviewRalplanHandoffCommand(
+	cwd: string,
+	command: string,
+): boolean {
+	const canonicalCommand = canonicalizeOmxStateTransportCommand(command);
+	if (hasUnsafeUnquotedHeredocExpansion(canonicalCommand)) return false;
+	if (hasUnquotedShellSubstitution(canonicalCommand)) return false;
+	if (findUnquotedOmxStateCommandIndexes(canonicalCommand, "clear").length > 0)
+		return false;
+	if (hasDynamicNestedShellExecution(canonicalCommand)) return false;
+	if (commandHasUntargetedPlanningForbiddenIntent(canonicalCommand))
+		return false;
+	if (sourcesFileWrittenEarlierInSameCommand(cwd, canonicalCommand))
+		return false;
+	const stateWriteOperations = collectOmxStateCommandOperations(
+		canonicalCommand,
+		"write",
+	);
+	if (stateWriteOperations.length !== 1) return false;
+	const stateWriteOperation = stateWriteOperations[0];
+	if (!stateWriteOperation || stateWriteOperation.nested) return false;
+	const payload = readStateWriteInputPayload(cwd, canonicalCommand, command);
+	if (!payload || !isDeepInterviewRalplanHandoffStatePayload(payload))
+		return false;
+	const targets = extractDeepInterviewCommandWriteTargets(command);
+	if (targets.length === 0) {
+		return (
+			!hasPriorExecutableCommand(stateWriteOperation.prefix) &&
+			hasExistingDurableDeepInterviewHandoffEvidence(cwd)
+		);
+	}
+	if (
+		!targets.some((target) =>
+			isDurableDeepInterviewHandoffEvidencePath(cwd, target),
+		)
+	)
+		return false;
+	if (!hasOnlyAllowedDeepInterviewRalplanHandoffMutations(cwd, command))
+		return false;
+	return targets.every((target) =>
+		isAllowedDeepInterviewArtifactPath(cwd, target),
+	);
+}
+
+function hasDeepInterviewRalplanHandoffStateMutation(
+	cwd: string,
+	command: string,
+): boolean {
+	const canonicalCommand = canonicalizeOmxStateTransportCommand(command);
+	const stateWriteOperations = collectOmxStateCommandOperations(
+		canonicalCommand,
+		"write",
+	);
+	if (stateWriteOperations.length === 0) return false;
+	const payload = readStateWriteInputPayload(cwd, canonicalCommand, command);
+	return payload ? isDeepInterviewRalplanHandoffStatePayload(payload) : false;
+}
+
+function isCompleteRalplanTerminalWritePayload(
+	payload: Record<string, unknown>,
+	activeState: Record<string, unknown>,
+	sessionId: string,
+): boolean {
+	if (!sessionId) return false;
+	const mode = safeString(payload.mode).trim().toLowerCase();
+	if (mode !== "ralplan") return false;
+	const phase = safeString(payload.current_phase ?? payload.currentPhase)
+		.trim()
+		.toLowerCase();
+	if (payload.active !== false || phase !== "complete") return false;
+
+	const payloadSessionId = safeString(payload.session_id).trim();
+	const activeSessionId = safeString(
+		activeState.session_id ??
+			activeState.owner_omx_session_id ??
+			activeState.codex_session_id ??
+			activeState.owner_codex_session_id,
+	).trim();
+	if (payloadSessionId && sessionId && payloadSessionId !== sessionId)
+		return false;
+	if (
+		payloadSessionId &&
+		activeSessionId &&
+		payloadSessionId !== activeSessionId
+	)
+		return false;
+	return true;
+}
+
+function isAllowedRalplanTerminalStateWriteCommand(
+	cwd: string,
+	command: string,
+	activeState: Record<string, unknown>,
+	sessionId: string,
+): boolean {
+	const canonicalCommand = canonicalizeOmxStateTransportCommand(command);
+	if (hasUnsafeUnquotedHeredocExpansion(canonicalCommand)) return false;
+	if (hasUnquotedShellSubstitution(canonicalCommand)) return false;
+	if (splitStateScanSegments(canonicalCommand).length !== 1) return false;
+	if (sourcesFileWrittenEarlierInSameCommand(cwd, canonicalCommand))
+		return false;
+	if (findUnquotedOmxStateCommandIndexes(canonicalCommand, "clear").length > 0)
+		return false;
+	if (hasDynamicNestedShellExecution(canonicalCommand)) return false;
+	if (commandHasDeepInterviewWriteIntent(canonicalCommand)) return false;
+
+	const operations = collectOmxStateCommandOperations(
+		canonicalCommand,
+		"write",
+	);
+	if (operations.length !== 1) return false;
+	const operation = operations[0];
+	if (
+		!operation ||
+		operation.nested ||
+		hasPriorExecutableCommand(operation.prefix)
+	)
+		return false;
+
+	const payload = readStateWriteInputPayload(cwd, canonicalCommand, command);
+	return payload
+		? isCompleteRalplanTerminalWritePayload(payload, activeState, sessionId)
+		: false;
+}
+
 function commandEndsPlanningPhase(cwd: string, command: string): boolean {
+	if (findUnquotedOmxStateCommandIndexes(command, "clear").length > 0)
+		return true;
 	const canonicalCommand = canonicalizeOmxStateTransportCommand(command);
 	if (hasUnsafeUnquotedHeredocExpansion(canonicalCommand)) return true;
 	if (sourcesFileWrittenEarlierInSameCommand(cwd, canonicalCommand))
@@ -7027,9 +8507,15 @@ function isAllowedDeepInterviewBashWrite(
 	cwd: string,
 	command: string,
 ): boolean {
+	if (isAllowedDeepInterviewRalplanHandoffCommand(cwd, command)) return true;
+	if (hasDeepInterviewRalplanHandoffStateMutation(cwd, command)) return false;
 	if (commandEndsPlanningPhase(cwd, command)) return false;
+	if (commandHasUntargetedPlanningForbiddenIntent(command)) return false;
+	if (firstPlanningTmpScriptExecutionTarget(cwd, command)) return false;
 	if (!commandHasDeepInterviewWriteIntent(command)) return true;
+	if (hasUnresolvedConductorInterpreterWrite(command)) return false;
 	const targets = extractDeepInterviewCommandWriteTargets(command);
+
 	if (
 		targets.some((target) => !isAllowedDeepInterviewArtifactPath(cwd, target))
 	)
@@ -7189,7 +8675,12 @@ async function readActiveRalplanStateForPreToolUse(
 	return hasActiveAutopilotSkill ? autopilotState : null;
 }
 
-function isAllowedRalplanBashWrite(cwd: string, command: string): boolean {
+function isAllowedRalplanBashWrite(
+	cwd: string,
+	command: string,
+	activeState: Record<string, unknown>,
+	sessionId: string,
+): boolean {
 	const beadsCommand = classifyRalplanBeadsMetadataCommand(cwd, command);
 	const targets = extractDeepInterviewCommandWriteTargets(command);
 	const hasAllowedTargets =
@@ -7199,10 +8690,21 @@ function isAllowedRalplanBashWrite(cwd: string, command: string): boolean {
 	if (beadsCommand.present) {
 		return beadsCommand.allowed && (targets.length === 0 || hasAllowedTargets);
 	}
-	if (commandEndsPlanningPhase(cwd, command)) return false;
+	if (commandEndsPlanningPhase(cwd, command)) {
+		return isAllowedRalplanTerminalStateWriteCommand(
+			cwd,
+			command,
+			activeState,
+			sessionId,
+		);
+	}
+	if (commandHasUntargetedPlanningForbiddenIntent(command)) return false;
+	if (firstPlanningTmpScriptExecutionTarget(cwd, command)) return false;
 	if (!commandHasDeepInterviewWriteIntent(command)) return true;
+	if (hasUnresolvedConductorInterpreterWrite(command)) return false;
 	if (targets.some((target) => !isAllowedRalplanArtifactPath(cwd, target)))
 		return false;
+
 	return hasAllowedTargets;
 }
 
@@ -7220,6 +8722,17 @@ function buildRalplanBashBlockedDetail(cwd: string, command: string): string {
 			: "Bash redirect write";
 		return `${operationClass} target ${blockedTarget} is not under allowed planning artifact paths or metadata paths (${RALPLAN_ALLOWED_WRITE_PREFIXES.join(", ")})`;
 	}
+	const executedTmpTarget = firstPlanningTmpScriptExecutionTarget(cwd, command);
+	if (executedTmpTarget) {
+		return `execution target ${executedTmpTarget} is under .omx/tmp; planning tmp artifacts must not be used as generated-script transport`;
+	}
+
+	if (commandHasPackageInstallIntent(command)) {
+		return "package installation commands are implementation actions and cannot be combined with allowed planning artifact writes";
+	}
+	if (commandHasDestructiveGitSubcommand(command)) {
+		return "destructive git commands are implementation actions and cannot be combined with allowed planning artifact writes";
+	}
 	const beadsCommand = classifyRalplanBeadsMetadataCommand(cwd, command);
 	if (beadsCommand.present && !beadsCommand.allowed) {
 		return (
@@ -7233,6 +8746,36 @@ function buildRalplanBashBlockedDetail(cwd: string, command: string): string {
 	return "Bash write intent did not identify an allowed planning artifact path or metadata path";
 }
 
+function buildDeepInterviewBashBlockedDetail(
+	cwd: string,
+	command: string,
+): string {
+	const targets = extractDeepInterviewCommandWriteTargets(command);
+	const blockedTarget = targets.find(
+		(target) => !isAllowedDeepInterviewArtifactPath(cwd, target),
+	);
+	if (blockedTarget && isUnresolvedVariableTarget(blockedTarget)) {
+		return `unresolved Bash write target ${blockedTarget} is not under allowed deep-interview artifact paths or metadata paths (${DEEP_INTERVIEW_ALLOWED_WRITE_PREFIXES.join(", ")})`;
+	}
+	if (blockedTarget) {
+		const operationClass = /\btee\s+(?:-a\s+)?/.test(command)
+			? "Bash tee write"
+			: "Bash write";
+		return `${operationClass} target ${blockedTarget} is not under allowed deep-interview artifact paths or metadata paths (${DEEP_INTERVIEW_ALLOWED_WRITE_PREFIXES.join(", ")})`;
+	}
+	const executedTmpTarget = firstPlanningTmpScriptExecutionTarget(cwd, command);
+	if (executedTmpTarget) {
+		return `execution target ${executedTmpTarget} is under .omx/tmp; deep-interview tmp artifacts must not be used as generated-script transport`;
+	}
+	if (commandHasPackageInstallIntent(command)) {
+		return "package installation commands are implementation actions and cannot be combined with allowed deep-interview artifact writes";
+	}
+	if (commandHasDestructiveGitSubcommand(command)) {
+		return "destructive git commands are implementation actions and cannot be combined with allowed deep-interview artifact writes";
+	}
+	return "Bash write intent did not identify an allowed deep-interview artifact path or metadata path";
+}
+
 async function buildRalplanPreToolUseBoundaryOutput(
 	payload: CodexHookPayload,
 	cwd: string,
@@ -7242,6 +8785,14 @@ async function buildRalplanPreToolUseBoundaryOutput(
 	const sessionId = safeString(
 		resolvedSessionId ?? readPayloadSessionId(payload),
 	).trim();
+	if (
+		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+			payload,
+			cwd,
+			sessionId,
+		)
+	)
+		return null;
 	const threadId = readPayloadThreadId(payload);
 	const activeState = await readActiveRalplanStateForPreToolUse(
 		cwd,
@@ -7259,7 +8810,7 @@ async function buildRalplanPreToolUseBoundaryOutput(
 		"implementation/write tools are blocked until an explicit execution handoff workflow is activated";
 
 	if (toolName === "Bash") {
-		blocked = !isAllowedRalplanBashWrite(cwd, command);
+		blocked = !isAllowedRalplanBashWrite(cwd, command, activeState, sessionId);
 		if (blocked) {
 			blockedDetail = buildRalplanBashBlockedDetail(cwd, command);
 		}
@@ -7322,7 +8873,7 @@ async function buildRalplanPreToolUseBoundaryOutput(
 			hookEventName: "PreToolUse",
 			additionalContext:
 				`${planningModeDescription}. ` +
-				"Write only planning artifacts under `.omx/context/`, `.omx/plans/`, `.omx/specs/`, required `.omx/state/` files, or tracker metadata under `.beads/`. " +
+				"Write only planning artifacts under `.omx/context/`, `.omx/plans/`, `.omx/specs/`, `.omx/tmp/`, required `.omx/state/` files, or tracker metadata under `.beads/`. " +
 				"Do not edit implementation files or run implementation-focused writes from planning phases. " +
 				`To execute, first process an explicit handoff such as ${formatExecutionHandoffList(cwd)}, which must emit terminal planning state before implementation begins.`,
 		},
@@ -7338,6 +8889,14 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 	const sessionId = safeString(
 		resolvedSessionId ?? readPayloadSessionId(payload),
 	).trim();
+	if (
+		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+			payload,
+			cwd,
+			sessionId,
+		)
+	)
+		return null;
 	const threadId = readPayloadThreadId(payload);
 	const activeState = await readActiveDeepInterviewStateForPreToolUse(
 		cwd,
@@ -7351,9 +8910,14 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 	const command = readPreToolUseCommand(payload);
 	const pathCandidates = readPreToolUsePathCandidates(payload);
 	let blocked = false;
+	let blockedDetail =
+		"implementation/write tools are blocked until an explicit handoff workflow is activated";
 
 	if (toolName === "Bash") {
 		blocked = !isAllowedDeepInterviewBashWrite(cwd, command);
+		if (blocked) {
+			blockedDetail = buildDeepInterviewBashBlockedDetail(cwd, command);
+		}
 	} else if (
 		toolName === "mcp__omx_state__state_clear" ||
 		(toolName === "mcp__omx_state__state_write" &&
@@ -7364,6 +8928,7 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 			))
 	) {
 		blocked = true;
+		blockedDetail = `${toolName} would deactivate protected deep-interview planning state`;
 	} else if (DEEP_INTERVIEW_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
 		const candidates = collectImplementationToolPathCandidates(
 			payload,
@@ -7375,6 +8940,16 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 			!candidates.every((candidate) =>
 				isAllowedDeepInterviewArtifactPath(cwd, candidate),
 			);
+		if (blocked) {
+			const blockedPath = candidates.find(
+				(candidate) => !isAllowedDeepInterviewArtifactPath(cwd, candidate),
+			);
+			blockedDetail = describeImplementationToolBlock(
+				toolName,
+				blockedPath,
+				candidates.length,
+			);
+		}
 	}
 
 	if (!blocked) return null;
@@ -7385,10 +8960,10 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 	);
 	return {
 		decision: "block",
-		reason: `Deep-interview is active (phase: ${phase}); implementation/write tools are blocked until an explicit handoff workflow is activated.`,
+		reason: `Deep-interview is active (phase: ${phase}); implementation/write tools are blocked until an explicit handoff workflow is activated; ${blockedDetail}.`,
 		hookSpecificOutput: {
 			hookEventName: "PreToolUse",
-			additionalContext: `Deep-interview is requirements/spec mode. Treat detailed user answers as interview/spec material, not implicit implementation authorization. You may write only deep-interview artifacts under \`.omx/context/\`, \`.omx/interviews/\`, \`.omx/specs/\`, or required \`.omx/state/\` files. To implement, first ask for or process an explicit transition such as \`$ralplan\`, \`$autopilot\`, ${formatExecutionHandoffList(cwd)}.`,
+			additionalContext: `Deep-interview is requirements/spec mode. Treat detailed user answers as interview/spec material, not implicit implementation authorization. You may write only deep-interview artifacts under \`.omx/context/\`, \`.omx/interviews/\`, \`.omx/specs/\`, \`.omx/tmp/\`, or required \`.omx/state/\` files. To implement, first ask for or process an explicit transition such as \`$ralplan\`, \`$autopilot\`, ${formatExecutionHandoffList(cwd)}.`,
 		},
 	};
 }
@@ -7511,7 +9086,10 @@ async function buildPlanningRootPointerConflictPreToolUseOutput(
 	const toolName = safeString(payload.tool_name).trim();
 	let blocked = false;
 	if (toolName === "Bash") {
-		blocked = !isAllowedRalplanBashWrite(cwd, readPreToolUseCommand(payload));
+		const command = readPreToolUseCommand(payload);
+		blocked =
+			commandEndsPlanningPhase(cwd, command) ||
+			!isAllowedRalplanBashWrite(cwd, command, ralplanState, rootSessionId);
 	} else if (
 		toolName === "mcp__omx_state__state_clear" ||
 		(toolName === "mcp__omx_state__state_write" &&
@@ -7538,6 +9116,1416 @@ async function buildPlanningRootPointerConflictPreToolUseOutput(
 	return blocked ? buildRalplanRootPointerConflictBlock(ralplanState) : null;
 }
 
+interface ActiveConductorState {
+	mode: string;
+	phase: string;
+}
+
+async function hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+	payload: CodexHookPayload,
+	cwd: string,
+	sessionId: string,
+): Promise<boolean> {
+	if (hasTeamWorkerEnvironment()) return true;
+	const source = safeObject(payload.source);
+	const subagent = safeObject(source.subagent);
+	const threadSpawn = safeObject(subagent.thread_spawn);
+	const parentThreadId = safeString(
+		threadSpawn.parent_thread_id ??
+			threadSpawn.parentThreadId ??
+			threadSpawn.leader_thread_id ??
+			threadSpawn.leaderThreadId,
+	).trim();
+	if (!parentThreadId) return false;
+	if (!isTypedAgentRolePayload(payload)) return false;
+	const trackingState = await readSubagentTrackingState(cwd).catch(() => null);
+	const session = trackingState?.sessions?.[sessionId];
+	if (!session) return false;
+	return (
+		session.leader_thread_id === parentThreadId ||
+		parentThreadId in session.threads
+	);
+}
+
+function isActiveConductorModeState(
+	state: Record<string, unknown> | null,
+	mode: string,
+	sessionId: string,
+): boolean {
+	if (!state || state.active !== true) return false;
+	const stateMode = safeString(state.mode).trim();
+	if (stateMode && stateMode !== mode) return false;
+	const stateSessionId = safeString(state.session_id).trim();
+	if (sessionId && stateSessionId && stateSessionId !== sessionId) return false;
+	return isNonTerminalPhase(state.current_phase ?? state.currentPhase);
+}
+
+async function readActiveMainRootConductorStateForPreToolUse(
+	payload: CodexHookPayload,
+	cwd: string,
+	stateDir: string,
+	resolvedSessionId?: string,
+): Promise<ActiveConductorState | null> {
+	const sessionId = safeString(
+		resolvedSessionId ?? readPayloadSessionId(payload),
+	).trim();
+	const payloadSessionId = readPayloadSessionId(payload);
+	if (payloadSessionId && sessionId && payloadSessionId !== sessionId) {
+		const currentSession = await readUsableSessionStateFromStateDir(
+			cwd,
+			stateDir,
+		).catch(() => null);
+		const payloadMatchesMappedSession =
+			payloadSessionId ===
+				safeString(currentSession?.native_session_id).trim() ||
+			payloadSessionId ===
+				safeString(currentSession?.owner_omx_session_id).trim() ||
+			payloadSessionId ===
+				safeString(currentSession?.owner_codex_session_id).trim();
+		if (!payloadMatchesMappedSession) return null;
+	}
+	const threadId = readPayloadThreadId(payload);
+	if (!sessionId) return null;
+	if (
+		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+			payload,
+			cwd,
+			sessionId,
+		)
+	)
+		return null;
+
+	const canonicalState = await readVisibleSkillActiveStateForStateDir(
+		stateDir,
+		sessionId,
+	);
+	if (!canonicalState) return null;
+	const activeEntries = listActiveSkills(canonicalState).filter((entry) =>
+		matchesSkillStopContext(entry, canonicalState, sessionId, threadId),
+	);
+	const hasActiveSkill = (skill: string): boolean =>
+		activeEntries.some((entry) => entry.skill === skill);
+
+	if (hasActiveSkill("autopilot")) {
+		const state = await readStopSessionPinnedState(
+			"autopilot-state.json",
+			cwd,
+			sessionId,
+			stateDir,
+		);
+		const childPhase = deriveAutopilotChildPhase(state);
+		const hasMatchingAutopilotEntry = activeEntries.some(
+			(entry) =>
+				entry.skill === "autopilot" &&
+				normalizeAutopilotPhase(
+					safeString(entry.phase).trim().toLowerCase(),
+				) === childPhase,
+		);
+		if (
+			state &&
+			childPhase &&
+			childPhase !== "deep-interview" &&
+			childPhase !== "ralplan" &&
+			childPhase !== "rework" &&
+			hasMatchingAutopilotEntry &&
+			isActiveConductorModeState(state, "autopilot", sessionId)
+		) {
+			return { mode: "autopilot", phase: childPhase };
+		}
+	}
+
+	if (hasActiveSkill("ralph")) {
+		const state = await readStopSessionPinnedState(
+			"ralph-state.json",
+			cwd,
+			sessionId,
+			stateDir,
+		);
+		if (isActiveConductorModeState(state, "ralph", sessionId)) {
+			const phase =
+				safeString(state?.current_phase ?? state?.currentPhase) || "active";
+			if (phase.toLowerCase() !== "starting") return { mode: "ralph", phase };
+		}
+	}
+
+	if (hasActiveSkill("ultragoal")) {
+		const state = await readStopSessionPinnedState(
+			"ultragoal-state.json",
+			cwd,
+			sessionId,
+			stateDir,
+		);
+		if (isActiveConductorModeState(state, "ultragoal", sessionId)) {
+			return {
+				mode: "ultragoal",
+				phase:
+					safeString(state?.current_phase ?? state?.currentPhase) || "active",
+			};
+		}
+	}
+
+	if (hasActiveSkill("team") && !hasTeamWorkerEnvironment()) {
+		const teamStateForStop = await readTeamModeStateForStop(
+			cwd,
+			stateDir,
+			sessionId,
+			threadId,
+		);
+		const state = teamStateForStop?.state ?? null;
+		if (isActiveConductorModeState(state, "team", sessionId)) {
+			const teamName = safeString(state?.team_name).trim();
+			const phase = teamName
+				? ((await readTeamPhase(teamName, cwd).catch(() => null))
+						?.current_phase ?? state?.current_phase)
+				: state?.current_phase;
+			if (isNonTerminalPhase(phase))
+				return { mode: "team", phase: safeString(phase) || "active" };
+		}
+	}
+
+	return null;
+}
+
+function normalizeRepoRelativePath(
+	cwd: string,
+	rawPath: string,
+): string | null {
+	const candidate = rawPath.trim().replace(/^['"]|['"]$/g, "");
+	if (!candidate || isUnresolvedVariableTarget(candidate)) return null;
+	const absolute = isAbsolute(candidate)
+		? resolve(candidate)
+		: resolve(cwd, candidate);
+	let relativePath = relative(cwd, absolute).replace(/\\/g, "/");
+	if (!relativePath || relativePath === ".") return null;
+	if (relativePath.startsWith("../") || relativePath === "..") {
+		relativePath = candidate.replace(/\\/g, "/");
+	}
+	return relativePath.replace(/^\.\//, "");
+}
+
+function isAllowedConductorMetadataPath(cwd: string, rawPath: string): boolean {
+	const relativePath = normalizeRepoRelativePath(cwd, rawPath);
+	if (!relativePath) return false;
+	if (isProtectedPlanningStatePath(relativePath)) return false;
+	const artifactKind = classifyConductorArtifactKind(relativePath);
+	const actionKind = actionKindForConductorArtifact(artifactKind);
+	return authorizeConductorAction({
+		phase: "autopilot-supervision",
+		laneKind: "main-conductor",
+		actionKind,
+		artifactKind,
+	}).allowed;
+}
+
+function describeConductorBlockedWrite(
+	toolName: string,
+	blockedPath: string | undefined,
+	pathCount: number,
+): string {
+	if (pathCount === 0) {
+		const operationClass = isApplyPatchToolName(toolName)
+			? "apply_patch target extraction failed"
+			: `${toolName} path`;
+		return `${operationClass} target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`;
+	}
+	const operationClass = isApplyPatchToolName(toolName)
+		? "apply_patch target"
+		: `${toolName} path`;
+	return `${operationClass} target ${blockedPath ?? "<unresolved>"} is not workflow state/ledger/mailbox/handoff metadata`;
+}
+
+const CONDUCTOR_BASH_MUTATION_COMMANDS = new Set([
+	"cp",
+	"mv",
+	"rm",
+	"touch",
+	"mkdir",
+	"rmdir",
+	"install",
+	"ln",
+	"chmod",
+	"chown",
+	"chgrp",
+	"truncate",
+	"sed",
+	"perl",
+	"dd",
+	"rsync",
+]);
+
+const CONDUCTOR_BASH_TRANSPARENT_WRAPPERS = new Set(["builtin", "noglob"]);
+
+const CONDUCTOR_BASH_DOWNLOADER_COMMANDS = new Set(["curl", "wget"]);
+
+const CONDUCTOR_BASH_COMPOUND_SYNTAX_WORDS = new Set([
+	"if",
+	"then",
+	"else",
+	"elif",
+	"fi",
+	"for",
+	"while",
+	"until",
+	"do",
+	"done",
+	"case",
+	"esac",
+	"in",
+	"{",
+	"}",
+	"(",
+	")",
+]);
+const CONDUCTOR_BASH_OPTIONS_WITH_VALUES = new Set([
+	"-S",
+	"--suffix",
+	"-t",
+	"--target-directory",
+	"-m",
+	"--mode",
+	"-o",
+	"--owner",
+	"-g",
+	"--group",
+	"--reference",
+	"--preserve",
+	"--size",
+	"-if",
+	"if",
+	"-of",
+	"of",
+]);
+
+interface ConductorBashMutation {
+	command: string;
+	targets: string[];
+}
+
+interface ConductorInterpreterWrite {
+	runtime: string;
+	targets: string[];
+	unresolved: boolean;
+}
+
+function extractConductorInterpreterWrites(
+	command: string,
+): ConductorInterpreterWrite[] {
+	const writes: ConductorInterpreterWrite[] = [];
+	const scanCommand = normalizeShellLineContinuations(command);
+	let recognizedPythonOpenWrites = 0;
+	let recognizedPythonPathMutations = 0;
+	let recognizedPythonShutilMutations = 0;
+
+	for (const match of scanCommand.matchAll(
+		/\bnode\b[\s\S]{0,520}\b(?:appendFileSync|writeFileSync|appendFile|writeFile|createWriteStream)\s*\(\s*(["'])([^"']+)\1/g,
+	)) {
+		const target = safeString(match[2]).trim();
+		writes.push({
+			runtime: "node",
+			targets: target ? [target] : [],
+			unresolved: !target,
+		});
+	}
+	if (
+		/\bnode\b[\s\S]{0,520}\b(?:appendFileSync|writeFileSync|appendFile|writeFile|createWriteStream)\s*\(/.test(
+			scanCommand,
+		) &&
+		!writes.some((write) => write.runtime === "node")
+	) {
+		writes.push({ runtime: "node", targets: [], unresolved: true });
+	}
+
+	for (const match of scanCommand.matchAll(
+		/\bpython3?\b[\s\S]{0,520}\bopen\s*\(\s*(["'])([^"']+)\1\s*,\s*(["'])([^"']*[wax+][^"']*)\3/g,
+	)) {
+		const target = safeString(match[2]).trim();
+		writes.push({
+			runtime: "python",
+			targets: target ? [target] : [],
+			unresolved: !target,
+		});
+		recognizedPythonOpenWrites += 1;
+	}
+	for (const match of scanCommand.matchAll(
+		/\bpython3?\b[\s\S]{0,520}\bPath\s*\(\s*(["'])([^"']+)\1\s*\)\s*\.\s*(?:write_text|write_bytes)\s*\(/g,
+	)) {
+		const target = safeString(match[2]).trim();
+		writes.push({
+			runtime: "python",
+			targets: target ? [target] : [],
+			unresolved: !target,
+		});
+		recognizedPythonPathMutations += 1;
+	}
+	for (const match of scanCommand.matchAll(
+		/\bpython3?\b[\s\S]{0,520}\bPath\s*\(\s*(["'])([^"']+)\1\s*\)\s*\.\s*mkdir\s*\(/g,
+	)) {
+		const target = safeString(match[2]).trim();
+		writes.push({
+			runtime: "python",
+			targets: target ? [target] : [],
+			unresolved: !target,
+		});
+		recognizedPythonPathMutations += 1;
+	}
+	for (const match of scanCommand.matchAll(
+		/\bpython3?\b[\s\S]{0,520}\bshutil\s*\.\s*(?:copyfile|copy|copy2|copytree|move)\s*\(\s*(["'])([^"']+)\1\s*,\s*(["'])([^"']+)\3/g,
+	)) {
+		const target = safeString(match[4]).trim();
+		writes.push({
+			runtime: "python",
+			targets: target ? [target] : [],
+			unresolved: !target,
+		});
+		recognizedPythonShutilMutations += 1;
+	}
+	const hasPythonRuntime = /\bpython3?\b/.test(scanCommand);
+	const pythonOpenWriteCalls = hasPythonRuntime
+		? [
+				...scanCommand.matchAll(
+					/\bopen\s*\([^\n;)]*,\s*["'][^"']*[wax+][^"']*["']/g,
+				),
+			].length
+		: 0;
+	const pythonPathMutationCalls = hasPythonRuntime
+		? [
+				...scanCommand.matchAll(
+					/(?:^|[\n;])\s*(?:\([^\n;#]*\bPath\s*\([^\n;#]*\)[^\n;#]*\)|\bPath\s*\([^\n;#]*\))\s*\.\s*(?:write_text|write_bytes|mkdir)\s*\(/g,
+				),
+			].length
+		: 0;
+	const pythonShutilMutationCalls = hasPythonRuntime
+		? [
+				...scanCommand.matchAll(
+					/\bshutil\s*\.\s*(?:copyfile|copy|copy2|copytree|move)\s*\(/g,
+				),
+			].length
+		: 0;
+	if (
+		pythonOpenWriteCalls > recognizedPythonOpenWrites ||
+		pythonPathMutationCalls > recognizedPythonPathMutations ||
+		pythonShutilMutationCalls > recognizedPythonShutilMutations
+	) {
+		writes.push({ runtime: "python", targets: [], unresolved: true });
+	}
+
+	return writes;
+}
+
+function hasUnresolvedConductorInterpreterWrite(command: string): boolean {
+	return extractConductorInterpreterWrites(command).some(
+		(write) => write.unresolved || write.targets.length === 0,
+	);
+}
+
+function commandNameFromShellWord(word: string): string {
+	const base = word.trim().split(/[\\/]/).pop() ?? word.trim();
+	return base.toLowerCase();
+}
+
+function isShellCommandSeparator(word: string): boolean {
+	return (
+		word === "&&" ||
+		word === "||" ||
+		word === ";" ||
+		word === "&" ||
+		word === "|" ||
+		word === "|&"
+	);
+}
+
+function isShellGroupingSyntaxWord(word: string): boolean {
+	return word === "(" || word === ")" || word === "{" || word === "}";
+}
+
+function isShellCommandTerminatorOrGroupClose(word: string): boolean {
+	return isShellCommandSeparator(word) || word === ")" || word === "}";
+}
+
+function commandUsesTargetDirectoryOption(commandName: string): boolean {
+	return (
+		commandName === "cp" ||
+		commandName === "mv" ||
+		commandName === "install" ||
+		commandName === "ln"
+	);
+}
+function isEnvironmentAssignmentWord(word: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
+function findSudoDispatchOperandIndex(
+	words: string[],
+	startIndex: number,
+): number | null {
+	for (let index = startIndex; index < words.length; index += 1) {
+		const token = words[index] ?? "";
+		if (!token || token === "--") continue;
+		if (isShellAssignmentWord(token)) continue;
+		if (
+			token === "-u" ||
+			token === "--user" ||
+			token === "-g" ||
+			token === "--group" ||
+			token === "-h" ||
+			token === "--host" ||
+			token === "-p" ||
+			token === "--prompt" ||
+			token === "-C" ||
+			token === "--close-from"
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token.startsWith("--user=") ||
+			token.startsWith("--group=") ||
+			token.startsWith("--host=") ||
+			token.startsWith("--prompt=") ||
+			token.startsWith("--close-from=") ||
+			/^-[ughpC].+/.test(token)
+		) {
+			continue;
+		}
+		if (token.startsWith("-")) continue;
+		return index;
+	}
+	return null;
+}
+
+function findConductorWrapperOperandIndex(
+	commandName: string,
+	words: string[],
+	startIndex: number,
+): number | null | undefined {
+	switch (commandName) {
+		case "env":
+			return findEnvDispatchOperandIndex(words, startIndex);
+		case "command":
+			return findCommandDispatchOperandIndex(words, startIndex);
+		case "exec":
+			return findExecDispatchOperandIndex(words, startIndex);
+		case "sudo":
+			return findSudoDispatchOperandIndex(words, startIndex);
+		case "nohup":
+			return findCommandDispatchOperandIndex(words, startIndex);
+		case "time":
+			return findTimeDispatchOperandIndex(words, startIndex);
+		case "timeout":
+			return findTimeoutDispatchOperandIndex(words, startIndex);
+		case "nice":
+			return findNiceDispatchOperandIndex(words, startIndex);
+		case "stdbuf":
+			return findStdbufDispatchOperandIndex(words, startIndex);
+		default:
+			return undefined;
+	}
+}
+
+function isConductorDestinationOnlyMutationCommand(
+	commandName: string,
+): boolean {
+	return (
+		commandName === "cp" ||
+		commandName === "install" ||
+		commandName === "ln" ||
+		commandName === "rsync"
+	);
+}
+
+function isConductorInstallDirectoryMode(
+	words: string[],
+	commandIndex: number,
+): boolean {
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (word === "-d" || word === "--directory") return true;
+		if (word.startsWith("-") && !word.startsWith("--") && word.includes("d"))
+			return true;
+	}
+	return false;
+}
+function collectConductorDownloaderOutputTargets(
+	commandName: string,
+	words: string[],
+	commandIndex: number,
+): { sawOutputFlag: boolean; targets: string[] } {
+	const targets: string[] = [];
+	const explicitCurlTargets: string[] = [];
+	let sawOutputFlag = false;
+	let sawCurlRemoteName = false;
+	const curlOutputDirs: string[] = [];
+	const curlShortOptionsWithArgument = new Set("AbcCdDeEFHhKmMoPQrTuwxXyYz");
+
+	const isCurlRemoteNameWord = (word: string): boolean => {
+		if (word === "--remote-name" || word === "--remote-name-all") return true;
+		if (!word.startsWith("-") || word.startsWith("--")) return false;
+
+		for (const option of word.slice(1)) {
+			if (option === "O") return true;
+			if (curlShortOptionsWithArgument.has(option)) return false;
+		}
+		return false;
+	};
+
+	const pushTarget = (rawTarget: string): void => {
+		const target = safeString(rawTarget).trim();
+		if (!target) return;
+		if (commandName === "curl") explicitCurlTargets.push(target);
+		else targets.push(target);
+	};
+
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (isEnvironmentAssignmentWord(word)) continue;
+		if (word === "--") continue;
+
+		const inlineCurlOutput =
+			commandName === "curl" ? word.match(/^--output=(.+)$/) : null;
+		const inlineWgetOutput =
+			commandName === "wget"
+				? word.match(/^--(?:output-document|output-file|append-output)=(.+)$/)
+				: null;
+		const inlineWgetDirectoryPrefix =
+			commandName === "wget" ? word.match(/^--directory-prefix=(.+)$/) : null;
+		const inlineCurlOutputDir =
+			commandName === "curl" ? word.match(/^--output-dir=(.+)$/) : null;
+		const inlineTarget =
+			inlineCurlOutput?.[1] ??
+			inlineWgetOutput?.[1] ??
+			inlineWgetDirectoryPrefix?.[1];
+		if (inlineTarget !== undefined) {
+			sawOutputFlag = true;
+			pushTarget(inlineTarget);
+			continue;
+		}
+		if (inlineCurlOutputDir?.[1] !== undefined) {
+			curlOutputDirs.push(inlineCurlOutputDir[1]);
+			continue;
+		}
+
+		if (commandName === "curl" && isCurlRemoteNameWord(word)) {
+			sawCurlRemoteName = true;
+			continue;
+		}
+		if (commandName === "curl" && word.startsWith("-o") && word.length > 2) {
+			sawOutputFlag = true;
+			pushTarget(word.slice(2));
+			continue;
+		}
+		if (
+			commandName === "wget" &&
+			(word.startsWith("-O") ||
+				word.startsWith("-o") ||
+				word.startsWith("-a")) &&
+			word.length > 2
+		) {
+			sawOutputFlag = true;
+			pushTarget(word.slice(2));
+			continue;
+		}
+
+		const separateOutputFlag =
+			(commandName === "curl" &&
+				(word === "-o" || word === "--output" || word === "--append-output")) ||
+			(commandName === "wget" &&
+				(word === "-O" ||
+					word === "-o" ||
+					word === "-a" ||
+					word === "--output-document" ||
+					word === "--output-file" ||
+					word === "--append-output" ||
+					word === "-P" ||
+					word === "--directory-prefix"));
+		if (!separateOutputFlag) {
+			if (commandName === "curl" && word === "--output-dir") {
+				const nextWord = words[index + 1] ?? "";
+				if (nextWord && !isShellCommandTerminatorOrGroupClose(nextWord)) {
+					curlOutputDirs.push(nextWord);
+					index += 1;
+				}
+			}
+			continue;
+		}
+
+		sawOutputFlag = true;
+		const nextWord = words[index + 1] ?? "";
+		if (nextWord && !isShellCommandTerminatorOrGroupClose(nextWord)) {
+			pushTarget(nextWord);
+			index += 1;
+		}
+	}
+
+	if (commandName === "curl" && sawCurlRemoteName) {
+		sawOutputFlag = true;
+		targets.push(...(curlOutputDirs.length > 0 ? curlOutputDirs : ["."]));
+	}
+	if (commandName === "curl" && explicitCurlTargets.length > 0) {
+		const outputDir = curlOutputDirs[curlOutputDirs.length - 1];
+		const effectiveTargets = outputDir
+			? explicitCurlTargets.map((target) =>
+					isAbsolute(target) ? target : join(outputDir, target),
+				)
+			: explicitCurlTargets;
+		targets.push(...effectiveTargets);
+	}
+
+	return { sawOutputFlag, targets };
+}
+
+function isConductorSedInPlaceOption(word: string): boolean {
+	return (
+		word === "-i" ||
+		word === "--in-place" ||
+		word.startsWith("-i") ||
+		word.startsWith("--in-place=") ||
+		/^-[^-]*i/.test(word)
+	);
+}
+
+function collectConductorSedTargets(
+	words: string[],
+	commandIndex: number,
+): string[] | null {
+	const targets: string[] = [];
+	let sawInPlace = false;
+	let sawExplicitScript = false;
+	let consumedImplicitScript = false;
+
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (isEnvironmentAssignmentWord(word)) continue;
+
+		if (word === "--") {
+			consumedImplicitScript = true;
+			continue;
+		}
+		if (isConductorSedInPlaceOption(word)) {
+			sawInPlace = true;
+			continue;
+		}
+		if (
+			word === "-e" ||
+			word === "--expression" ||
+			word === "-f" ||
+			word === "--file"
+		) {
+			sawExplicitScript = true;
+			index += 1;
+			continue;
+		}
+		if (
+			word.startsWith("-e") ||
+			word.startsWith("--expression=") ||
+			word.startsWith("-f") ||
+			word.startsWith("--file=")
+		) {
+			sawExplicitScript = true;
+			continue;
+		}
+		if (word.startsWith("-")) continue;
+
+		if (!sawExplicitScript && !consumedImplicitScript) {
+			consumedImplicitScript = true;
+			continue;
+		}
+		targets.push(word);
+	}
+
+	return sawInPlace ? targets : null;
+}
+
+function collectConductorPerlTargets(
+	words: string[],
+	commandIndex: number,
+): string[] | null {
+	const targets: string[] = [];
+	let sawInPlace = false;
+
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (isEnvironmentAssignmentWord(word)) continue;
+
+		if (word === "--") continue;
+		if (word === "-i" || word.startsWith("-i") || /^-[^-]*i/.test(word)) {
+			sawInPlace = true;
+			continue;
+		}
+		if (word === "-e") {
+			index += 1;
+			continue;
+		}
+		if (word.startsWith("-e") || /^-[^-]*e/.test(word)) continue;
+		if (word.startsWith("-")) continue;
+
+		targets.push(word);
+	}
+
+	return sawInPlace ? targets : null;
+}
+
+const CONDUCTOR_XARGS_LONG_OPTIONS_WITH_REQUIRED_VALUES = new Set([
+	"--arg-file",
+	"--delimiter",
+	"--max-args",
+	"--max-chars",
+	"--max-lines",
+	"--max-procs",
+	"--process-slot-var",
+]);
+
+const CONDUCTOR_XARGS_SHORT_OPTIONS_WITH_REQUIRED_VALUES = new Set([
+	"a",
+	"d",
+	"E",
+	"I",
+	"L",
+	"n",
+	"P",
+	"s",
+]);
+const CONDUCTOR_XARGS_SHORT_OPTIONS_WITH_OPTIONAL_ATTACHED_VALUES = new Set([
+	"e",
+	"i",
+	"l",
+]);
+
+function conductorXargsOptionValueWordCount(
+	words: string[],
+	optionIndex: number,
+): number {
+	const word = words[optionIndex] ?? "";
+	if (!word.startsWith("-") || word === "-") return 0;
+
+	if (word.startsWith("--")) {
+		const [option, inlineValue] = word.split("=", 2);
+		return CONDUCTOR_XARGS_LONG_OPTIONS_WITH_REQUIRED_VALUES.has(option) &&
+			inlineValue === undefined
+			? 1
+			: 0;
+	}
+
+	const shortOptions = word.slice(1);
+	for (let offset = 0; offset < shortOptions.length; offset += 1) {
+		const option = shortOptions[offset] ?? "";
+		if (CONDUCTOR_XARGS_SHORT_OPTIONS_WITH_REQUIRED_VALUES.has(option)) {
+			if (offset < shortOptions.length - 1) return 0;
+			return option === "I" &&
+				(words[optionIndex + 1] ?? "") === "{" &&
+				(words[optionIndex + 2] ?? "") === "}"
+				? 2
+				: 1;
+		}
+		if (CONDUCTOR_XARGS_SHORT_OPTIONS_WITH_OPTIONAL_ATTACHED_VALUES.has(option))
+			return 0;
+	}
+
+	return 0;
+}
+
+function collectConductorXargsMutationTargets(
+	words: string[],
+	commandIndex: number,
+): string[] | null {
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (word === "--") continue;
+		if (word.startsWith("-")) {
+			index += conductorXargsOptionValueWordCount(words, index);
+			continue;
+		}
+		let commandWordIndex = index;
+		for (let unwrapCount = 0; unwrapCount < 8; unwrapCount += 1) {
+			const commandName = commandNameFromShellWord(
+				words[commandWordIndex] ?? "",
+			);
+			if (
+				CONDUCTOR_BASH_DOWNLOADER_COMMANDS.has(commandName) ||
+				CONDUCTOR_BASH_MUTATION_COMMANDS.has(commandName)
+			)
+				return [];
+			const wrapperOperandIndex = findConductorWrapperOperandIndex(
+				commandName,
+				words,
+				commandWordIndex + 1,
+			);
+			if (wrapperOperandIndex === undefined) return null;
+			if (wrapperOperandIndex === null) return [];
+			commandWordIndex = wrapperOperandIndex;
+		}
+		return [];
+	}
+	return null;
+}
+
+function collectConductorMutationCommandTargets(
+	commandName: string,
+	words: string[],
+	commandIndex: number,
+): string[] | null {
+	const targets: string[] = [];
+	const positionalTargets: string[] = [];
+	const targetDirectoryTargets: string[] = [];
+	let sawTargetDirectory = false;
+	let positionalCount = 0;
+	let rsyncRemovesSourceFiles = false;
+	if (commandName === "sed")
+		return collectConductorSedTargets(words, commandIndex);
+	if (commandName === "perl")
+		return collectConductorPerlTargets(words, commandIndex);
+	const installDirectoryMode =
+		commandName === "install" &&
+		isConductorInstallDirectoryMode(words, commandIndex);
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandTerminatorOrGroupClose(word)) break;
+		if (CONDUCTOR_BASH_COMPOUND_SYNTAX_WORDS.has(word)) continue;
+		if (isEnvironmentAssignmentWord(word)) continue;
+		if (commandName === "dd") {
+			const ofMatch = word.match(/^of=(.+)$/);
+			if (ofMatch) targets.push(safeString(ofMatch[1]).trim());
+			continue;
+		}
+
+		if (word === "--") continue;
+		if (commandName === "rsync" && word === "--remove-source-files") {
+			rsyncRemovesSourceFiles = true;
+			continue;
+		}
+		if (word.startsWith("--")) {
+			const [option, inlineValue] = word.split("=", 2);
+			if (
+				option === "--target-directory" &&
+				commandUsesTargetDirectoryOption(commandName)
+			) {
+				sawTargetDirectory = true;
+				if (inlineValue !== undefined) {
+					const target = safeString(inlineValue).trim();
+					if (target) targetDirectoryTargets.push(target);
+				} else {
+					const target = words[index + 1] ?? "";
+					if (target && !isShellCommandTerminatorOrGroupClose(target))
+						targetDirectoryTargets.push(target);
+					index += 1;
+				}
+				continue;
+			}
+			if (
+				CONDUCTOR_BASH_OPTIONS_WITH_VALUES.has(option) &&
+				inlineValue === undefined
+			)
+				index += 1;
+			if (
+				(option === "--backup" ||
+					option === "--suffix" ||
+					option === "--reference") &&
+				inlineValue
+			) {
+				targets.push(inlineValue);
+			}
+			continue;
+		}
+		if (word === "-t" && commandUsesTargetDirectoryOption(commandName)) {
+			sawTargetDirectory = true;
+			const target = words[index + 1] ?? "";
+			if (target && !isShellCommandTerminatorOrGroupClose(target))
+				targetDirectoryTargets.push(target);
+			index += 1;
+			continue;
+		}
+		if (
+			word.startsWith("-t") &&
+			word.length > 2 &&
+			commandUsesTargetDirectoryOption(commandName)
+		) {
+			sawTargetDirectory = true;
+			targetDirectoryTargets.push(word.slice(2));
+			continue;
+		}
+		if (word.startsWith("-") && word.length > 1) {
+			if (CONDUCTOR_BASH_OPTIONS_WITH_VALUES.has(word)) index += 1;
+			continue;
+		}
+		positionalCount += 1;
+		if (
+			(commandName === "chmod" ||
+				commandName === "chown" ||
+				commandName === "chgrp") &&
+			positionalCount === 1
+		) {
+			continue;
+		}
+		positionalTargets.push(word);
+	}
+	if (installDirectoryMode) return [...targets, ...positionalTargets];
+	if (sawTargetDirectory) {
+		return commandName === "mv"
+			? [...targets, ...targetDirectoryTargets, ...positionalTargets]
+			: [...targets, ...targetDirectoryTargets];
+	}
+	if (commandName === "rsync" && rsyncRemovesSourceFiles)
+		return [...targets, ...positionalTargets];
+	if (isConductorDestinationOnlyMutationCommand(commandName))
+		return [...targets, ...positionalTargets.slice(-1)];
+	return [...targets, ...positionalTargets];
+}
+
+function extractConductorBashMutations(
+	command: string,
+): ConductorBashMutation[] {
+	const mutations: ConductorBashMutation[] = [];
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
+		const words = tokenizeShellWords(segment);
+		let commandStart = true;
+		for (let index = 0; index < words.length; index += 1) {
+			const word = words[index] ?? "";
+			if (!word) continue;
+			if (isShellCommandSeparator(word)) {
+				commandStart = true;
+				continue;
+			}
+			if (isShellGroupingSyntaxWord(word)) {
+				continue;
+			}
+			if (commandStart && isEnvironmentAssignmentWord(word)) continue;
+			if (commandStart && CONDUCTOR_BASH_COMPOUND_SYNTAX_WORDS.has(word))
+				continue;
+			if (commandStart && word.startsWith("-")) continue;
+			if (!commandStart) continue;
+
+			const commandName = commandNameFromShellWord(word);
+			if (CONDUCTOR_BASH_TRANSPARENT_WRAPPERS.has(commandName)) {
+				continue;
+			}
+			const wrapperOperandIndex = findConductorWrapperOperandIndex(
+				commandName,
+				words,
+				index + 1,
+			);
+			if (wrapperOperandIndex !== undefined) {
+				if (wrapperOperandIndex === null) {
+					mutations.push({ command: commandName, targets: [] });
+					commandStart = false;
+				} else {
+					index = wrapperOperandIndex - 1;
+				}
+				continue;
+			}
+			if (CONDUCTOR_BASH_DOWNLOADER_COMMANDS.has(commandName)) {
+				const downloaderTargets = collectConductorDownloaderOutputTargets(
+					commandName,
+					words,
+					index,
+				);
+				if (downloaderTargets.sawOutputFlag) {
+					mutations.push({
+						command: commandName,
+						targets: downloaderTargets.targets,
+					});
+				}
+			} else if (commandName === "xargs") {
+				const xargsTargets = collectConductorXargsMutationTargets(words, index);
+				if (xargsTargets !== null)
+					mutations.push({ command: commandName, targets: xargsTargets });
+			} else if (CONDUCTOR_BASH_MUTATION_COMMANDS.has(commandName)) {
+				const mutationTargets = collectConductorMutationCommandTargets(
+					commandName,
+					words,
+					index,
+				);
+				if (mutationTargets !== null)
+					mutations.push({ command: commandName, targets: mutationTargets });
+			}
+			commandStart = false;
+		}
+	}
+	return mutations;
+}
+
+const CONDUCTOR_BASH_MAX_NESTING_DEPTH = 5;
+
+function evaluateConductorBashWrite(
+	cwd: string,
+	command: string,
+	depth = 0,
+): { allowed: boolean; blockedDetail?: string } {
+	const commandWithHeredocBodies = normalizeShellLineContinuations(command);
+	const normalizedCommand = stripHeredocBodiesForCommandScan(
+		commandWithHeredocBodies,
+	);
+	if (depth > CONDUCTOR_BASH_MAX_NESTING_DEPTH) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash nested shell depth exceeded Main-root Conductor validation limits",
+		};
+	}
+	if (hasDynamicNestedShellExecution(normalizedCommand)) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash nested shell execution is dynamic and cannot be validated for Main-root Conductor writes",
+		};
+	}
+	if (hasUnsafeUnquotedHeredocExpansion(commandWithHeredocBodies)) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash unquoted heredoc expansion is not workflow state/ledger/mailbox/handoff metadata",
+		};
+	}
+
+	const shellMutations = extractConductorBashMutations(normalizedCommand);
+	if (shellMutations.length > 0) {
+		for (const mutation of shellMutations) {
+			if (mutation.targets.length === 0) {
+				return {
+					allowed: false,
+					blockedDetail: `Bash ${mutation.command} mutation target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`,
+				};
+			}
+			const blockedTarget = mutation.targets.find(
+				(target) => !isAllowedConductorMetadataPath(cwd, target),
+			);
+			if (blockedTarget) {
+				return {
+					allowed: false,
+					blockedDetail: `Bash ${mutation.command} mutation target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+				};
+			}
+		}
+	}
+
+	for (const functionBody of extractInvokedShellFunctionBodiesForStateScan(
+		normalizedCommand,
+	)) {
+		const nestedDecision = evaluateConductorBashWrite(
+			cwd,
+			functionBody,
+			depth + 1,
+		);
+		if (!nestedDecision.allowed) return nestedDecision;
+	}
+	for (const nestedCommand of extractNestedShellCommandStringsForStateScan(
+		normalizedCommand,
+	)) {
+		const nestedDecision = evaluateConductorBashWrite(
+			cwd,
+			nestedCommand,
+			depth + 1,
+		);
+		if (!nestedDecision.allowed) return nestedDecision;
+	}
+	for (const nestedCommand of extractNestedCommandSubstitutionStringsForStateScan(
+		normalizedCommand,
+	)) {
+		const nestedDecision = evaluateConductorBashWrite(
+			cwd,
+			nestedCommand,
+			depth + 1,
+		);
+		if (!nestedDecision.allowed) return nestedDecision;
+	}
+	for (const nestedCommand of extractNestedProcessSubstitutionStringsForStateScan(
+		normalizedCommand,
+	)) {
+		const nestedDecision = evaluateConductorBashWrite(
+			cwd,
+			nestedCommand,
+			depth + 1,
+		);
+		if (!nestedDecision.allowed) return nestedDecision;
+	}
+
+	const editorTargets = extractConductorEditorWriteTargets(
+		commandWithHeredocBodies,
+	);
+	if (editorTargets.length > 0) {
+		const blockedTarget = editorTargets.find(
+			(target) => !isAllowedConductorMetadataPath(cwd, target),
+		);
+		if (blockedTarget) {
+			return {
+				allowed: false,
+				blockedDetail: `Bash editor mutation target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+			};
+		}
+	}
+
+	if (commandHasDestructiveGitSubcommand(normalizedCommand)) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash git worktree mutation is not workflow state/ledger/mailbox/handoff metadata",
+		};
+	}
+	if (commandHasPackageInstallIntent(normalizedCommand)) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash package manager install is not workflow state/ledger/mailbox/handoff metadata",
+		};
+	}
+
+	const interpreterWrites = extractConductorInterpreterWrites(
+		commandWithHeredocBodies,
+	);
+	for (const write of interpreterWrites) {
+		if (write.unresolved || write.targets.length === 0) {
+			return {
+				allowed: false,
+				blockedDetail: `Bash ${write.runtime} write target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata`,
+			};
+		}
+		const blockedTarget = write.targets.find(
+			(target) => !isAllowedConductorMetadataPath(cwd, target),
+		);
+		if (blockedTarget) {
+			return {
+				allowed: false,
+				blockedDetail: `Bash ${write.runtime} write target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+			};
+		}
+	}
+
+	const hasGenericWriteIntent = commandHasDeepInterviewWriteIntent(
+		commandWithHeredocBodies,
+	);
+	if (!hasGenericWriteIntent) return { allowed: true };
+	const targets = extractDeepInterviewCommandWriteTargets(
+		commandWithHeredocBodies,
+	);
+	const accountedShellOnlyWriteIntent =
+		shellMutations.length > 0 &&
+		targets.length === 0 &&
+		shellMutations.every(
+			(mutation) => mutation.command === "sed" || mutation.command === "perl",
+		);
+	if (accountedShellOnlyWriteIntent) return { allowed: true };
+	if (commandInvokesApplyPatch(normalizedCommand) && targets.length === 0) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"apply_patch target extraction failed for Main-root Conductor write",
+		};
+	}
+	if (targets.length === 0) {
+		return {
+			allowed: false,
+			blockedDetail:
+				"Bash write intent target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata",
+		};
+	}
+	const blockedTarget = targets.find(
+		(target) => !isAllowedConductorMetadataPath(cwd, target),
+	);
+	if (blockedTarget) {
+		const operationClass = /\btee\s+(?:-a\s+)?/.test(commandWithHeredocBodies)
+			? "Bash tee write"
+			: "Bash write";
+		return {
+			allowed: false,
+			blockedDetail: `${operationClass} target ${blockedTarget} is not workflow state/ledger/mailbox/handoff metadata`,
+		};
+	}
+	return { allowed: true };
+}
+
+function isAllowedConductorBashWrite(cwd: string, command: string): boolean {
+	return evaluateConductorBashWrite(cwd, command).allowed;
+}
+
+function buildConductorBashBlockedDetail(cwd: string, command: string): string {
+	return (
+		evaluateConductorBashWrite(cwd, command).blockedDetail ??
+		"Bash write intent target <unresolved>; Main-root Conductor may write only workflow state/ledger/mailbox/handoff metadata"
+	);
+}
+
+export async function buildConductorPreToolUseWriteGuardOutput(
+	payload: CodexHookPayload,
+	cwd: string,
+	stateDir: string,
+	resolvedSessionId?: string,
+): Promise<Record<string, unknown> | null> {
+	const activeState = await readActiveMainRootConductorStateForPreToolUse(
+		payload,
+		cwd,
+		stateDir,
+		resolvedSessionId,
+	);
+	if (!activeState) return null;
+
+	const toolName = safeString(payload.tool_name).trim();
+	const command = readPreToolUseCommand(payload);
+	const pathCandidates = readPreToolUsePathCandidates(payload);
+	let blocked = false;
+	let blockedDetail = "Main-root Conductor write is not delegated";
+
+	if (toolName === "Bash") {
+		blocked = !isAllowedConductorBashWrite(cwd, command);
+		if (blocked) blockedDetail = buildConductorBashBlockedDetail(cwd, command);
+	} else if (PLANNING_MODE_IMPLEMENTATION_TOOL_NAMES.has(toolName)) {
+		const toolPathCandidates = collectImplementationToolPathCandidates(
+			payload,
+			toolName,
+			pathCandidates,
+		);
+		if (toolPathCandidates.length === 0) {
+			blocked = true;
+			blockedDetail = describeConductorBlockedWrite(
+				toolName,
+				undefined,
+				toolPathCandidates.length,
+			);
+		} else {
+			const blockedPath = toolPathCandidates.find(
+				(candidate) => !isAllowedConductorMetadataPath(cwd, candidate),
+			);
+			blocked = blockedPath !== undefined;
+			if (blockedPath !== undefined) {
+				blockedDetail = describeConductorBlockedWrite(
+					toolName,
+					blockedPath,
+					toolPathCandidates.length,
+				);
+			}
+		}
+	}
+
+	if (!blocked) return null;
+
+	return {
+		decision: "block",
+		reason: `Main-root Conductor mode is active (${activeState.mode} phase: ${formatPhase(activeState.phase, "active")}); direct plan/code writes are blocked and must be delegated; ${blockedDetail}.`,
+		hookSpecificOutput: {
+			hookEventName: "PreToolUse",
+			additionalContext:
+				`${LEADER_CONDUCTOR_GOLDEN_RULE} ` +
+				"Use specialized agents for source edits and plan/spec authorship. " +
+				`Main-root Conductor may write only orchestration metadata/transport/ledger artifacts under ${CONDUCTOR_ORCHESTRATION_METADATA_PREFIXES.join(", ")}; path location alone is not authorization for substantive deliverables. ` +
+				"Autopilot rework and typed subagent/worker lanes are exempt from this guard.",
+		},
+	};
+}
+
+function isInPlaceEditorCommand(word: string, commandName: string): boolean {
+	if (commandName === "sed")
+		return (
+			word === "--in-place" ||
+			/^--in-place(?:=.+)?$/.test(word) ||
+			/^-[^-\s]*i(?:.*)?$/.test(word)
+		);
+	if (commandName === "perl")
+		return (
+			word === "-i" ||
+			word === "-pi" ||
+			/^-pi(?:\..+)?$/.test(word) ||
+			/^-p.*i(?:\..+)?$/.test(word)
+		);
+	return false;
+}
+
+function collectInPlaceEditorWriteTargets(
+	commandName: "sed" | "perl",
+	words: string[],
+	commandIndex: number,
+): string[] {
+	const targets: string[] = [];
+	let sawInPlaceEdit = false;
+	let awaitingOptionValue = false;
+	let consumedImplicitSedScript = commandName !== "sed";
+
+	for (let index = commandIndex + 1; index < words.length; index += 1) {
+		const word = words[index] ?? "";
+		if (!word || isShellCommandSeparator(word)) break;
+		if (CONDUCTOR_BASH_COMPOUND_SYNTAX_WORDS.has(word)) continue;
+		if (isEnvironmentAssignmentWord(word)) continue;
+
+		if (awaitingOptionValue) {
+			awaitingOptionValue = false;
+			continue;
+		}
+
+		if (word === "--") {
+			consumedImplicitSedScript = true;
+			continue;
+		}
+		if (
+			word === "-e" ||
+			word === "-f" ||
+			word === "--expression" ||
+			word === "--file"
+		) {
+			awaitingOptionValue = true;
+			consumedImplicitSedScript = true;
+			continue;
+		}
+		if (
+			word.startsWith("-e") ||
+			word.startsWith("-f") ||
+			word.startsWith("--expression=") ||
+			word.startsWith("--file=")
+		) {
+			consumedImplicitSedScript = true;
+			continue;
+		}
+		if (isInPlaceEditorCommand(word, commandName)) {
+			sawInPlaceEdit = true;
+			continue;
+		}
+		if (word.startsWith("-")) continue;
+		if (sawInPlaceEdit) {
+			if (commandName === "sed" && !consumedImplicitSedScript) {
+				consumedImplicitSedScript = true;
+				continue;
+			}
+			targets.push(word);
+		}
+	}
+
+	return targets;
+}
+
+function extractConductorEditorWriteTargets(command: string): string[] {
+	const targets: string[] = [];
+	for (const segment of splitShellCommandSegments(
+		stripHeredocBodiesForCommandScan(command),
+	)) {
+		const words = tokenizeShellWords(segment);
+		let commandStart = true;
+		for (let index = 0; index < words.length; index += 1) {
+			const word = words[index] ?? "";
+			if (!word) continue;
+			if (isShellCommandSeparator(word)) {
+				commandStart = true;
+				continue;
+			}
+			if (isShellGroupingSyntaxWord(word)) continue;
+			if (commandStart && isEnvironmentAssignmentWord(word)) continue;
+			if (commandStart && CONDUCTOR_BASH_COMPOUND_SYNTAX_WORDS.has(word))
+				continue;
+			if (commandStart && word.startsWith("-")) continue;
+			if (!commandStart) continue;
+
+			const commandName = commandNameFromShellWord(word);
+			if (commandName === "sed" || commandName === "perl") {
+				targets.push(
+					...collectInPlaceEditorWriteTargets(commandName, words, index),
+				);
+			}
+			commandStart = false;
+		}
+	}
+	return targets;
+}
 function matchesSkillStopContext(
 	entry: { session_id?: string; thread_id?: string },
 	state: { session_id?: string; thread_id?: string },
@@ -9284,15 +12272,17 @@ export async function dispatchCodexNativeHook(
 	const eventSessionId = canonicalSessionId || nativeSessionId || undefined;
 	const sessionIdForState = canonicalSessionId || nativeSessionId;
 	let outputJson: Record<string, unknown> | null = null;
+	const typedAgentRolePayload = isTypedAgentRolePayload(payload);
 	const isSubagentPromptSubmit =
 		hookEventName === "UserPromptSubmit"
-			? await isNativeSubagentHook(
+			? typedAgentRolePayload ||
+				(await isNativeSubagentHook(
 					cwd,
 					canonicalSessionId,
 					nativeSessionId,
 					threadId,
 					safeString(currentSessionState?.native_session_id).trim(),
-				)
+				))
 			: false;
 	const isSubagentStop =
 		hookEventName === "Stop"
@@ -9580,6 +12570,12 @@ export async function dispatchCodexNativeHook(
 				cwd,
 				stateDir,
 				rootPointerConflict,
+			)) ??
+			(await buildConductorPreToolUseWriteGuardOutput(
+				payload,
+				cwd,
+				stateDir,
+				preToolUseSessionId,
 			)) ??
 			(await buildNativeSubagentCapacityCloseGuardOutput(
 				payload,
