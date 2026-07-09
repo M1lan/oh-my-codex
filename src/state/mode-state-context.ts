@@ -1,4 +1,5 @@
 import { execFileSync } from "child_process";
+import { resolveTmuxBinaryForPlatform } from "../utils/platform-command.js";
 
 export interface ModeStateContextLike {
 	active?: unknown;
@@ -23,7 +24,7 @@ export function captureTmuxWindowForPane(
 ): string | null {
 	if (!pane || !env.TMUX || env.OMX_TMUX_HUD_OWNER !== "1") return null;
 	try {
-		const tmux = env.TMUX_BINARY || "tmux";
+		const tmux = resolveTmuxBinaryForPlatform(process.platform, env) || "tmux";
 		const windowId = execFileSync(
 			tmux,
 			["display-message", "-p", "-t", pane, "#{window_id}"],

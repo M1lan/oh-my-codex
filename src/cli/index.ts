@@ -3962,7 +3962,7 @@ function tagTmuxSessionWithInstance(
 	const instanceId = sessionId.trim();
 	if (!target || !instanceId) return;
 	execFileSync(
-		"tmux",
+		resolveTmuxExecutableForLaunch(),
 		["set-option", "-t", target, OMX_INSTANCE_OPTION, instanceId],
 		{
 			stdio: ["ignore", "ignore", "ignore"],
@@ -3978,7 +3978,7 @@ function tagCurrentTmuxSessionWithInstance(sessionId: string): void {
 		const displayArgs = tmuxPaneTarget
 			? ["display-message", "-p", "-t", tmuxPaneTarget, "#S"]
 			: ["display-message", "-p", "#S"];
-		const sessionName = execFileSync("tmux", displayArgs, {
+		const sessionName = execFileSync(resolveTmuxExecutableForLaunch(), displayArgs, {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
 			timeout: 2000,

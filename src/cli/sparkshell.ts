@@ -7,7 +7,10 @@ import { existsSync } from "fs";
 import { arch as osArch, constants as osConstants } from "os";
 import { isAbsolute, join, resolve } from "path";
 import { getPackageRoot } from "../utils/package.js";
-import { classifySpawnError } from "../utils/platform-command.js";
+import {
+	classifySpawnError,
+	resolveTmuxBinaryForPlatform,
+} from "../utils/platform-command.js";
 import { readConfiguredEnvOverrides } from "../config/models.js";
 import { buildCapturePaneArgv } from "../scripts/tmux-hook-engine.js";
 import {
@@ -425,7 +428,7 @@ export function parseSparkShellFallbackInvocation(
 	return {
 		kind: "tmux-pane",
 		argv: [
-			"tmux",
+			resolveTmuxBinaryForPlatform() || "tmux",
 			...buildCapturePaneArgv(paneId, sawTailLines ? tailLines : 200),
 		],
 	};

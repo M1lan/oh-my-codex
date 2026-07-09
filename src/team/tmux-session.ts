@@ -806,11 +806,10 @@ function buildHudResizeArgs(
 }
 
 function buildNestedTmuxShellCommand(command: string): string {
-	if (process.platform !== "win32") {
-		return `tmux ${command}`;
-	}
-
-	const resolvedTmuxPath = resolveAbsoluteBinaryPath("tmux");
+	const resolvedTmuxPath =
+		process.platform === "win32"
+			? resolveAbsoluteBinaryPath("tmux")
+			: resolveTmuxBinaryForPlatform() || "tmux";
 	if (resolvedTmuxPath === "tmux") {
 		return `tmux ${command}`;
 	}

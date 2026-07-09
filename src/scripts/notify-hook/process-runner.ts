@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "child_process";
+import { resolveTmuxBinaryForPlatform } from "../../utils/platform-command.js";
 
 export function runProcess(
 	command: string,
@@ -15,7 +16,9 @@ export function runProcess(
 			command === "tmux" && process.env.OMX_TEST_RELAX_TMUX_TIMEOUT === "1";
 		const executable = usingTestTmux
 			? (process.env.OMX_TEST_TMUX_BIN as string)
-			: command;
+			: command === "tmux"
+				? resolveTmuxBinaryForPlatform() || command
+				: command;
 		const effectiveTimeoutMs =
 			usingTestTmux || relaxingTestTmuxTimeout
 				? Math.max(timeoutMs, 10_000)

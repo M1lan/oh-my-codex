@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import { basename, dirname } from "path";
+import { resolveTmuxBinaryForPlatform } from "../../utils/platform-command.js";
 import { safeString } from "./utils.js";
 import { upsertCurrentTaskBaseline } from "../../team/current-task-baseline.js";
 
@@ -94,7 +95,7 @@ export function resolveOperationalSessionName(
 	if (process.env.TMUX) {
 		try {
 			const tmuxSession = execFileSync(
-				"tmux",
+				resolveTmuxBinaryForPlatform() || "tmux",
 				["display-message", "-p", "#S"],
 				{
 					encoding: "utf-8",

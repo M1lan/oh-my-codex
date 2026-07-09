@@ -240,12 +240,38 @@ export function resolveCommandPathForPlatform(
 	return resolvePosixCommandPath(command, env, existsImpl);
 }
 
+/**
+ * Ordered multiplexer binary preference. `rmux` (the tmux-compatible shim at
+ * ~/.local/bin/rmux) is tried first so OMX never spawns a real `tmux` client
+ * against an rmux-owned $TMUX socket (which fails with "server exited
+ * unexpectedly"). `tmux` remains a last-resort fallback only for hosts where
+ * rmux is not installed. An explicit `OMX_MUX_BINARY` / `TMUX_BINARY` override
+ * wins over both.
+ */
+const MUX_BINARY_CANDIDATES = ["rmux", "tmux"] as const;
+
 export function resolveTmuxBinaryForPlatform(
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = process.env,
 	existsImpl: ExistsSyncLike = existsFileSync,
 ): string | null {
-	return resolveCommandPathForPlatform("tmux", platform, env, existsImpl);
+	const override = String(env.OMX_MUX_BINARY ?? env.TMUX_BINARY ?? "").trim();
+	if (override) {
+		return (
+			resolveCommandPathForPlatform(override, platform, env, existsImpl) ??
+			override
+		);
+	}
+	for (const candidate of MUX_BINARY_CANDIDATES) {
+		const resolved = resolveCommandPathForPlatform(
+			candidate,
+			platform,
+			env,
+			existsImpl,
+		);
+		if (resolved) return resolved;
+	}
+	return null;
 }
 
 const CMUX_RUNTIME_ENV_SIGNALS = ["CMUX_SOCKET_PATH", "CMUX_SOCKET"] as const;
@@ -274,6 +300,17 @@ export function buildPlatformCommandSpec(
 	env: NodeJS.ProcessEnv = process.env,
 	existsImpl: ExistsSyncLike = existsFileSync,
 ): PlatformCommandSpec {
+	// Any caller that spawns a bare `tmux` is transparently redirected to the
+	// preferred multiplexer (rmux first; see MUX_BINARY_CANDIDATES). This is the
+	// single chokepoint for every spawnPlatformCommand*("tmux", ...) site, so OMX
+	// never launches a real tmux client against an rmux-owned socket.
+	if (
+		!isWindowsPathLike(command) &&
+		basename(command, extname(command)).toLowerCase() === "tmux"
+	) {
+		command = resolveTmuxBinaryForPlatform(platform, env, existsImpl) || command;
+	}
+
 	if (platform !== "win32") {
 		return { command, args: [...args] };
 	}
