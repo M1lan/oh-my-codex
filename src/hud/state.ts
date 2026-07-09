@@ -277,6 +277,13 @@ export async function readUltragoalState(
 	const unresolved_goals = goals.filter((goal) =>
 		isHudUnresolvedUltragoalGoal(goal, goals),
 	).length;
+	const aggregateCompletion =
+		plan.aggregateCompletion &&
+		typeof plan.aggregateCompletion === "object" &&
+		!Array.isArray(plan.aggregateCompletion)
+			? (plan.aggregateCompletion as { status?: unknown })
+			: null;
+	const aggregateComplete = aggregateCompletion?.status === "complete";
 	const activeGoalId = sanitizeOptionalString(plan.activeGoalId);
 	const activeGoal =
 		(activeGoalId
@@ -299,7 +306,7 @@ export async function readUltragoalState(
 	const activeIndex = activeGoal
 		? goals.findIndex((goal) => goal.id === activeGoal.id)
 		: -1;
-	const complete = unresolved_goals === 0;
+	const complete = aggregateComplete || unresolved_goals === 0;
 	const toHudGoal = ({
 		goal,
 		index,
@@ -324,12 +331,14 @@ export async function readUltragoalState(
 		)
 		.slice(0, 3)
 		.map(toHudGoal);
-	const orderedOngoingGoals = [
-		...(activeGoal && activeIndex >= 0
-			? [toHudGoal({ goal: activeGoal, index: activeIndex })]
-			: []),
-		...nextPendingGoals,
-	];
+	const orderedOngoingGoals = complete
+		? []
+		: [
+				...(activeGoal && activeIndex >= 0
+					? [toHudGoal({ goal: activeGoal, index: activeIndex })]
+					: []),
+				...nextPendingGoals,
+			];
 
 	return {
 		active: !complete,
@@ -343,7 +352,7 @@ export async function readUltragoalState(
 		needsUserDecision: needs_user_decision_goals,
 		progressTotal: goals.length,
 		activeGoal:
-			activeGoal && activeIndex >= 0
+			!complete && activeGoal && activeIndex >= 0
 				? {
 						id: activeGoal.id,
 						title: activeGoal.title,

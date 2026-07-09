@@ -4266,6 +4266,18 @@ function isActiveDeepInterviewPhase(
 	return true;
 }
 
+function isInactiveCompletedDeepInterviewPhase(
+	state: Record<string, unknown> | null,
+): boolean {
+	if (!state || state.active !== false) return false;
+	const mode = safeString(state.mode).trim();
+	if (mode && mode !== "deep-interview") return false;
+	const phase = safeString(state.current_phase ?? state.currentPhase)
+		.trim()
+		.toLowerCase();
+	return phase === "complete" || phase === "completed";
+}
+
 function isActiveRalplanPhase(state: Record<string, unknown> | null): boolean {
 	if (!state || state.active !== true) return false;
 	const mode = safeString(state.mode).trim();
@@ -8557,6 +8569,7 @@ async function readActiveDeepInterviewStateForPreToolUse(
 		);
 		if (hasActiveDeepInterviewSkill) return modeState;
 	}
+	if (isInactiveCompletedDeepInterviewPhase(modeState)) return null;
 
 	const autopilotState = sessionId
 		? await readStopSessionPinnedState(
@@ -8786,7 +8799,7 @@ async function buildRalplanPreToolUseBoundaryOutput(
 		resolvedSessionId ?? readPayloadSessionId(payload),
 	).trim();
 	if (
-		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+		await hasTrustedTypedSubagentProvenanceForPreToolUse(
 			payload,
 			cwd,
 			sessionId,
@@ -8890,7 +8903,7 @@ async function buildDeepInterviewPreToolUseBoundaryOutput(
 		resolvedSessionId ?? readPayloadSessionId(payload),
 	).trim();
 	if (
-		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+		await hasTrustedTypedSubagentProvenanceForPreToolUse(
 			payload,
 			cwd,
 			sessionId,
@@ -9121,12 +9134,21 @@ interface ActiveConductorState {
 	phase: string;
 }
 
-async function hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+async function hasTrustedTypedSubagentProvenanceForPreToolUse(
 	payload: CodexHookPayload,
 	cwd: string,
 	sessionId: string,
 ): Promise<boolean> {
 	if (hasTeamWorkerEnvironment()) return true;
+	if (!isTypedAgentRolePayload(payload)) return false;
+	const trackingState = await readSubagentTrackingState(cwd).catch(() => null);
+	const session = trackingState?.sessions?.[sessionId];
+	if (!session) return false;
+
+	const payloadThreadId = readPayloadThreadId(payload);
+	if (payloadThreadId && isTrustedSubagentThread(session, payloadThreadId))
+		return true;
+
 	const source = safeObject(payload.source);
 	const subagent = safeObject(source.subagent);
 	const threadSpawn = safeObject(subagent.thread_spawn);
@@ -9137,14 +9159,10 @@ async function hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
 			threadSpawn.leaderThreadId,
 	).trim();
 	if (!parentThreadId) return false;
-	if (!isTypedAgentRolePayload(payload)) return false;
-	const trackingState = await readSubagentTrackingState(cwd).catch(() => null);
-	const session = trackingState?.sessions?.[sessionId];
-	if (!session) return false;
-	return (
-		session.leader_thread_id === parentThreadId ||
-		parentThreadId in session.threads
-	);
+	const leaderThreadId = safeString(session.leader_thread_id).trim();
+	if (payloadThreadId && leaderThreadId && payloadThreadId === leaderThreadId)
+		return false;
+	return leaderThreadId === parentThreadId || parentThreadId in session.threads;
 }
 
 function isActiveConductorModeState(
@@ -9187,7 +9205,7 @@ async function readActiveMainRootConductorStateForPreToolUse(
 	const threadId = readPayloadThreadId(payload);
 	if (!sessionId) return null;
 	if (
-		await hasTrustedTypedSubagentThreadSpawnProvenanceForPreToolUse(
+		await hasTrustedTypedSubagentProvenanceForPreToolUse(
 			payload,
 			cwd,
 			sessionId,
@@ -10598,6 +10616,76 @@ function modeStateHasExplicitMatchingCwd(
 	}
 }
 
+async function clearNativeStopSessionEntries(
+	stateDir: string,
+	payload: CodexHookPayload,
+	canonicalSessionId?: string,
+): Promise<void> {
+	const statePath = join(stateDir, NATIVE_STOP_STATE_FILE);
+	const state = await readJsonIfExists(statePath);
+	if (!state) return;
+
+	const sessions = safeObject(state.sessions);
+	const keys = new Set(
+		uniqueNonEmpty([
+			readNativeStopSessionKey(payload, canonicalSessionId),
+			canonicalSessionId,
+			readPayloadSessionId(payload),
+			readPayloadThreadId(payload),
+		]),
+	);
+	let changed = false;
+	for (const key of keys) {
+		if (Object.prototype.hasOwnProperty.call(sessions, key)) {
+			delete sessions[key];
+			changed = true;
+		}
+	}
+	if (!changed) return;
+
+	await writeFile(statePath, JSON.stringify({ ...state, sessions }, null, 2));
+}
+
+async function hasAuthoritativeInactiveSkillStopState(
+	cwd: string,
+	stateDir: string,
+	skill: string,
+	sessionId: string,
+	threadId: string,
+): Promise<boolean> {
+	const sessionModeState = await readStopSessionPinnedState(
+		`${skill}-state.json`,
+		cwd,
+		sessionId,
+		stateDir,
+	);
+	if (!sessionModeState || !isTerminalOrInactiveModeState(sessionModeState))
+		return false;
+
+	const canonicalState = await readVisibleSkillActiveStateForStateDir(
+		stateDir,
+		sessionId,
+	);
+	if (
+		canonicalState &&
+		!rootSkillStateHasNoActiveSkillForStopContext(
+			canonicalState,
+			skill,
+			sessionId,
+			threadId,
+		)
+	) {
+		return false;
+	}
+
+	const rootModeState = await readJsonIfExists(
+		join(stateDir, `${skill}-state.json`),
+	);
+	if (!rootModeState) return true;
+	if (!modeStateMatchesSkillStopContext(rootModeState, cwd, sessionId))
+		return true;
+	return isTerminalOrInactiveModeState(rootModeState);
+}
 async function readBlockingSkillForStop(
 	cwd: string,
 	stateDir: string,
@@ -11747,6 +11835,21 @@ async function buildStopHookOutput(
 			stateDir,
 			canonicalSessionId,
 		);
+		if (
+			await hasAuthoritativeInactiveSkillStopState(
+				cwd,
+				stateDir,
+				"ralplan",
+				canonicalSessionId,
+				threadId,
+			)
+		) {
+			await clearNativeStopSessionEntries(
+				stateDir,
+				payload,
+				canonicalSessionId,
+			);
+		}
 	}
 	if (suppressParentWorkflowStop) {
 		return null;

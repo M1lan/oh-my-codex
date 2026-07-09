@@ -68,6 +68,50 @@ async function withOmxRootEnv<T>(
 		else delete process.env.OMX_TEAM_STATE_ROOT;
 	}
 }
+async function withStateRootEnv<T>(
+	env: Partial<
+		Record<"OMX_ROOT" | "OMX_STATE_ROOT" | "OMX_TEAM_STATE_ROOT", string>
+	>,
+	run: () => Promise<T>,
+): Promise<T> {
+	const previousOmxRoot = process.env.OMX_ROOT;
+	const previousOmxStateRoot = process.env.OMX_STATE_ROOT;
+	const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+	if (typeof env.OMX_ROOT === "string") process.env.OMX_ROOT = env.OMX_ROOT;
+	else delete process.env.OMX_ROOT;
+	if (typeof env.OMX_STATE_ROOT === "string")
+		process.env.OMX_STATE_ROOT = env.OMX_STATE_ROOT;
+	else delete process.env.OMX_STATE_ROOT;
+	if (typeof env.OMX_TEAM_STATE_ROOT === "string")
+		process.env.OMX_TEAM_STATE_ROOT = env.OMX_TEAM_STATE_ROOT;
+	else delete process.env.OMX_TEAM_STATE_ROOT;
+	try {
+		return await run();
+	} finally {
+		if (typeof previousOmxRoot === "string")
+			process.env.OMX_ROOT = previousOmxRoot;
+		else delete process.env.OMX_ROOT;
+		if (typeof previousOmxStateRoot === "string")
+			process.env.OMX_STATE_ROOT = previousOmxStateRoot;
+		else delete process.env.OMX_STATE_ROOT;
+		if (typeof previousTeamStateRoot === "string")
+			process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+		else delete process.env.OMX_TEAM_STATE_ROOT;
+	}
+}
+
+function responsePayload<T extends Record<string, unknown>>(response: {
+	payload: unknown;
+	isError?: boolean;
+}): T {
+	assert.equal(response.isError, undefined);
+	assert.ok(
+		response.payload &&
+			typeof response.payload === "object" &&
+			!Array.isArray(response.payload),
+	);
+	return response.payload as T;
+}
 
 function validExecutionContract(
 	stride: "task" | "deliverable" | "milestone",
@@ -297,6 +341,200 @@ describe("state operations directory initialization", () => {
 		}
 	});
 
+	it("writes and clears session state under OMX_TEAM_STATE_ROOT without creating cwd .omx", async () => {
+		const root = await mkdtemp(join(tmpdir(), "omx-state-ops-team-root-"));
+		try {
+			const wd = join(root, "workspace");
+			const teamStateRoot = join(root, "team-state");
+			await mkdir(wd, { recursive: true });
+
+			await withStateRootEnv(
+				{ OMX_TEAM_STATE_ROOT: teamStateRoot },
+				async () => {
+					const writeResponse = await executeStateOperation("state_write", {
+						workingDirectory: wd,
+						session_id: "sess-team-write",
+						mode: "autoresearch",
+						active: true,
+						current_phase: "running",
+					});
+					const writePayload = responsePayload<{ path: string }>(writeResponse);
+					assert.equal(
+						writePayload.path,
+						join(
+							teamStateRoot,
+							"sessions",
+							"sess-team-write",
+							"autoresearch-state.json",
+						),
+					);
+					assert.equal(existsSync(writePayload.path), true);
+					assert.equal(
+						existsSync(
+							join(
+								teamStateRoot,
+								"sessions",
+								"sess-team-write",
+								"skill-active-state.json",
+							),
+						),
+						true,
+					);
+					assert.equal(existsSync(join(wd, ".omx")), false);
+
+					const clearResponse = await executeStateOperation("state_clear", {
+						workingDirectory: wd,
+						session_id: "sess-team-write",
+						mode: "autoresearch",
+					});
+					const clearPayload = responsePayload<{ path: string }>(clearResponse);
+					assert.equal(clearPayload.path, writePayload.path);
+					assert.equal(existsSync(writePayload.path), false);
+					assert.equal(
+						existsSync(
+							join(
+								teamStateRoot,
+								"sessions",
+								"sess-team-write",
+								"skill-active-state.json",
+							),
+						),
+						true,
+					);
+					assert.equal(existsSync(join(wd, ".omx")), false);
+				},
+			);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("writes and clears session state under OMX_ROOT when cwd is filesystem root", async () => {
+		const boxRoot = await mkdtemp(join(tmpdir(), "omx-state-ops-omx-root-"));
+		try {
+			await withStateRootEnv({ OMX_ROOT: boxRoot }, async () => {
+				const writeResponse = await executeStateOperation("state_write", {
+					workingDirectory: "/",
+					session_id: "sess-omx-root",
+					mode: "autoresearch",
+					active: true,
+					current_phase: "running",
+				});
+				const writePayload = responsePayload<{ path: string }>(writeResponse);
+				const expectedPath = join(
+					boxRoot,
+					".omx",
+					"state",
+					"sessions",
+					"sess-omx-root",
+					"autoresearch-state.json",
+				);
+				assert.equal(writePayload.path, expectedPath);
+				assert.equal(existsSync(expectedPath), true);
+
+				const clearResponse = await executeStateOperation("state_clear", {
+					workingDirectory: "/",
+					session_id: "sess-omx-root",
+					mode: "autoresearch",
+				});
+				const clearPayload = responsePayload<{ path: string }>(clearResponse);
+				assert.equal(clearPayload.path, expectedPath);
+				assert.equal(existsSync(expectedPath), false);
+
+				const workspace = join(boxRoot, "workspace");
+				await mkdir(workspace, { recursive: true });
+				const workspaceResponse = await executeStateOperation("state_write", {
+					workingDirectory: workspace,
+					session_id: "sess-omx-root-workspace",
+					mode: "autoresearch",
+					active: true,
+					current_phase: "running",
+				});
+				const workspacePayload = responsePayload<{ path: string }>(
+					workspaceResponse,
+				);
+				assert.equal(
+					workspacePayload.path,
+					join(
+						boxRoot,
+						".omx",
+						"state",
+						"sessions",
+						"sess-omx-root-workspace",
+						"autoresearch-state.json",
+					),
+				);
+				assert.equal(existsSync(join(workspace, ".omx")), false);
+			});
+		} finally {
+			await rm(boxRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("writes and clears session state under OMX_STATE_ROOT when cwd is filesystem root", async () => {
+		const stateRoot = await mkdtemp(
+			join(tmpdir(), "omx-state-ops-state-root-"),
+		);
+		try {
+			await withStateRootEnv({ OMX_STATE_ROOT: stateRoot }, async () => {
+				const writeResponse = await executeStateOperation("state_write", {
+					workingDirectory: "/",
+					session_id: "sess-state-root",
+					mode: "autoresearch",
+					active: true,
+					current_phase: "running",
+				});
+				const writePayload = responsePayload<{ path: string }>(writeResponse);
+				const expectedPath = join(
+					stateRoot,
+					".omx",
+					"state",
+					"sessions",
+					"sess-state-root",
+					"autoresearch-state.json",
+				);
+				assert.equal(writePayload.path, expectedPath);
+				assert.equal(existsSync(expectedPath), true);
+
+				const clearResponse = await executeStateOperation("state_clear", {
+					workingDirectory: "/",
+					session_id: "sess-state-root",
+					mode: "autoresearch",
+				});
+				const clearPayload = responsePayload<{ path: string }>(clearResponse);
+				assert.equal(clearPayload.path, expectedPath);
+				assert.equal(existsSync(expectedPath), false);
+
+				const workspace = join(stateRoot, "workspace");
+				await mkdir(workspace, { recursive: true });
+				const workspaceResponse = await executeStateOperation("state_write", {
+					workingDirectory: workspace,
+					session_id: "sess-state-root-workspace",
+					mode: "autoresearch",
+					active: true,
+					current_phase: "running",
+				});
+				const workspacePayload = responsePayload<{ path: string }>(
+					workspaceResponse,
+				);
+				assert.equal(
+					workspacePayload.path,
+					join(
+						stateRoot,
+						".omx",
+						"state",
+						"sessions",
+						"sess-state-root-workspace",
+						"autoresearch-state.json",
+					),
+				);
+				assert.equal(existsSync(join(workspace, ".omx")), false);
+			});
+		} finally {
+			await rm(stateRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("surfaces active ultragoal artifacts in list-active without mode state files", async () => {
 		const wd = await mkdtemp(
 			join(tmpdir(), "omx-state-ops-ultragoal-artifact-"),
@@ -352,6 +590,97 @@ describe("state operations directory initialization", () => {
 				join(wd, ".omx", "ultragoal", "goals.json"),
 			);
 			assert.equal(statuses.ultragoal?.source, "ultragoal-artifacts");
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("reports reconciled task-scoped aggregate ultragoal artifacts as inactive in get-status", async () => {
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-state-ops-ultragoal-reconciled-"),
+		);
+		try {
+			await mkdir(join(wd, ".omx", "ultragoal"), { recursive: true });
+			await writeFile(
+				join(wd, ".omx", "ultragoal", "goals.json"),
+				JSON.stringify(
+					{
+						aggregateCompletion: {
+							status: "complete",
+							completedAt: "2026-06-01T12:00:00.000Z",
+							evidence:
+								"task-scoped Codex aggregate completed and active microgoal row was reconciled",
+						},
+						activeGoalId: "G002",
+						goals: [
+							{
+								id: "G001",
+								title: "Fix duplicate HUD panes",
+								objective: "Keep one HUD renderer per leader.",
+								status: "complete",
+								completedAt: "2026-06-01T12:00:00.000Z",
+							},
+							{
+								id: "G002",
+								title: "Still marked running",
+								objective:
+									"Progress-only row left running by the old aggregate path.",
+								status: "in_progress",
+							},
+							{
+								id: "G003",
+								title: "Still marked pending",
+								objective:
+									"Progress-only row left pending by the old aggregate path.",
+								status: "pending",
+							},
+						],
+					},
+					null,
+					2,
+				),
+			);
+
+			const activeResponse = await executeStateOperation("state_list_active", {
+				workingDirectory: wd,
+			});
+			assert.deepEqual(activeResponse.payload, { active_modes: [] });
+
+			const statusResponse = await executeStateOperation("state_get_status", {
+				workingDirectory: wd,
+				mode: "ultragoal",
+			});
+			const statuses =
+				(
+					statusResponse.payload as {
+						statuses?: Record<
+							string,
+							{
+								active?: boolean;
+								phase?: string;
+								path?: string;
+								source?: string;
+								data?: {
+									activeGoal?: unknown;
+									inProgress?: number;
+									pending?: number;
+									complete?: number;
+								};
+							}
+						>;
+					}
+				).statuses || {};
+			assert.equal(statuses.ultragoal?.active, false);
+			assert.equal(statuses.ultragoal?.phase, "complete");
+			assert.equal(
+				statuses.ultragoal?.path,
+				join(wd, ".omx", "ultragoal", "goals.json"),
+			);
+			assert.equal(statuses.ultragoal?.source, "ultragoal-artifacts");
+			assert.equal(statuses.ultragoal?.data?.activeGoal, undefined);
+			assert.equal(statuses.ultragoal?.data?.complete, 1);
+			assert.equal(statuses.ultragoal?.data?.inProgress, 1);
+			assert.equal(statuses.ultragoal?.data?.pending, 1);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -1184,6 +1513,176 @@ describe("state operations directory initialization", () => {
 			assert.deepEqual(listed.payload, { active_modes: [] });
 		} finally {
 			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
+	it("finalizes ralplan when runtime tracker lags but workspace tracker has completed native reviews", async () => {
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-state-ops-ralplan-runtime-lag-complete-"),
+		);
+		const stateRoot = await mkdtemp(
+			join(tmpdir(), "omx-state-ops-ralplan-runtime-lag-root-"),
+		);
+		try {
+			await withStateRootEnv({ OMX_STATE_ROOT: stateRoot }, async () => {
+				const sessionId = "sess-ralplan-runtime-lag-complete";
+				const runtimeStateDir = join(stateRoot, ".omx", "state");
+				const sessionDir = join(runtimeStateDir, "sessions", sessionId);
+				const workspaceStateDir = join(wd, ".omx", "state");
+				await mkdir(sessionDir, { recursive: true });
+				await mkdir(workspaceStateDir, { recursive: true });
+				await writeFile(
+					join(runtimeStateDir, "session.json"),
+					JSON.stringify(
+						{
+							session_id: sessionId,
+							native_session_id: "thread-leader",
+							cwd: wd,
+						},
+						null,
+						2,
+					),
+				);
+				const consensusGate = ralplanConsensusGate(
+					sessionId,
+					"native_subagent",
+				) as {
+					ralplan_architect_review: Record<string, unknown>;
+					ralplan_critic_review: Record<string, unknown>;
+				};
+				consensusGate.ralplan_architect_review.completed_at =
+					"2026-07-07T04:30:00.000Z";
+				consensusGate.ralplan_critic_review.completed_at =
+					"2026-07-07T04:31:00.000Z";
+				await writeFile(
+					subagentTrackingPath(wd),
+					JSON.stringify(
+						{
+							schemaVersion: 1,
+							sessions: {
+								[sessionId]: {
+									session_id: sessionId,
+									leader_thread_id: "thread-leader",
+									updated_at: "2026-07-07T04:31:00.000Z",
+									threads: {
+										"thread-leader": {
+											thread_id: "thread-leader",
+											kind: "leader",
+											first_seen_at: "2026-07-07T04:29:00.000Z",
+											last_seen_at: "2026-07-07T04:29:00.000Z",
+											turn_count: 1,
+										},
+										"thread-architect": {
+											thread_id: "thread-architect",
+											kind: "subagent",
+											first_seen_at: "2026-07-07T04:30:00.000Z",
+											last_seen_at: "2026-07-07T04:30:00.000Z",
+											turn_count: 1,
+										},
+										"thread-critic": {
+											thread_id: "thread-critic",
+											kind: "subagent",
+											first_seen_at: "2026-07-07T04:31:00.000Z",
+											last_seen_at: "2026-07-07T04:31:00.000Z",
+											turn_count: 1,
+										},
+									},
+								},
+							},
+						},
+						null,
+						2,
+					),
+				);
+				await writeFile(
+					join(workspaceStateDir, "subagent-tracking.json"),
+					JSON.stringify(
+						{
+							schemaVersion: 1,
+							sessions: {
+								[sessionId]: {
+									session_id: sessionId,
+									leader_thread_id: "thread-leader",
+									updated_at: "2026-07-07T04:31:00.000Z",
+									threads: {
+										"thread-leader": {
+											thread_id: "thread-leader",
+											kind: "leader",
+											first_seen_at: "2026-07-07T04:29:00.000Z",
+											last_seen_at: "2026-07-07T04:29:00.000Z",
+											turn_count: 1,
+										},
+										"thread-architect": {
+											thread_id: "thread-architect",
+											kind: "subagent",
+											first_seen_at: "2026-07-07T04:30:00.000Z",
+											last_seen_at: "2026-07-07T04:30:00.000Z",
+											completed_at: "2026-07-07T04:30:00.000Z",
+											turn_count: 1,
+										},
+										"thread-critic": {
+											thread_id: "thread-critic",
+											kind: "subagent",
+											first_seen_at: "2026-07-07T04:31:00.000Z",
+											last_seen_at: "2026-07-07T04:31:00.000Z",
+											completed_at: "2026-07-07T04:31:00.000Z",
+											turn_count: 1,
+										},
+									},
+								},
+							},
+						},
+						null,
+						2,
+					),
+				);
+				await writeFile(
+					join(sessionDir, "ralplan-state.json"),
+					JSON.stringify(
+						{
+							mode: "ralplan",
+							active: true,
+							current_phase: "planning",
+							session_id: sessionId,
+						},
+						null,
+						2,
+					),
+				);
+
+				const response = await executeStateOperation("state_write", {
+					workingDirectory: wd,
+					session_id: sessionId,
+					mode: "ralplan",
+					active: false,
+					current_phase: "complete",
+					planning_complete: true,
+					latest_plan_path:
+						".omx/plans/prd-clickstack-otel-consumer-20260707T043000Z.md",
+					terminal_reason: "consensus approved despite runtime tracker lag",
+					ralplan_consensus_gate: consensusGate,
+				});
+
+				assert.equal(response.isError, undefined);
+				const sessionRalplan = JSON.parse(
+					await readFile(join(sessionDir, "ralplan-state.json"), "utf-8"),
+				) as Record<string, unknown>;
+				assert.equal(sessionRalplan.active, false);
+				assert.equal(sessionRalplan.current_phase, "complete");
+				assert.equal(sessionRalplan.status, "complete");
+				assert.equal(
+					sessionRalplan.terminal_reason,
+					"consensus approved despite runtime tracker lag",
+				);
+				assert.equal(
+					(sessionRalplan.ralplan_consensus_gate as Record<string, unknown>)
+						.complete,
+					true,
+				);
+			});
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+			await rm(stateRoot, { recursive: true, force: true });
 		}
 	});
 

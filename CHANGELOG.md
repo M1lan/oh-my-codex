@@ -4,6 +4,35 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-07-08
+
+Patch release after `0.19.0` focused on Ultragoal/Ralplan terminal-state reliability, direct Team state roots, mission queue execution, and dependency hygiene.
+
+### Added
+
+- Mission queue runner MVP (#3063).
+
+### Fixed
+
+- Repair Ultragoal conductor provenance and task-scoped aggregate completion state (#3074, #3072).
+- Handle invalid mission summary JSON (#3070).
+- Fix Ralplan terminalization tracker lag and terminal Stop cache loops (#3068, #3058).
+- Fix state roots for direct Team state directory usage (#3062).
+
+### Changed
+
+- Refresh @types/node to 26.1.0 and @biomejs/biome to 2.5.2 (#3065, #3066).
+- Avoid stale catalog counts in the contributing guide (#3069).
+
+### PRs
+
+- #3058, #3062, #3063, #3065, #3066, #3068, #3069, #3070, #3072, #3074
+
+### Verification
+
+- Dev CI is green for `59a9cb80`; release workflow evidence is appended after tag publication.
+
+
 ## [0.19.0] - 2026-07-04
 
 Reliability and safety-hardening train after `0.18.17`: planning-gate and handoff-artifact execution transports are locked down, the conductor contract and typed subagent/lane provenance are hardened, Ralplan consensus/terminal-state handling is tightened, madmax worktree and resume paths are fixed, and a long-standing parallel-test flake in the Rust suite is eliminated. The CLI/package/plugin contract is preserved.

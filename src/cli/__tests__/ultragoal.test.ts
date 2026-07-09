@@ -492,7 +492,7 @@ describe("cli/ultragoal", () => {
 			assert.match(output, /ultragoal aggregate product: complete/);
 			assert.match(
 				output,
-				/microgoal ledger bookkeeping \(progress-only\): 0\/2 complete, 1 pending, 1 in progress/,
+				/microgoal ledger bookkeeping \(progress-only\): 1\/2 complete, 1 pending, 0 in progress/,
 			);
 		});
 	});

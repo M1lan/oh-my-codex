@@ -259,7 +259,7 @@ function enforceWorkingDirectoryPolicy(
 	return canonicalWorkingDirectory;
 }
 
-function resolveBaseStateDirWithSource(workingDirectory?: string): {
+export function getBaseStateDirWithSource(workingDirectory?: string): {
 	baseStateDir: string;
 	rootSource: StateRootSource;
 } {
@@ -268,40 +268,34 @@ function resolveBaseStateDirWithSource(workingDirectory?: string): {
 		typeof teamStateRootOverride === "string" &&
 		teamStateRootOverride !== ""
 	) {
-		try {
-			return {
-				baseStateDir: resolveWorkingDirectoryForState(teamStateRootOverride),
-				rootSource: "team-env",
-			};
-		} catch {}
+		return {
+			baseStateDir: resolveWorkingDirectoryForState(teamStateRootOverride),
+			rootSource: "team-env",
+		};
 	}
 
 	const omxRootOverride = process.env[OMX_ROOT_ENV]?.trim();
 	if (typeof omxRootOverride === "string" && omxRootOverride !== "") {
-		try {
-			return {
-				baseStateDir: join(
-					resolveWorkingDirectoryForState(omxRootOverride),
-					".omx",
-					"state",
-				),
-				rootSource: "omx-root-env",
-			};
-		} catch {}
+		return {
+			baseStateDir: join(
+				resolveWorkingDirectoryForState(omxRootOverride),
+				".omx",
+				"state",
+			),
+			rootSource: "omx-root-env",
+		};
 	}
 
 	const omxStateRootOverride = process.env[OMX_STATE_ROOT_ENV]?.trim();
 	if (typeof omxStateRootOverride === "string" && omxStateRootOverride !== "") {
-		try {
-			return {
-				baseStateDir: join(
-					resolveWorkingDirectoryForState(omxStateRootOverride),
-					".omx",
-					"state",
-				),
-				rootSource: "omx-state-root-env",
-			};
-		} catch {}
+		return {
+			baseStateDir: join(
+				resolveWorkingDirectoryForState(omxStateRootOverride),
+				".omx",
+				"state",
+			),
+			rootSource: "omx-state-root-env",
+		};
 	}
 
 	return {
@@ -314,7 +308,7 @@ function resolveBaseStateDirWithSource(workingDirectory?: string): {
 	};
 }
 export function getBaseStateDir(workingDirectory?: string): string {
-	return resolveBaseStateDirWithSource(workingDirectory).baseStateDir;
+	return getBaseStateDirWithSource(workingDirectory).baseStateDir;
 }
 
 export function getStateDir(
@@ -517,7 +511,7 @@ export async function resolveRuntimeStateScope(
 	explicitSessionId?: string,
 ): Promise<ResolvedRuntimeStateScope> {
 	const cwd = resolveWorkingDirectoryForState(workingDirectory);
-	const { baseStateDir, rootSource } = resolveBaseStateDirWithSource(cwd);
+	const { baseStateDir, rootSource } = getBaseStateDirWithSource(cwd);
 	const metadata = await readSessionMetadataFromBaseStateDir(cwd, baseStateDir);
 	const validatedExplicit = validateSessionId(explicitSessionId);
 	const envSessionId = readSessionIdFromEnvironment();

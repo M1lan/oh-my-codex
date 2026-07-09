@@ -1,30 +1,27 @@
-# oh-my-codex 0.19.0
+# oh-my-codex 0.19.1
 
-> Release status: candidate. Publication proof is recorded in `docs/qa/release-readiness-0.19.0.md`; this body is finalized after dev/main CI, tag workflow, GitHub release, native asset, and npm publication evidence are complete.
-
-`0.19.0` is a reliability and safety-hardening release after `0.18.17`. It preserves the existing CLI/package/plugin contract while locking down planning-gate and handoff-artifact execution transports, hardening the conductor contract and typed subagent/lane provenance, tightening Ralplan consensus/terminal-state handling, fixing madmax worktree and resume paths, and eliminating a long-standing parallel-test flake in the Rust suite.
+`0.19.1` is a patch release after `0.19.0` focused on Ultragoal/Ralplan terminal-state reliability, direct Team state roots, mission queue execution, and dependency hygiene.
 
 ## Highlights
 
-- Lock down planning-gate and handoff-artifact execution transports while still allowing legitimate deep-interview→ralplan artifact handoff.
-- Harden the conductor contract, typed subagent provenance, typed-lane fences, shell-guard target parsing, and conductor reuse ledger.
-- Tighten Ralplan consensus review evidence, terminal closeout state writes, and heredoc redirect scanning.
-- Fix Autopilot ralplan handoff, madmax worktree runtime roots, and madmax resume plugin cache preflight.
-- Render superseded Ultragoal goals correctly in the HUD.
-- Eliminate the intermittent Rust sparkshell test flake by making `unique_temp_dir()` collision-proof under parallel same-process execution.
+- Repair Ultragoal conductor provenance and task-scoped aggregate completion state (#3074, #3072).
+- Handle invalid mission summary JSON without breaking release/runtime flows (#3070).
+- Fix Ralplan terminalization tracker lag and terminal Stop cache loops (#3068, #3058).
+- Fix state roots for direct Team state directory usage (#3062).
+- Add the mission queue runner MVP (#3063).
+- Refresh dev dependencies: @types/node 26.1.0 and @biomejs/biome 2.5.2 (#3065, #3066).
+- Avoid stale catalog counts in the contributing guide (#3069).
 
 ## Compatibility
 
-No breaking CLI, package, plugin-layout, or configuration changes are intended.
+No breaking CLI, package, plugin-layout, native asset, or configuration changes are intended.
 
 ## Validation
 
-Release readiness evidence is recorded in `docs/qa/release-readiness-0.19.0.md`.
-
-Release-prep gates include version sync for `v0.19.0`, build, native-agent verification, plugin mirror/bundle checks, catalog docs check, the full Rust and node test suites (Rust rerun repeatedly to prove the flake fix), `pnpm pack --dry-run`, and `git diff --check`. Branch CI, dev/main promotion, tag-triggered release workflow, GitHub release proof, and npm publication proof are appended to readiness evidence after publication.
+Release validation is based on the green dev CI for `59a9cb80`, local build/package checks before tagging, main promotion CI, and the tag-triggered GitHub release workflow.
 
 ## Contributors
 
 Thanks to the contributors who made this release possible.
 
-**Full Changelog**: [`v0.18.17...v0.19.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.18.17...v0.19.0)
+**Full Changelog**: [`v0.19.0...v0.19.1`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.19.0...v0.19.1)

@@ -8,6 +8,7 @@ import {
 	getAllScopedStateDirs,
 	getAllScopedStatePaths,
 	getBaseStateDir,
+	getBaseStateDirWithSource,
 	getAllSessionScopedStateDirs,
 	getAllSessionScopedStatePaths,
 	getReadScopedStateFilePaths,
@@ -124,6 +125,10 @@ describe("state paths", () => {
 				getStatePath("ralph", "/tmp/source", "sess1"),
 				"/tmp/explicit-team-state/sessions/sess1/ralph-state.json",
 			);
+			assert.deepEqual(getBaseStateDirWithSource("/tmp/source"), {
+				baseStateDir: "/tmp/explicit-team-state",
+				rootSource: "team-env",
+			});
 		} finally {
 			if (typeof prevRoot === "string") process.env.OMX_ROOT = prevRoot;
 			else delete process.env.OMX_ROOT;
@@ -153,6 +158,10 @@ describe("state paths", () => {
 				getStatePath("ralph", "/tmp/source", "sess1"),
 				"/tmp/omx-box/.omx/state/sessions/sess1/ralph-state.json",
 			);
+			assert.deepEqual(getBaseStateDirWithSource("/tmp/source"), {
+				baseStateDir: "/tmp/omx-box/.omx/state",
+				rootSource: "omx-root-env",
+			});
 		} finally {
 			if (typeof prevRoot === "string") process.env.OMX_ROOT = prevRoot;
 			else delete process.env.OMX_ROOT;
@@ -162,6 +171,30 @@ describe("state paths", () => {
 			if (typeof prevTeamRoot === "string")
 				process.env.OMX_TEAM_STATE_ROOT = prevTeamRoot;
 			else delete process.env.OMX_TEAM_STATE_ROOT;
+		}
+	});
+
+	it("fails closed when an explicit state root is outside the allowlist", async () => {
+		const allowedRoot = await mkRealTemp("omx-state-root-allowed-");
+		const disallowedRoot = await mkRealTemp("omx-state-root-disallowed-");
+		const prevAllowlist = process.env.OMX_MCP_WORKDIR_ROOTS;
+		const prevTeamRoot = process.env.OMX_TEAM_STATE_ROOT;
+		process.env.OMX_MCP_WORKDIR_ROOTS = allowedRoot;
+		process.env.OMX_TEAM_STATE_ROOT = disallowedRoot;
+		try {
+			assert.throws(
+				() => getBaseStateDirWithSource(join(allowedRoot, "workspace")),
+				/outside allowed roots \(OMX_MCP_WORKDIR_ROOTS\)/,
+			);
+		} finally {
+			if (typeof prevAllowlist === "string")
+				process.env.OMX_MCP_WORKDIR_ROOTS = prevAllowlist;
+			else delete process.env.OMX_MCP_WORKDIR_ROOTS;
+			if (typeof prevTeamRoot === "string")
+				process.env.OMX_TEAM_STATE_ROOT = prevTeamRoot;
+			else delete process.env.OMX_TEAM_STATE_ROOT;
+			await rm(allowedRoot, { recursive: true, force: true });
+			await rm(disallowedRoot, { recursive: true, force: true });
 		}
 	});
 

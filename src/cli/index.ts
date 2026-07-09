@@ -74,6 +74,7 @@ import { mcpServeCommand } from "./mcp-serve.js";
 import { adaptCommand } from "./adapt.js";
 import { listCommand } from "./list.js";
 import { authCommand } from "./auth.js";
+import { missionCommand } from "./mission.js";
 import { runAuthHotswap } from "../auth/hotswap.js";
 import {
 	MADMAX_FLAG,
@@ -275,13 +276,15 @@ Usage:
   omx exec      Run codex exec non-interactively with OMX AGENTS/overlay injection
   omx exec inject <session-id> --prompt <text>
                 Queue audited follow-up instructions for a running non-interactive exec job
+  omx mission <file>
+                Run a prompt/checklist file sequentially through omx exec with durable summary
   omx imagegen continuation <session-id> --artifact <name>
                 Queue a Stop-hook continuation for built-in image generation turns
   omx setup     Install skills, prompts, CLI-first config, and scope-specific AGENTS.md
                 (user scope prompts for legacy vs plugin skill delivery when needed)
   omx update    Install the stable channel now, then refresh setup
   omx update --stable
-                Install/rollback to the stable release (oh-my-codex@latest), then refresh setup
+                Install/rollback to npm stable (oh-my-codex@latest), then refresh setup
   omx update --dev
                 Install the upstream dev branch, then refresh setup
   omx uninstall Remove OMX configuration and clean up installed artifacts
@@ -439,6 +442,7 @@ const TMUX_EXTENDED_KEYS_LOCK_STALE_MS = 30_000;
 type CliCommand =
 	| "launch"
 	| "exec"
+	| "mission"
 	| "imagegen"
 	| "setup"
 	| "update"
@@ -492,6 +496,7 @@ const NESTED_HELP_COMMANDS = new Set<CliCommand>([
 	"agents-init",
 	"deepinit",
 	"exec",
+	"mission",
 	"imagegen",
 	"hooks",
 	"list",
@@ -2898,6 +2903,7 @@ export async function main(args: string[]): Promise<void> {
 	const knownCommands = new Set([
 		"launch",
 		"exec",
+		"mission",
 		"imagegen",
 		"setup",
 		"update",
@@ -3049,6 +3055,19 @@ export async function main(args: string[]): Promise<void> {
 					await execWithOverlay(launchArgs);
 				}
 				break;
+			case "mission":
+				await missionCommand(args.slice(1), {
+					runTask: async (prompt, codexArgs) => {
+						const priorExitCode = process.exitCode;
+						process.exitCode = undefined;
+						await execWithOverlay([...codexArgs, prompt]);
+						const exitCode =
+							typeof process.exitCode === "number" ? process.exitCode : 0;
+						process.exitCode = priorExitCode;
+						return exitCode;
+					},
+				});
+				break;
 			case "imagegen":
 				await imagegenCommand(args.slice(1));
 				break;
@@ -3189,6 +3208,12 @@ async function readStaleCurrentAutopilotStatus(
 	return { phase: phase ?? "active" };
 }
 
+function formatDurableUltragoalStatusForCli(status: string): string {
+	return status === "failed"
+		? "ultragoal: FAILED (phase: failed)"
+		: `ultragoal: ACTIVE (phase: ${status})`;
+}
+
 async function showStatus(): Promise<void> {
 	const { readFile } = await import("fs/promises");
 	const cwd = process.cwd();
@@ -3226,7 +3251,9 @@ async function showStatus(): Promise<void> {
 		const ultragoalState = await readUltragoalState(cwd).catch(() => null);
 		if (states.length === 0) {
 			if (ultragoalState?.active) {
-				console.log(`ultragoal: ACTIVE (phase: ${ultragoalState.status})`);
+				console.log(
+					formatDurableUltragoalStatusForCli(ultragoalState.status ?? "active"),
+				);
 				return;
 			}
 			const staleAutopilot = await readStaleCurrentAutopilotStatus(cwd);
@@ -3237,6 +3264,7 @@ async function showStatus(): Promise<void> {
 			console.log("No active modes.");
 			return;
 		}
+		let hasAuthoritativeActiveUltragoalMode = false;
 		for (const path of states) {
 			const content = await readFile(path, "utf-8");
 			let state: Record<string, unknown>;
@@ -3248,13 +3276,23 @@ async function showStatus(): Promise<void> {
 			}
 			const file = basename(path);
 			const mode = file.replace("-state.json", "");
-			if (mode === "ultragoal" && ultragoalState?.active) continue;
+			if (mode === "ultragoal" && state.active === true) {
+				hasAuthoritativeActiveUltragoalMode = true;
+			}
+			if (
+				mode === "ultragoal" &&
+				ultragoalState?.active &&
+				state.active !== true
+			)
+				continue;
 			console.log(
 				`${mode}: ${state.active === true ? "ACTIVE" : "inactive"} (phase: ${String(state.current_phase || "n/a")})`,
 			);
 		}
-		if (ultragoalState?.active) {
-			console.log(`ultragoal: ACTIVE (phase: ${ultragoalState.status})`);
+		if (ultragoalState?.active && !hasAuthoritativeActiveUltragoalMode) {
+			console.log(
+				formatDurableUltragoalStatusForCli(ultragoalState.status ?? "active"),
+			);
 		}
 		if (!hasAuthoritativeActiveMode && !ultragoalState?.active) {
 			const staleAutopilot = await readStaleCurrentAutopilotStatus(cwd);

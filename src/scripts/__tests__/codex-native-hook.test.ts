@@ -9780,6 +9780,104 @@ exit 0
 		}
 	});
 
+	it("does not self-lock PreToolUse after completed deep-interview handoff leaves Autopilot in deep-interview phase", async () => {
+		const cwd = await mkdtemp(
+			join(
+				tmpdir(),
+				"omx-native-hook-pretool-deep-interview-completed-autopilot-",
+			),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-di-completed-autopilot";
+			const threadId = "thread-di-completed-autopilot";
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			await mkdir(sessionDir, { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(join(sessionDir, "skill-active-state.json"), {
+				version: 1,
+				active: true,
+				skill: "autopilot",
+				keyword: "$autopilot",
+				phase: "deep-interview",
+				initialized_mode: "autopilot",
+				initialized_state_path: `.omx/state/sessions/${sessionId}/autopilot-state.json`,
+				session_id: sessionId,
+				thread_id: threadId,
+				active_skills: [
+					{
+						skill: "autopilot",
+						phase: "deep-interview",
+						active: true,
+						session_id: sessionId,
+						thread_id: threadId,
+					},
+				],
+			});
+			await writeJson(join(sessionDir, "deep-interview-state.json"), {
+				active: false,
+				mode: "deep-interview",
+				current_phase: "completed",
+				session_id: sessionId,
+				thread_id: threadId,
+				deep_interview_gate: {
+					status: "complete",
+					handoff_summary:
+						"Requirements were clarified before the Autopilot handoff.",
+				},
+			});
+			await writeJson(join(sessionDir, "autopilot-state.json"), {
+				active: true,
+				mode: "autopilot",
+				current_phase: "deep-interview",
+				session_id: sessionId,
+				thread_id: threadId,
+			});
+
+			const implementationEdit = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: threadId,
+					tool_name: "Edit",
+					tool_use_id: "tool-di-completed-autopilot-edit",
+					tool_input: {
+						file_path: "src/runtime.ts",
+						old_string: "a",
+						new_string: "b",
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(implementationEdit.omxEventName, "pre-tool-use");
+			assert.equal(implementationEdit.outputJson, null);
+
+			const stateRepair = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: threadId,
+					tool_name: "mcp__omx_state__state_write",
+					tool_use_id: "tool-di-completed-autopilot-state-repair",
+					tool_input: {
+						mode: "autopilot",
+						current_phase: "ralplan",
+						active: true,
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(stateRepair.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("allows deep-interview artifact and state writes while blocking implementation Bash writes", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-pretool-deep-interview-artifact-"),
@@ -22422,6 +22520,92 @@ PY`,
 		}
 	});
 
+	it("clears stale ralplan Stop cache when authoritative state is terminal inactive", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-stop-ralplan-terminal-cache-"),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-stop-ralplan-terminal-cache";
+			const threadId = "thread-stop-ralplan-terminal-cache";
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(join(stateDir, "skill-active-state.json"), {
+				active: false,
+				skill: "ralplan",
+				phase: "complete",
+				session_id: sessionId,
+				active_skills: [],
+			});
+			await writeJson(join(stateDir, "ralplan-state.json"), {
+				active: false,
+				mode: "ralplan",
+				current_phase: "complete",
+				status: "complete",
+				run_outcome: "complete",
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "skill-active-state.json"),
+				{
+					active: false,
+					skill: "ralplan",
+					phase: "complete",
+					session_id: sessionId,
+					active_skills: [],
+				},
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralplan-state.json"),
+				{
+					active: false,
+					mode: "ralplan",
+					current_phase: "complete",
+					status: "complete",
+					run_outcome: "complete",
+					session_id: sessionId,
+					cwd,
+				},
+			);
+			await writeJson(join(stateDir, "native-stop-state.json"), {
+				sessions: {
+					[sessionId]: {
+						last_signature: `skill-stop|${sessionId}|${threadId}|no-message|skill_ralplan_planning_continue_artifact`,
+						updated_at: "2026-07-04T00:00:00.000Z",
+					},
+					[threadId]: {
+						last_signature: `skill-stop|${sessionId}|${threadId}|no-message|skill_ralplan_planning_continue_artifact`,
+						updated_at: "2026-07-04T00:00:00.000Z",
+					},
+				},
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd,
+					session_id: sessionId,
+					thread_id: threadId,
+					stop_hook_active: true,
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.omxEventName, "stop");
+			assert.equal(result.outputJson, null);
+			const stopState = JSON.parse(
+				await readFile(join(stateDir, "native-stop-state.json"), "utf-8"),
+			) as { sessions?: Record<string, unknown> };
+			assert.deepEqual(stopState.sessions, {});
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps blocking current session ralplan when canonical root inactive ralplan state lacks project context", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-stop-ralplan-canonical-root-no-cwd-"),
@@ -29297,6 +29481,274 @@ PY`,
 			);
 
 			assert.equal(result.outputJson, null);
+		} finally {
+			if (originalOmxRoot === undefined) delete process.env.OMX_ROOT;
+			else process.env.OMX_ROOT = originalOmxRoot;
+			if (originalOmxStateRoot === undefined) delete process.env.OMX_STATE_ROOT;
+			else process.env.OMX_STATE_ROOT = originalOmxStateRoot;
+			if (originalOmxTeamStateRoot === undefined)
+				delete process.env.OMX_TEAM_STATE_ROOT;
+			else process.env.OMX_TEAM_STATE_ROOT = originalOmxTeamStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows conductor writes from tracked typed native subagents when PreToolUse omits thread_spawn source", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-conductor-tracked-subagent-no-source-"),
+		);
+		const originalOmxRoot = process.env.OMX_ROOT;
+		const originalOmxStateRoot = process.env.OMX_STATE_ROOT;
+		const originalOmxTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+		try {
+			process.env.OMX_ROOT = cwd;
+			delete process.env.OMX_STATE_ROOT;
+			delete process.env.OMX_TEAM_STATE_ROOT;
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-conductor-tracked-subagent-no-source";
+			const leaderThreadId = "thread-conductor-leader-no-source";
+			const childThreadId = "thread-conductor-child-no-source";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ultragoal",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ultragoal-state.json"),
+				{
+					active: true,
+					mode: "ultragoal",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "executor",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "executor",
+					tool_name: "apply_patch",
+					tool_input: { file_path: "configs/ws/kalshi_ws_auth_evidence.json" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson, null);
+		} finally {
+			if (originalOmxRoot === undefined) delete process.env.OMX_ROOT;
+			else process.env.OMX_ROOT = originalOmxRoot;
+			if (originalOmxStateRoot === undefined) delete process.env.OMX_STATE_ROOT;
+			else process.env.OMX_STATE_ROOT = originalOmxStateRoot;
+			if (originalOmxTeamStateRoot === undefined)
+				delete process.env.OMX_TEAM_STATE_ROOT;
+			else process.env.OMX_TEAM_STATE_ROOT = originalOmxTeamStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("blocks conductor writes when corrupt tracker state labels the leader as a subagent", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-conductor-corrupt-leader-subagent-"),
+		);
+		const originalOmxRoot = process.env.OMX_ROOT;
+		const originalOmxStateRoot = process.env.OMX_STATE_ROOT;
+		const originalOmxTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+		try {
+			process.env.OMX_ROOT = cwd;
+			delete process.env.OMX_STATE_ROOT;
+			delete process.env.OMX_TEAM_STATE_ROOT;
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-conductor-corrupt-leader-subagent";
+			const leaderThreadId = "thread-conductor-corrupt-leader";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ultragoal",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ultragoal-state.json"),
+				{
+					active: true,
+					mode: "ultragoal",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "subagent",
+								mode: "executor",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: leaderThreadId,
+					agent_role: "executor",
+					tool_name: "apply_patch",
+					tool_input: { file_path: "configs/ws/kalshi_ws_auth_evidence.json" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson?.decision, "block");
+			assert.match(
+				String(result.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ultragoal phase: executing\)/,
+			);
+		} finally {
+			if (originalOmxRoot === undefined) delete process.env.OMX_ROOT;
+			else process.env.OMX_ROOT = originalOmxRoot;
+			if (originalOmxStateRoot === undefined) delete process.env.OMX_STATE_ROOT;
+			else process.env.OMX_STATE_ROOT = originalOmxStateRoot;
+			if (originalOmxTeamStateRoot === undefined)
+				delete process.env.OMX_TEAM_STATE_ROOT;
+			else process.env.OMX_TEAM_STATE_ROOT = originalOmxTeamStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("blocks conductor writes when thread_spawn provenance is attached to the leader thread", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-conductor-thread-spawn-leader-"),
+		);
+		const originalOmxRoot = process.env.OMX_ROOT;
+		const originalOmxStateRoot = process.env.OMX_STATE_ROOT;
+		const originalOmxTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+		try {
+			process.env.OMX_ROOT = cwd;
+			delete process.env.OMX_STATE_ROOT;
+			delete process.env.OMX_TEAM_STATE_ROOT;
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-conductor-thread-spawn-leader";
+			const leaderThreadId = "thread-conductor-thread-spawn-leader";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ultragoal",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ultragoal-state.json"),
+				{
+					active: true,
+					mode: "ultragoal",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: leaderThreadId,
+					agent_role: "executor",
+					source: {
+						subagent: {
+							thread_spawn: {
+								parent_thread_id: leaderThreadId,
+							},
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "configs/ws/kalshi_ws_auth_evidence.json" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson?.decision, "block");
+			assert.match(
+				String(result.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ultragoal phase: executing\)/,
+			);
 		} finally {
 			if (originalOmxRoot === undefined) delete process.env.OMX_ROOT;
 			else process.env.OMX_ROOT = originalOmxRoot;
