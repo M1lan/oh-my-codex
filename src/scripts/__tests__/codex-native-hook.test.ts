@@ -15516,14 +15516,14 @@ PY`,
 			assert.equal(allowedPatch.outputJson, null);
 
 			const allowedCommands = [
-				"bd --db .beads/issues.db create 'Issue title'",
-				"bd --db .beads/issues.db update OMX-1 --title 'Issue title'",
-				"bd --db .beads/issues.db edit OMX-1 --title 'Issue title'",
-				"bd --db .beads/issues.db comments add OMX-1 'evidence'",
-				"bd --db .beads/issues.db close OMX-1",
-				"bd --db .beads/issues.db reopen OMX-1",
-				"bd --db .beads/issues.db status OMX-1",
-				"bd --db .beads/issues.db dep add OMX-1 OMX-2",
+				"br --db .beads/issues.db create 'Issue title'",
+				"br --db .beads/issues.db update OMX-1 --title 'Issue title'",
+				"br --db .beads/issues.db edit OMX-1 --title 'Issue title'",
+				"br --db .beads/issues.db comments add OMX-1 'evidence'",
+				"br --db .beads/issues.db close OMX-1",
+				"br --db .beads/issues.db reopen OMX-1",
+				"br --db .beads/issues.db status OMX-1",
+				"br --db .beads/issues.db dep add OMX-1 OMX-2",
 			];
 
 			for (const [index, command] of allowedCommands.entries()) {
@@ -15592,16 +15592,16 @@ PY`,
 			});
 
 			const blockedCommands = [
-				"bd --db /tmp/outside.db create 'Issue title'",
-				"bd --db ../outside.db create 'Issue title'",
-				"bd --db .beads create 'Issue title'",
-				"bd --db $DB create 'Issue title'",
-				"DB=.beads/issues.db bd --db $DB create 'Issue title'",
-				"env bd --db /tmp/outside.db create 'Issue title'",
-				"command bd --db /tmp/outside.db create 'Issue title'",
-				"bd --db .beads/issues.db export",
-				"bd --db .beads/issues.db create 'Issue title' > src/leak.ts",
-				"bd --db .beads/issues.db create 'Issue title'; cat > src/leak.ts",
+				"br --db /tmp/outside.db create 'Issue title'",
+				"br --db ../outside.db create 'Issue title'",
+				"br --db .beads create 'Issue title'",
+				"br --db $DB create 'Issue title'",
+				"DB=.beads/issues.db br --db $DB create 'Issue title'",
+				"env br --db /tmp/outside.db create 'Issue title'",
+				"command br --db /tmp/outside.db create 'Issue title'",
+				"br --db .beads/issues.db export",
+				"br --db .beads/issues.db create 'Issue title' > src/leak.ts",
+				"br --db .beads/issues.db create 'Issue title'; cat > src/leak.ts",
 			];
 
 			for (const [index, command] of blockedCommands.entries()) {
@@ -15633,7 +15633,7 @@ PY`,
 					tool_name: "Bash",
 					tool_use_id: "tool-autopilot-beads-mention-write",
 					tool_input: {
-						command: "echo bd --db .beads/issues.db create > src/leak.ts",
+						command: "echo br --db .beads/issues.db create > src/leak.ts",
 					},
 				},
 				{ cwd },

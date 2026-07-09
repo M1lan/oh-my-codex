@@ -4440,21 +4440,21 @@ function shellTokenizeLiteralCommand(command: string): string[] | null {
 	return tokens;
 }
 
-function findLiteralBdExecutableIndex(tokens: string[]): number {
-	if (tokens[0] === "bd") return 0;
+function findLiteralBrExecutableIndex(tokens: string[]): number {
+	if (tokens[0] === "br") return 0;
 	if (
 		tokens[0] === "command" ||
 		tokens[0] === "builtin" ||
 		tokens[0] === "exec" ||
 		tokens[0] === "nohup"
 	) {
-		return tokens[1] === "bd" ? 1 : -1;
+		return tokens[1] === "br" ? 1 : -1;
 	}
 	if (tokens[0] !== "env") return -1;
 
 	for (let index = 1; index < tokens.length; index += 1) {
 		const token = tokens[index] ?? "";
-		if (token === "bd") return index;
+		if (token === "br") return index;
 		if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) continue;
 		if (token.startsWith("-")) continue;
 		return -1;
@@ -4482,21 +4482,21 @@ function classifyRalplanBeadsMetadataCommand(
 	command: string,
 ): RalplanBeadsCommandClassification {
 	const trimmedCommand = command.trim();
-	const startsWithBd =
-		/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"$`]*"|'[^']*'|[^\s"'$`;&|<>]+)\s+)*bd(?:\s|$)/.test(
+	const startsWithBr =
+		/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"$`]*"|'[^']*'|[^\s"'$`;&|<>]+)\s+)*br(?:\s|$)/.test(
 			trimmedCommand,
 		);
-	const hasCompoundBd = /[;&|()]\s*bd(?:\s|$)/.test(command);
+	const hasCompoundBr = /[;&|()]\s*br(?:\s|$)/.test(command);
 	const tokens = shellTokenizeLiteralCommand(command);
-	const bdExecutableIndex = tokens ? findLiteralBdExecutableIndex(tokens) : -1;
-	if (!startsWithBd && !hasCompoundBd && bdExecutableIndex === -1)
+	const brExecutableIndex = tokens ? findLiteralBrExecutableIndex(tokens) : -1;
+	if (!startsWithBr && !hasCompoundBr && brExecutableIndex === -1)
 		return { present: false, allowed: false };
 
-	if (!tokens || bdExecutableIndex !== 0) {
+	if (!tokens || brExecutableIndex !== 0) {
 		return {
 			present: true,
 			allowed: false,
-			reason: "Beads tracker command must be a single literal bd invocation",
+			reason: "Beads tracker command must be a single literal br invocation",
 		};
 	}
 
