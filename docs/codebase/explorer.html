@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>oh-my-codex — Codebase Explorer</title>
+    <script
+      type="module"
+      src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js"
+    ></script>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --fg: #e6edf3;
+        --muted: #8b949e;
+        --accent: #58a6ff;
+        --accent-dim: #1f6feb33;
+        --code: #0b0f14;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      header .logo { font-weight: 700; color: var(--accent); }
+      header .ver { color: var(--muted); font-size: 12px; }
+      header .spacer { flex: 1; }
+      header input {
+        background: var(--code);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        padding: 6px 10px;
+        border-radius: 6px;
+        width: 240px;
+      }
+      .layout { display: flex; min-height: calc(100vh - 54px); }
+      nav {
+        width: 260px;
+        border-right: 1px solid var(--border);
+        padding: 16px 10px;
+        background: var(--panel);
+      }
+      nav h4 {
+        margin: 14px 8px 6px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      nav a {
+        display: block;
+        padding: 7px 10px;
+        border-radius: 6px;
+        color: var(--fg);
+        text-decoration: none;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      nav a:hover { background: var(--accent-dim); }
+      nav a.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+      nav a small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; }
+      main {
+        flex: 1;
+        padding: 26px 40px;
+        max-width: 1000px;
+        overflow-x: auto;
+      }
+      main h1 { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+      main h2 { margin-top: 32px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+      main table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+      main th, main td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+      main th { background: var(--panel); }
+      main code {
+        background: var(--code);
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      main pre {
+        background: var(--code);
+        border: 1px solid var(--border);
+        padding: 14px;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+      main pre code { background: none; padding: 0; }
+      main a { color: var(--accent); }
+      .mermaid {
+        background: #fff;
+        border-radius: 8px;
+        padding: 14px;
+        margin: 14px 0;
+        text-align: center;
+      }
+      .err {
+        border: 1px solid #f85149;
+        background: #f8514922;
+        padding: 14px 18px;
+        border-radius: 8px;
+        color: #ffa198;
+      }
+      .loading { color: var(--muted); }
+    </style>
+  </head>
+  <body data-signals="{doc: 'README', q: ''}">
+    <header>
+      <span class="logo">oh-my-codex</span>
+      <span class="ver">codebase explorer</span>
+      <span class="spacer"></span>
+      <input
+        type="search"
+        placeholder="filter sections…"
+        data-bind:q
+        aria-label="Filter navigation"
+      />
+    </header>
+
+    <div class="layout">
+      <nav aria-label="Documents">
+        <h4>Guide</h4>
+        <a
+          data-on:click="$doc='README'; window.omxLoad('README')"
+          data-class="{active: $doc==='README'}"
+          data-show="$q==='' || 'overview readme guide start'.includes($q.toLowerCase())"
+        >Overview<small>what this project is</small></a>
+        <a
+          data-on:click="$doc='architecture'; window.omxLoad('architecture')"
+          data-class="{active: $doc==='architecture'}"
+          data-show="$q==='' || 'architecture diagrams pipeline team mcp modes'.includes($q.toLowerCase())"
+        >Architecture<small>diagrams: system, pipeline, team, MCP</small></a>
+        <a
+          data-on:click="$doc='data-flow'; window.omxLoad('data-flow')"
+          data-class="{active: $doc==='data-flow'}"
+          data-show="$q==='' || 'data flow sequence session run state'.includes($q.toLowerCase())"
+        >Data flow<small>sequence diagrams</small></a>
+        <a
+          data-on:click="$doc='modules'; window.omxLoad('modules')"
+          data-class="{active: $doc==='modules'}"
+          data-show="$q==='' || 'modules reference cli team pipeline crates agents'.includes($q.toLowerCase())"
+        >Module reference<small>every subsystem</small></a>
+        <h4>Raw files</h4>
+        <a href="./README.md">README.md</a>
+        <a href="./architecture.md">architecture.md</a>
+        <a href="./data-flow.md">data-flow.md</a>
+        <a href="./modules.md">modules.md</a>
+      </nav>
+
+      <main id="content">
+        <p class="loading">Loading…</p>
+      </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+
+      const content = document.getElementById("content");
+
+      async function omxLoad(name) {
+        content.innerHTML = '<p class="loading">Loading ' + name + '.md…</p>';
+        try {
+          const res = await fetch("./" + name + ".md", { cache: "no-cache" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const md = await res.text();
+          content.innerHTML = marked.parse(md);
+          // Convert fenced ```mermaid blocks into mermaid containers.
+          content.querySelectorAll("code.language-mermaid").forEach((code) => {
+            const div = document.createElement("div");
+            div.className = "mermaid";
+            div.textContent = code.textContent;
+            code.closest("pre").replaceWith(div);
+          });
+          await mermaid.run({ nodes: content.querySelectorAll(".mermaid") });
+          content.scrollIntoView({ block: "start" });
+        } catch (e) {
+          content.innerHTML =
+            '<div class="err"><strong>Could not load ' + name +
+            '.md.</strong><br/>Browsers block <code>fetch()</code> over ' +
+            '<code>file://</code>. Serve this folder over HTTP:<br/>' +
+            '<pre><code>python3 -m http.server -d docs/codebase 8080</code></pre>' +
+            'then open <code>http://localhost:8080/explorer.html</code>. ' +
+            'On GitHub Pages it works directly.<br/><br/>' +
+            'Detail: ' + e.message + "</div>";
+        }
+      }
+
+      window.omxLoad = omxLoad;
+      omxLoad("README");
+    </script>
+  </body>
+</html>
