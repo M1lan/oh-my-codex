@@ -49,3 +49,5 @@ snapshot.json
 !.codex/prompts/
 !.codex/prompts/**
 .forks/
+.codegraph
+
