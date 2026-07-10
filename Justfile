@@ -13,10 +13,11 @@
 # Every recipe carries a [group('...')] so the menu/fzf launchers categorize
 # it and the self-updating menu can read it from `just --dump`.
 
-set shell := ["bash", "-euo", "pipefail", "-c"]
+set shell := ["/opt/homebrew/bin/bash", "-euo", "pipefail", "-c"]
 set dotenv-load := false
 set positional-arguments := true
 
+pnpm_cmd := "source ~/.config/sh/fnm-init.sh >/dev/null 2>&1 || true; corepack enable >/dev/null 2>&1; pnpm"
 helpers := justfile_directory() / ".just" / "helpers"
 
 # ── Meta & launchers ──
@@ -42,7 +43,7 @@ info:
 version:
     @echo "oh-my-codex $(jq -r .version package.json)"
     @echo "node  $(node --version 2>/dev/null || echo 'not installed')"
-    @echo "pnpm  $(pnpm --version 2>/dev/null || echo 'not installed')"
+    @echo "pnpm  $({{pnpm_cmd}} --version 2>/dev/null || echo 'not installed')"
     @echo "cargo $(cargo --version 2>/dev/null || echo 'not installed')"
 
 # Guided gum command builder (parameters become fill-in forms)
@@ -71,8 +72,8 @@ doctor-install:
 # One-time dev setup: install node deps, then build
 [group('meta')]
 setup:
-    pnpm install
-    pnpm run build
+    {{pnpm_cmd}} install
+    {{pnpm_cmd}} run build
     @echo "setup complete -- run 'just verify' to confirm the gate is green"
 
 # ── Build & Run ──
@@ -80,23 +81,23 @@ setup:
 # Compile TypeScript to dist/ (tsc)
 [group('build')]
 build:
-    pnpm run build
+    {{pnpm_cmd}} run build
 
 # Full build: TS + explore harness + sparkshell + api
 [group('build')]
 build-full:
-    pnpm run build:full
+    {{pnpm_cmd}} run build:full
 
 # Build the Rust explore harness (debug)
 [group('build')]
 build-explore:
-    pnpm run build:explore
+    {{pnpm_cmd}} run build:explore
 
 # Watch-rebuild loop (tsc --watch)
 [group('build')]
 [no-exit-message]
 dev:
-    pnpm run dev
+    {{pnpm_cmd}} run dev
 
 # Run the omx CLI from the build (just run -- doctor)
 [group('run')]
@@ -113,59 +114,59 @@ omx-setup:
 # Full test suite (build + verify + node tests + catalog check)
 [group('test')]
 test:
-    pnpm run test
+    {{pnpm_cmd}} run test
 
 # Node tests only against the existing dist/ (fast inner loop)
 [group('test')]
 test-node:
-    pnpm run test:node
+    {{pnpm_cmd}} run test:node
 
 # Explore-harness tests (cargo + node)
 [group('test')]
 test-explore:
-    pnpm run test:explore
+    {{pnpm_cmd}} run test:explore
 
 # Recent-bug regression suite
 [group('test')]
 test-regressions:
-    pnpm run test:recent-bug-regressions
+    {{pnpm_cmd}} run test:recent-bug-regressions
 
 # Full TypeScript coverage report (c8)
 [group('test')]
 coverage:
-    pnpm run coverage:ts:full
+    {{pnpm_cmd}} run coverage:ts:full
 
 # Team-critical coverage gate (thresholds enforced)
 [group('test')]
 coverage-team:
-    pnpm run coverage:team-critical
+    {{pnpm_cmd}} run coverage:team-critical
 
 # ── Lint & Format ──
 
 # Biome lint of the TypeScript sources (CI gate)
 [group('lint')]
 lint:
-    pnpm run lint
+    {{pnpm_cmd}} run lint
 
 # Apply Biome formatting to src/bin/scripts
 [group('lint')]
 fmt:
-    biome format --write src bin scripts
+    {{pnpm_cmd}} exec biome format --write src bin src/scripts
 
 # Check Biome formatting without writing
 [group('lint')]
 fmt-check:
-    biome format src bin scripts
+    {{pnpm_cmd}} exec biome format src bin src/scripts
 
 # Typecheck with the no-unused tsconfig (no emit)
 [group('lint')]
 check-unused:
-    pnpm run check:no-unused
+    {{pnpm_cmd}} run check:no-unused
 
 # Verify only pnpm is used as the package manager
 [group('lint')]
 check-pnpm:
-    pnpm run check:no-npm
+    {{pnpm_cmd}} run check:no-npm
 
 # Markdown lint
 [group('lint')]
@@ -257,8 +258,8 @@ omx-uninstall:
     set -euo pipefail
     source ~/.config/sh/fnm-init.sh 2>/dev/null || true
     echo "── omx-uninstall: removing global oh-my-codex ──"
-    if pnpm list -g --depth=0 2>/dev/null | rg -q 'oh-my-codex'; then
-        pnpm remove -g oh-my-codex
+    if {{pnpm_cmd}} list -g --depth=0 2>/dev/null | rg -q 'oh-my-codex'; then
+        {{pnpm_cmd}} remove -g oh-my-codex
         echo "omx-uninstall: removed ✓"
     else
         echo "omx-uninstall: nothing to remove (not installed globally)"
@@ -278,7 +279,7 @@ omx-install:
     source ~/.config/sh/fnm-init.sh 2>/dev/null || true
     REPO_DIR="{{justfile_directory()}}"
     echo "── omx-install: installing from $REPO_DIR ──"
-    pnpm add -g "$REPO_DIR"
+    {{pnpm_cmd}} add -g "$REPO_DIR"
     echo "omx-install: installed ✓"
     echo "  $(type -af omx 2>/dev/null | head -1)"
 
