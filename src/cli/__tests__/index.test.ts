@@ -726,6 +726,17 @@ describe("normalizeCodexLaunchArgs", () => {
 		]);
 	});
 
+	it("rejects ambiguous max and ultra reasoning shorthands", () => {
+		assert.throws(
+			() => normalizeCodexLaunchArgs(["--max"]),
+			/canonical highest reasoning effort is "xhigh".*"max" and "ultra" are not accepted aliases/,
+		);
+		assert.throws(
+			() => normalizeCodexLaunchArgs(["--ultra"]),
+			/canonical highest reasoning effort is "xhigh".*"max" and "ultra" are not accepted aliases/,
+		);
+	});
+
 	it("maps --xhigh --madmax to codex-native flags only", () => {
 		assert.deepEqual(normalizeCodexLaunchArgs(["--xhigh", "--madmax"]), [
 			"--dangerously-bypass-approvals-and-sandbox",
@@ -1183,6 +1194,56 @@ describe("cleanupPostLaunchModeStateFiles", () => {
 			assert.deepEqual(sessionCanonical.active_skills, []);
 		}
 		assert.deepEqual(warnings, []);
+	});
+
+	it("normalizes stale terminal deep-interview locks during postLaunch cleanup", async () => {
+		const wd = await mkdtemp(
+			join(tmpdir(), "omx-postlaunch-di-terminal-locks-"),
+		);
+		const sessionId = "sess-postlaunch-di-terminal-locks";
+		const sessionStateDir = join(wd, ".omx", "state", "sessions", sessionId);
+		const completedAt = "2026-07-09T00:00:00.000Z";
+
+		try {
+			await mkdir(sessionStateDir, { recursive: true });
+			await writeFile(
+				join(sessionStateDir, "deep-interview-state.json"),
+				JSON.stringify(
+					{
+						active: false,
+						mode: "deep-interview",
+						current_phase: "cancelled",
+						completed_at: completedAt,
+						input_lock: {
+							active: true,
+							owner: "stale-question",
+						},
+					},
+					null,
+					2,
+				),
+				"utf-8",
+			);
+
+			await cleanupPostLaunchModeStateFiles(wd, sessionId);
+
+			const deepInterview = JSON.parse(
+				await readFile(
+					join(sessionStateDir, "deep-interview-state.json"),
+					"utf-8",
+				),
+			) as Record<string, unknown>;
+			const inputLock = deepInterview.input_lock as Record<string, unknown>;
+
+			assert.equal(deepInterview.active, false);
+			assert.equal(deepInterview.current_phase, "cancelled");
+			assert.equal(deepInterview.completed_at, completedAt);
+			assert.equal(inputLock.active, false);
+			assert.equal(inputLock.status, "released");
+			assert.equal(inputLock.released_at, completedAt);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
 	});
 
 	it("does not preserve complete Ralph cleanup state without completion-audit evidence", async () => {
@@ -2700,7 +2761,7 @@ describe("project launch scope helpers", () => {
 			);
 			await writeFile(
 				join(projectCodexHome, "config.toml"),
-				'model = "gpt-5.5"\n',
+				'model = "gpt-5.6-sol"\n',
 			);
 			await writeFile(
 				join(projectCodexHome, "state_5.sqlite"),
@@ -2941,7 +3002,7 @@ describe("project launch scope helpers", () => {
 				JSON.stringify({ scope: "project" }),
 			);
 			const originalConfig = [
-				'model = "gpt-5.5"',
+				'model = "gpt-5.6-sol"',
 				"",
 				"[tui]",
 				'status_line = ["model-with-reasoning", "git-branch"]',
@@ -3001,7 +3062,7 @@ describe("project launch scope helpers", () => {
 
 			await writeFile(
 				join(runtimeCodexHome, "config.toml"),
-				`${originalConfig}\n[tui.model_availability_nux]\n"gpt-5.5" = 1\n`,
+				`${originalConfig}\n[tui.model_availability_nux]\n"gpt-5.6-sol" = 1\n`,
 			);
 
 			assert.equal(await readFile(configPath, "utf-8"), originalConfig);
@@ -3031,7 +3092,7 @@ describe("project launch scope helpers", () => {
 			);
 			await writeFile(
 				join(projectCodexHome, "config.toml"),
-				'model = "gpt-5.5"\n',
+				'model = "gpt-5.6-sol"\n',
 			);
 
 			const prepared = await prepareCodexHomeForLaunch(wd, "session-auth", {});
@@ -3040,7 +3101,7 @@ describe("project launch scope helpers", () => {
 			await writeFile(join(runtimeCodexHome, "auth.json"), opaqueAuthState);
 			await writeFile(
 				join(runtimeCodexHome, "config.toml"),
-				'model = "gpt-5.5"\n[tui.model_availability_nux]\n"gpt-5.5" = 1\n',
+				'model = "gpt-5.6-sol"\n[tui.model_availability_nux]\n"gpt-5.6-sol" = 1\n',
 			);
 
 			await persistProjectLaunchRuntimeAuthState(
@@ -3054,7 +3115,7 @@ describe("project launch scope helpers", () => {
 			);
 			assert.equal(
 				await readFile(join(projectCodexHome, "config.toml"), "utf-8"),
-				'model = "gpt-5.5"\n',
+				'model = "gpt-5.6-sol"\n',
 			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
@@ -3072,7 +3133,7 @@ describe("project launch scope helpers", () => {
 				JSON.stringify({ scope: "project" }),
 			);
 			const originalProjectConfig = [
-				'model = "gpt-5.5"',
+				'model = "gpt-5.6-sol"',
 				"",
 				"[features]",
 				"hooks = true",
@@ -3112,7 +3173,7 @@ describe("project launch scope helpers", () => {
 					'trust_level = "trusted"',
 					"",
 					"[tui.model_availability_nux]",
-					'"gpt-5.5" = 1',
+					'"gpt-5.6-sol" = 1',
 					"",
 				].join("\n"),
 			);
@@ -3215,7 +3276,7 @@ describe("project launch scope helpers", () => {
 			await writeFile(
 				projectConfigPath,
 				[
-					'model = "gpt-5.5"',
+					'model = "gpt-5.6-sol"',
 					"",
 					"[features]",
 					"hooks = true",
@@ -3341,7 +3402,7 @@ describe("project launch scope helpers", () => {
 			);
 			await writeFile(
 				join(projectCodexHome, "config.toml"),
-				'model = "gpt-5.5"\n',
+				'model = "gpt-5.6-sol"\n',
 			);
 
 			const prepared = await prepareCodexHomeForLaunch(
@@ -3359,7 +3420,7 @@ describe("project launch scope helpers", () => {
 			assert.equal(prepared.runtimeCodexHomeForCleanup, runtimeCodexHome);
 			assert.equal(
 				await readFile(join(runtimeCodexHome, "config.toml"), "utf-8"),
-				'model = "gpt-5.5"\n',
+				'model = "gpt-5.6-sol"\n',
 			);
 		} finally {
 			if (typeof prevOmxRoot === "string") process.env.OMX_ROOT = prevOmxRoot;
@@ -3400,7 +3461,10 @@ describe("project launch scope helpers", () => {
 				join(wd, ".omx", "setup-scope.json"),
 				JSON.stringify({ scope: "project" }),
 			);
-			await writeFile(join(wd, ".codex", "config.toml"), 'model = "gpt-5.5"\n');
+			await writeFile(
+				join(wd, ".codex", "config.toml"),
+				'model = "gpt-5.6-sol"\n',
+			);
 
 			const prepared = await prepareCodexHomeForLaunch(
 				wd,
@@ -3897,9 +3961,9 @@ describe("detached tmux new-session sequencing", () => {
 		const steps = buildDetachedSessionBootstrapSteps(
 			"omx-demo",
 			"/tmp/project",
-			"'env' 'OMX_SESSION_ID=sess-detached-managed' 'codex' '--model' 'gpt-5.4-mini'",
+			"'env' 'OMX_SESSION_ID=sess-detached-managed' 'codex' '--model' 'gpt-5.6-terra'",
 			"'node' '/tmp/omx.js' 'hud' '--watch'",
-			"--dangerously-bypass-approvals-and-sandbox --model gpt-5.4-mini",
+			"--dangerously-bypass-approvals-and-sandbox --model gpt-5.6-terra",
 			"/tmp/project/.codex",
 			null,
 			false,
@@ -3910,14 +3974,14 @@ describe("detached tmux new-session sequencing", () => {
 			process.env,
 			undefined,
 			undefined,
-			"gpt-5.4-mini",
+			"gpt-5.6-terra",
 		);
 		const newSession = steps.find((step) => step.name === "new-session");
 		assert.ok(newSession);
 		assert.equal(
 			newSession!.args.includes("-e") &&
 				newSession!.args.some(
-					(arg) => arg === "OMX_TEAM_WORKER_INHERITED_MODEL=gpt-5.4-mini",
+					(arg) => arg === "OMX_TEAM_WORKER_INHERITED_MODEL=gpt-5.6-terra",
 				),
 			true,
 		);
@@ -6400,8 +6464,8 @@ describe("team worker launch arg inheritance helpers", () => {
 
 	it("collectInheritableTeamWorkerArgs supports --model=<value> syntax", () => {
 		assert.deepEqual(
-			collectInheritableTeamWorkerArgs(["--model=gpt-5.3-codex"]),
-			["--model", "gpt-5.3-codex"],
+			collectInheritableTeamWorkerArgs(["--model=gpt-5.6-terra"]),
+			["--model", "gpt-5.6-terra"],
 		);
 	});
 
@@ -6413,9 +6477,9 @@ describe("team worker launch arg inheritance helpers", () => {
 				"-c",
 				'model_provider="cheapRouter"',
 				"--model",
-				"gpt-5.5",
+				"gpt-5.6-sol",
 			]),
-			["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.5"],
+			["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.6-sol"],
 		);
 	});
 
@@ -6455,10 +6519,10 @@ describe("team worker launch arg inheritance helpers", () => {
 		assert.equal(
 			resolveTeamWorkerLaunchArgsEnv(
 				"--no-alt-screen",
-				["--model=gpt-5.3-codex"],
+				["--model=gpt-5.6-terra"],
 				true,
 			),
-			"--no-alt-screen --model gpt-5.3-codex",
+			"--no-alt-screen --model gpt-5.6-terra",
 		);
 	});
 

@@ -119,7 +119,7 @@ Press Enter to confirm`;
 const READY_HELPER_CAPTURE = `╭────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.114.0)                 │
 │                                            │
-│ model:     gpt-5.5 high   /model to change │
+│ model:     gpt-5.6-sol high   /model to change │
 │ directory: ~/Workspace/demo                │
 ╰────────────────────────────────────────────╯
 
@@ -128,7 +128,7 @@ How can I help you today?`;
 const VIEWPORT_WITHOUT_VISIBLE_PROMPT_CAPTURE = `╭────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.118.0)                 │
 │                                            │
-│ model:     gpt-5.5 high   /model to change │
+│ model:     gpt-5.6-sol high   /model to change │
 │ directory: ~/Workspace/demo                │
 ╰────────────────────────────────────────────╯
 
@@ -1987,12 +1987,7 @@ describe("buildWorkerStartupCommand", () => {
 		try {
 			const profiles = [
 				["--model", "gpt-5", "-c", 'model_reasoning_effort="high"'],
-				[
-					"--model",
-					"gpt-5.3-codex-spark",
-					"-c",
-					'model_reasoning_effort="low"',
-				],
+				["--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="low"'],
 			];
 
 			for (const launchArgs of profiles) {
@@ -2930,7 +2925,7 @@ describe("team worker CLI helpers", () => {
 		assert.deepEqual(
 			translateWorkerLaunchArgsForCli(
 				"gemini",
-				["--model", "gpt-5.3-codex-spark"],
+				["--model", "gpt-5.6-luna"],
 				"Read worker inbox",
 			),
 			["--approval-mode", "yolo", "-i", "Read worker inbox"],
@@ -3078,7 +3073,7 @@ describe("team worker launch mode helpers", () => {
 			const spec = buildWorkerProcessLaunchSpec(
 				"alpha-team",
 				2,
-				["--model", "gpt-5.3-codex"],
+				["--model", "gpt-5.6-terra"],
 				"/tmp/workspace",
 				{ OMX_TEAM_STATE_ROOT: "/tmp/workspace/.omx/state" },
 				"codex",
@@ -3091,7 +3086,7 @@ describe("team worker launch mode helpers", () => {
 			);
 			assert.deepEqual(spec.args, [
 				"--model",
-				"gpt-5.3-codex",
+				"gpt-5.6-terra",
 				"--dangerously-bypass-approvals-and-sandbox",
 			]);
 			assert.equal(spec.env.OMX_TEAM_WORKER, "alpha-team/worker-2");
@@ -3139,14 +3134,14 @@ describe("team worker launch mode helpers", () => {
 			const spec = buildWorkerProcessLaunchSpec(
 				"alpha-team",
 				2,
-				["--model", "gpt-5.3-codex-spark"],
+				["--model", "gpt-5.6-luna"],
 				"/tmp/workspace",
 				{ OMX_TEAM_STATE_ROOT: "/tmp/workspace/.omx/state" },
 				"codex",
 				undefined,
 				"explore",
 			);
-			assert.deepEqual(spec.args, ["--model", "gpt-5.3-codex-spark"]);
+			assert.deepEqual(spec.args, ["--model", "gpt-5.6-luna"]);
 		} finally {
 			if (typeof prevBypass === "string")
 				process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT = prevBypass;
@@ -3360,7 +3355,7 @@ describe("team worker launch mode helpers", () => {
 			await writeFile(
 				join(codexHome, "config.toml"),
 				[
-					'model = "gpt-5.5"',
+					'model = "gpt-5.6-sol"',
 					'model_provider = "custom_provider"',
 					"",
 					"[model_providers.custom_provider]",
@@ -3492,7 +3487,7 @@ describe("team worker launch mode helpers", () => {
 			const spec = buildWorkerProcessLaunchSpec(
 				"provider-override-team",
 				1,
-				["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.5"],
+				["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.6-sol"],
 				"/tmp/workspace",
 				{},
 				"codex",
@@ -3504,7 +3499,7 @@ describe("team worker launch mode helpers", () => {
 				"-c",
 				'model_provider="cheapRouter"',
 				"--model",
-				"gpt-5.5",
+				"gpt-5.6-sol",
 			]);
 		} finally {
 			if (typeof prevBypass === "string")
@@ -3846,7 +3841,7 @@ case "$1" in
 ╭────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.114.0)                 │
 │                                            │
-│ model:     gpt-5.5 high   /model to change │
+│ model:     gpt-5.6-sol high   /model to change │
 │ directory: ~/Workspace/demo                │
 ╰────────────────────────────────────────────╯
 

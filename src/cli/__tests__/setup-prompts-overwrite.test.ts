@@ -118,7 +118,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
 			const customized = installed
-				.replace(/^model = ".*"$/m, 'model = "gpt-5.4"')
+				.replace(/^model = ".*"$/m, 'model = "gpt-5.5"')
 				.replace(
 					/^model_reasoning_effort = ".*"$/m,
 					'model_reasoning_effort = "low"',
@@ -147,7 +147,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
 			const customized = installed
-				.replace(/^model = ".*"$/m, 'model = "gpt-5.4"')
+				.replace(/^model = ".*"$/m, 'model = "gpt-5.5"')
 				.replace(
 					/^model_reasoning_effort = ".*"$/m,
 					'model_reasoning_effort = "low"',
@@ -181,7 +181,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
 			const customized = installed
-				.replace(/^model = ".*"$/m, 'model = "gpt-5.4"')
+				.replace(/^model = ".*"$/m, 'model = "gpt-5.5"')
 				.replace(
 					/^model_reasoning_effort = ".*"$/m,
 					'model_reasoning_effort = "low"',

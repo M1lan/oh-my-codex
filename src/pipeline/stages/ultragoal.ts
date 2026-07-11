@@ -7,7 +7,12 @@
  */
 
 import type { PipelineStage, StageContext, StageResult } from "../types.js";
-import { LEADER_CONDUCTOR_BLOCK } from "../../leader/contract.js";
+import {
+	LEADER_CONDUCTOR_BLOCK,
+	buildUnsupportedNativeSubagentGuidance,
+	isUnsupportedNativeSubagentEvidenceForScope,
+	type NativeSubagentSupportEvidence,
+} from "../../leader/contract.js";
 
 export interface UltragoalDescriptor {
 	task: string;
@@ -16,6 +21,17 @@ export interface UltragoalDescriptor {
 	ralplanArtifacts: Record<string, unknown>;
 	instruction: string;
 	teamCondition: string;
+}
+
+export interface UltragoalInstructionOptions {
+	nativeSubagentSupport?: NativeSubagentSupportEvidence;
+}
+
+function isExplicitUnsupportedNativeSubagentEvidence(
+	value: unknown,
+	input: Pick<StageContext, "cwd" | "sessionId">,
+): value is NativeSubagentSupportEvidence {
+	return isUnsupportedNativeSubagentEvidenceForScope(value, input);
 }
 
 export function createUltragoalStage(): PipelineStage {
@@ -27,12 +43,19 @@ export function createUltragoalStage(): PipelineStage {
 			const ralplanArtifacts = ctx.artifacts.ralplan as
 				| Record<string, unknown>
 				| undefined;
+			const nativeSubagentSupport = ralplanArtifacts?.native_subagent_support;
+			const instructionOptions = isExplicitUnsupportedNativeSubagentEvidence(
+				nativeSubagentSupport,
+				ctx,
+			)
+				? { nativeSubagentSupport }
+				: undefined;
 			const descriptor: UltragoalDescriptor = {
 				task: ctx.task,
 				cwd: ctx.cwd,
 				sessionId: ctx.sessionId,
 				ralplanArtifacts: ralplanArtifacts ?? {},
-				instruction: buildUltragoalInstruction(ctx.task),
+				instruction: buildUltragoalInstruction(ctx.task, instructionOptions),
 				teamCondition:
 					"Launch $team only inside an active Ultragoal story when independent lanes or broad verification make coordinated parallel work useful; Ultragoal remains leader-owned for goal and ledger state.",
 			};
@@ -51,10 +74,15 @@ export function createUltragoalStage(): PipelineStage {
 	};
 }
 
-export function buildUltragoalInstruction(task: string): string {
-	return [
-		`$ultragoal ${JSON.stringify(task)}`,
-		"",
-		LEADER_CONDUCTOR_BLOCK,
-	].join("\n");
+export function buildUltragoalInstruction(
+	task: string,
+	options: UltragoalInstructionOptions = {},
+): string {
+	const conductorGuidance =
+		options.nativeSubagentSupport?.status === "unsupported"
+			? buildUnsupportedNativeSubagentGuidance(options.nativeSubagentSupport)
+			: LEADER_CONDUCTOR_BLOCK;
+	return [`$ultragoal ${JSON.stringify(task)}`, "", conductorGuidance].join(
+		"\n",
+	);
 }

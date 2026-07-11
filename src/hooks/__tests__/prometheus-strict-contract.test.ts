@@ -346,7 +346,7 @@ describe("prometheus-strict clean-room contract", () => {
 		}
 		assert.match(
 			metis,
-			/gpt-5\.4-mini[\s\S]{0,120}researcher/i,
+			/gpt-5\.6-terra[\s\S]{0,120}researcher/i,
 			"metis research_fan_out must document researcher as the exact cheap mini lane",
 		);
 		assert.match(
@@ -823,7 +823,7 @@ ${oracle}`,
 		);
 		assert.match(
 			readRepoFile(skillPath),
-			/gpt-5\.4-mini[\s\S]{0,160}researcher[\s\S]{0,220}2 explore \+ 4 researcher/i,
+			/gpt-5\.6-terra[\s\S]{0,160}researcher[\s\S]{0,220}2 explore \+ 4 researcher/i,
 			"skill must expose exact mini researcher plus wider cheap fan-out",
 		);
 	});

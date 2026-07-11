@@ -65,6 +65,7 @@ export type ModeName =
 	| "ultrawork"
 	| "team"
 	| "ultraqa"
+	| "ultragoal"
 	| "ralplan";
 
 /** @deprecated These mode names were removed in v4.6. Use the canonical modes instead. */

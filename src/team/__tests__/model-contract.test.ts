@@ -52,14 +52,14 @@ describe("team model contract", () => {
 				"--dangerously-bypass-approvals-and-sandbox",
 				"-c",
 				'model_reasoning_effort="xhigh"',
-				"--model=gpt-5.3",
+				"--model=gpt-5.5",
 			]),
 			[
 				"--dangerously-bypass-approvals-and-sandbox",
 				"-c",
 				'model_reasoning_effort="xhigh"',
 				"--model",
-				"gpt-5.3",
+				"gpt-5.5",
 			],
 		);
 	});
@@ -72,9 +72,9 @@ describe("team model contract", () => {
 				"-c",
 				'model_provider="cheapRouter"',
 				"--model",
-				"gpt-5.5",
+				"gpt-5.6-sol",
 			]),
-			["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.5"],
+			["-c", 'model_provider="cheapRouter"', "--model", "gpt-5.6-sol"],
 		);
 	});
 
@@ -86,7 +86,7 @@ describe("team model contract", () => {
 					"-c",
 					'model_provider="leaderRouter"',
 					"--model",
-					"gpt-5.5",
+					"gpt-5.6-sol",
 				],
 			}),
 			[
@@ -94,7 +94,7 @@ describe("team model contract", () => {
 				"-c",
 				'model_provider="envRouter"',
 				"--model",
-				"gpt-5.5",
+				"gpt-5.6-sol",
 			],
 		);
 	});
@@ -212,9 +212,9 @@ describe("team model contract", () => {
 				resolveAgentDefaultModel("explore"),
 				expectedLowComplexityModel(),
 			);
-			assert.equal(resolveAgentDefaultModel("writer"), "gpt-5.5");
-			assert.equal(resolveAgentDefaultModel("executor"), "gpt-5.5");
-			assert.equal(resolveAgentDefaultModel("architect"), "gpt-5.5");
+			assert.equal(resolveAgentDefaultModel("writer"), "gpt-5.6-sol");
+			assert.equal(resolveAgentDefaultModel("executor"), "gpt-5.6-sol");
+			assert.equal(resolveAgentDefaultModel("architect"), "gpt-5.6-sol");
 			assert.equal(resolveAgentDefaultModel("does-not-exist"), undefined);
 		});
 	});
@@ -222,9 +222,9 @@ describe("team model contract", () => {
 		withIsolatedDefaultModelEnv(() => {
 			process.env.OMX_DEFAULT_FRONTIER_MODEL = "gpt-5.2-frontier";
 
-			assert.equal(resolveAgentDefaultModel("planner"), "gpt-5.5");
-			assert.equal(resolveAgentDefaultModel("architect"), "gpt-5.5");
-			assert.equal(resolveAgentDefaultModel("researcher"), "gpt-5.4-mini");
+			assert.equal(resolveAgentDefaultModel("planner"), "gpt-5.6-sol");
+			assert.equal(resolveAgentDefaultModel("architect"), "gpt-5.6-sol");
+			assert.equal(resolveAgentDefaultModel("researcher"), "gpt-5.6-terra");
 			assert.equal(resolveAgentDefaultModel("critic"), "gpt-5.2-frontier");
 		});
 	});
@@ -238,19 +238,19 @@ describe("team model contract", () => {
 				join(codexHome, ".omx-config.json"),
 				JSON.stringify({
 					agentModels: {
-						architect: "gpt-5.5-architect",
-						explore: "gpt-5.5-explore",
+						architect: "gpt-5.6-sol-architect",
+						explore: "gpt-5.6-sol-explore",
 					},
 				}),
 			);
 
 			assert.equal(
 				resolveAgentDefaultModel("architect", codexHome),
-				"gpt-5.5-architect",
+				"gpt-5.6-sol-architect",
 			);
 			assert.equal(
 				resolveAgentDefaultModel("explore", codexHome),
-				"gpt-5.5-explore",
+				"gpt-5.6-sol-explore",
 			);
 		} finally {
 			await rm(codexHome, { recursive: true, force: true });
@@ -279,7 +279,7 @@ describe("team model contract", () => {
 					inheritedArgs: [
 						"--dangerously-bypass-approvals-and-sandbox",
 						"--model",
-						"gpt-5.4-mini",
+						"gpt-5.6-terra",
 					],
 					fallbackModel: resolveAgentDefaultModel("planner"),
 					preferredReasoning: "high",
@@ -290,7 +290,7 @@ describe("team model contract", () => {
 					"-c",
 					'model_reasoning_effort="high"',
 					"--model",
-					"gpt-5.5",
+					"gpt-5.6-sol",
 				],
 			);
 		});
@@ -303,7 +303,7 @@ describe("team model contract", () => {
 					inheritedArgs: [
 						"--dangerously-bypass-approvals-and-sandbox",
 						"--model",
-						"gpt-5.4-mini",
+						"gpt-5.6-terra",
 					],
 					fallbackModel: resolveAgentDefaultModel("planner"),
 					preferredReasoning: "high",
@@ -321,7 +321,7 @@ describe("team model contract", () => {
 			const diagnostics = resolveTeamWorkerLaunchDiagnostics({
 				requestedAgentType: "planner",
 				existingRaw: "--model explicit-worker-model",
-				inheritedArgs: ["--model", "gpt-5.4-mini"],
+				inheritedArgs: ["--model", "gpt-5.6-terra"],
 				fallbackModel: resolveAgentDefaultModel("planner"),
 				preferredReasoning: "high",
 				honorExactRoleModel: true,
@@ -340,7 +340,7 @@ describe("team model contract", () => {
 					inheritedArgs: [
 						"--dangerously-bypass-approvals-and-sandbox",
 						"--model",
-						"gpt-5.4-mini",
+						"gpt-5.6-terra",
 					],
 					fallbackModel: resolveAgentDefaultModel("executor"),
 					preferredReasoning: resolveAgentReasoningEffort("executor"),
@@ -350,7 +350,7 @@ describe("team model contract", () => {
 					"-c",
 					'model_reasoning_effort="medium"',
 					"--model",
-					"gpt-5.4-mini",
+					"gpt-5.6-terra",
 				],
 			);
 		});
@@ -366,9 +366,9 @@ describe("team model contract", () => {
 				}),
 				{
 					requestedAgentType: "architect",
-					requestedDefaultModel: "gpt-5.5",
+					requestedDefaultModel: "gpt-5.6-sol",
 					requestedDefaultReasoning: "xhigh",
-					actualModel: "gpt-5.5",
+					actualModel: "gpt-5.6-sol",
 					actualReasoning: "xhigh",
 					modelSource: "fallback",
 					reasoningSource: "role-default",
@@ -377,7 +377,7 @@ describe("team model contract", () => {
 						"-c",
 						'model_reasoning_effort="xhigh"',
 						"--model",
-						"gpt-5.5",
+						"gpt-5.6-sol",
 					],
 				},
 			);

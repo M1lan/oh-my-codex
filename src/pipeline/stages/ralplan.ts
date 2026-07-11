@@ -14,6 +14,7 @@ import { isNonCleanReviewVerdict } from "../review-verdict.js";
 import {
 	runRalplanConsensus,
 	type RalplanConsensusExecutor,
+	type RalplanExecutionLane,
 } from "../../ralplan/runtime.js";
 import {
 	buildRalplanConsensusGateForCwd,
@@ -26,6 +27,7 @@ export interface CreateRalplanStageOptions {
 	executor?: RalplanConsensusExecutor;
 	maxIterations?: number;
 	requireNativeSubagents?: boolean;
+	selectedExecutionLane?: RalplanExecutionLane;
 }
 
 /**
@@ -66,6 +68,7 @@ export function createRalplanStage(
 						maxIterations: options.maxIterations,
 						sessionId: ctx.sessionId,
 						requireNativeSubagents: options.requireNativeSubagents,
+						selectedExecutionLane: options.selectedExecutionLane,
 					});
 
 					const planningArtifacts = readPlanningArtifacts(ctx.cwd);

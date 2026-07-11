@@ -2055,7 +2055,7 @@ exit 0
 				{
 					OMX_TEAM_SCALING_ENABLED: "1",
 					OMX_TEAM_SKIP_READY_WAIT: "1",
-					OMX_TEAM_WORKER_LAUNCH_ARGS: "--model gpt-5.4-mini",
+					OMX_TEAM_WORKER_LAUNCH_ARGS: "--model gpt-5.6-terra",
 				},
 			);
 			assert.equal(result.ok, true);
@@ -2091,7 +2091,7 @@ exit 0
 			);
 			assert.match(rootAgents, /You are operating as the \*\*writer\*\* role/);
 			assert.match(rootAgents, /<identity>You are Writer\.<\/identity>/);
-			assert.match(rootAgents, /exact gpt-5\.4-mini model/);
+			assert.match(rootAgents, /exact gpt-5\.6-terra model/);
 			assert.match(
 				rootAgents,
 				/strict execution order: inspect -> plan -> act -> verify/,
@@ -2104,7 +2104,7 @@ exit 0
 		}
 	});
 
-	it("does not apply mini guidance during scale-up when the final worker model is gpt-5.5", async () => {
+	it("does not apply mini guidance during scale-up when the final worker model is gpt-5.6-sol", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-scale-up-frontier-role-"));
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-frontier-role-bin-"),
@@ -2223,7 +2223,7 @@ exit 0
 				/You are operating as the \*\*test-engineer\*\* role/,
 			);
 			assert.match(workerAgents, /<identity>Test Engineer<\/identity>/);
-			assert.doesNotMatch(workerAgents, /exact gpt-5\.4-mini model/);
+			assert.doesNotMatch(workerAgents, /exact gpt-5\.6-terra model/);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -2232,7 +2232,7 @@ exit 0
 		}
 	});
 
-	it("does not apply mini guidance during scale-up for gpt-5.4-mini-tuned overrides", async () => {
+	it("does not apply mini guidance during scale-up for gpt-5.6-terra-tuned overrides", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-scale-up-mini-tuned-"));
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-mini-tuned-bin-"),
@@ -2328,7 +2328,7 @@ exit 0
 				{
 					OMX_TEAM_SCALING_ENABLED: "1",
 					OMX_TEAM_SKIP_READY_WAIT: "1",
-					OMX_TEAM_WORKER_LAUNCH_ARGS: "--model gpt-5.4-mini-tuned",
+					OMX_TEAM_WORKER_LAUNCH_ARGS: "--model gpt-5.6-terra-tuned",
 				},
 			);
 			assert.equal(result.ok, true);
@@ -2348,7 +2348,7 @@ exit 0
 			);
 			assert.match(rootAgents, /You are operating as the \*\*writer\*\* role/);
 			assert.match(rootAgents, /<identity>You are Writer\.<\/identity>/);
-			assert.doesNotMatch(rootAgents, /exact gpt-5\.4-mini model/);
+			assert.doesNotMatch(rootAgents, /exact gpt-5\.6-terra model/);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;

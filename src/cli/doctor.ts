@@ -84,6 +84,7 @@ import {
 	OMX_SPARK_MODEL_ENV,
 	getAgentModelOverride,
 	getCodexConfigRootModelProvider,
+	getConfiguredTeamLowComplexityModel,
 	getEnvConfiguredSparkDefaultModel,
 	getMainDefaultModel,
 	getSparkDefaultModel,
@@ -1229,7 +1230,7 @@ function formatContextRecommendationWarning(
 ): string {
 	return `${configuredValues.join(
 		", ",
-	)} exceeds the OMX setup recommendation for gpt-5.5 (${recommendedContextWindow} / ${recommendedAutoCompactLimit}); doctor does not rewrite user config, so lower these values or verify your active Codex runtime/provider behavior if this customization is intentional`;
+	)} exceeds the OMX setup recommendation for gpt-5.6-sol (${recommendedContextWindow} / ${recommendedAutoCompactLimit}); doctor does not rewrite user config, so lower these values or verify your active Codex runtime/provider behavior if this customization is intentional`;
 }
 
 async function checkModelContextRecommendation(
@@ -1817,6 +1818,8 @@ async function checkPluginScopedNativeHooks(
 				OMX_ROOT: join(smokeCwd, ".omx-doctor-root"),
 				OMX_SESSION_ID: "omx-doctor-plugin-hook-smoke",
 				OMX_SOURCE_CWD: smokeCwd,
+				OMX_ENTRY_PATH: join(getPackageRoot(), "dist", "cli", "omx.js"),
+				OMX_CODEX_LAUNCH_ID: "omx-doctor-plugin-hook-smoke-launch",
 				OMX_STARTUP_CWD: smokeCwd,
 			},
 			input: payload,
@@ -2673,7 +2676,10 @@ function resolveSparkModelSource(codexHomeOverride?: string): string {
 		return `${OMX_SPARK_MODEL_ENV} env`;
 	}
 	if (getEnvConfiguredSparkDefaultModel(process.env, codexHomeOverride)) {
-		return "config.toml env";
+		return ".omx-config.json env";
+	}
+	if (getConfiguredTeamLowComplexityModel(codexHomeOverride)) {
+		return ".omx-config.json models.team_low_complexity";
 	}
 	return "built-in default";
 }
@@ -2699,7 +2705,7 @@ function getInstallableSparkLaneAgentNames(): string[] {
 
 /**
  * Surface effective Spark/model lane routing and flag the common reasons the
- * `gpt-5.3-codex-spark` quota stays unused even though resolution is wired
+ * `gpt-5.6-luna` quota stays unused even though resolution is wired
  * (issue #2757): a missing/stale installed Spark-lane agent toml, a model that
  * diverges from the resolved Spark default, or a non-default provider that does
  * not draw from native Spark quota.

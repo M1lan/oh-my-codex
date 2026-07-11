@@ -153,6 +153,10 @@ import { hasStructuredVerificationEvidence } from "../verification/verifier.js";
 import { buildRebalanceDecisions } from "./rebalance-policy.js";
 import { getStatePath } from "../mcp/state-paths.js";
 import { readModeState, updateModeState } from "../modes/base.js";
+import {
+	resolveWorktreeToolContext,
+	worktreeToolContextEnv,
+} from "../utils/worktree-tool-context.js";
 
 export { resolveTeamWorkerCliForResolvedLaunchArgs };
 import {
@@ -3464,6 +3468,7 @@ export async function startTeam(
 			initialPrompt?: string;
 			workerLaunchArgs: string[];
 			workerCli: TeamWorkerCli;
+			toolContext: ReturnType<typeof resolveWorktreeToolContext>;
 		}>;
 		const workerCliPlan: TeamWorkerCli[] = [];
 
@@ -3512,6 +3517,13 @@ export async function startTeam(
 					)
 				: null;
 			const workerWorktreePath = workerWorkspace.worktreePath ?? undefined;
+			const toolContext = resolveWorktreeToolContext({
+				cwd: workerWorkspace.cwd,
+				scope: "team",
+				repoRoot: workerWorkspace.worktreeRepoRoot ?? leaderCwd,
+				worktreeRoot: workerWorkspace.worktreePath ?? workerWorkspace.cwd,
+				env: launchEnv,
+			});
 			const fallbackInstructionsPath =
 				workerInstructionsPath ?? join(leaderCwd, "AGENTS.md");
 			const instructionsFilePath = workerWorktreePath
@@ -3523,6 +3535,7 @@ export async function startTeam(
 						teamStateRoot,
 						leaderCwd,
 						worktreePath: workerWorktreePath,
+						toolContext,
 					})
 				: rolePromptContent
 					? await writeWorkerRoleInstructionsFile(
@@ -3582,6 +3595,7 @@ export async function startTeam(
 				initialPrompt,
 				workerLaunchArgs,
 				workerCli,
+				toolContext,
 			});
 		}
 		if (workerLaunchMode === "prompt") {
@@ -3595,6 +3609,7 @@ export async function startTeam(
 				[MODEL_INSTRUCTIONS_FILE_ENV]: plan.instructionsFilePath,
 				OMX_TEAM_DISPLAY_NAME: displayName,
 				...(codexHomeOverride ? { CODEX_HOME: codexHomeOverride } : {}),
+				...worktreeToolContextEnv(plan.toolContext),
 			};
 			if (plan.workerWorkspace.worktreePath) {
 				env.OMX_TEAM_WORKTREE_PATH = plan.workerWorkspace.worktreePath;

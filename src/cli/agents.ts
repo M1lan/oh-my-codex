@@ -12,7 +12,7 @@ export const RESERVED_NATIVE_AGENT_NAMES = new Set([
 	"worker",
 	"explorer",
 ]);
-const DEFAULT_AGENT_MODEL = "gpt-5.5";
+const DEFAULT_AGENT_MODEL = "gpt-5.6-sol";
 const AGENTS_USAGE = [
 	"Usage:",
 	"  omx agents list [--scope user|project]",

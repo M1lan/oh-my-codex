@@ -360,7 +360,7 @@ describe("paneLooksReady", () => {
 			paneLooksReady(`╭────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.118.0)                 │
 │                                            │
-│ model:     gpt-5.5 high   /model to change │
+│ model:     gpt-5.6-sol high   /model to change │
 │ directory: /tmp/demo                       │
 ╰────────────────────────────────────────────╯
 
@@ -376,7 +376,7 @@ describe("paneShowsCodexViewport", () => {
 			paneShowsCodexViewport(`╭────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.118.0)                 │
 │                                            │
-│ model:     gpt-5.5 high   /model to change │
+│ model:     gpt-5.6-sol high   /model to change │
 │ directory: /tmp/demo                       │
 ╰────────────────────────────────────────────╯
 

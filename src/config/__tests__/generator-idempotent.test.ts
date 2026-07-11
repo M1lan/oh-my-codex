@@ -171,7 +171,7 @@ describe("Codex transient TUI NUX cleanup", () => {
 			await writeFile(
 				configPath,
 				[
-					'model = "gpt-5.5"',
+					'model = "gpt-5.6-sol"',
 					'status_line = ["model-with-reasoning", "git-branch"]',
 					"",
 					"[tui]",
@@ -179,8 +179,8 @@ describe("Codex transient TUI NUX cleanup", () => {
 					"notifications = true",
 					"",
 					"[tui.model_availability_nux]",
-					'"gpt-5.5" = 4',
-					'"gpt-5.4" = 1',
+					'"gpt-5.6-sol" = 4',
+					'"gpt-5.5" = 1',
 					"",
 					"[mcp_servers.user]",
 					'command = "node"',
@@ -194,7 +194,7 @@ describe("Codex transient TUI NUX cleanup", () => {
 
 			assert.equal(cleaned, true);
 			assert.doesNotMatch(toml, /^\[tui\.model_availability_nux\]$/m);
-			assert.doesNotMatch(toml, /gpt-5\.5" = 4/);
+			assert.doesNotMatch(toml, /gpt-5\.6-sol" = 4/);
 			assert.match(
 				toml,
 				/^status_line = \["model-with-reasoning", "git-branch"\]$/m,
@@ -214,7 +214,7 @@ describe("Codex transient TUI NUX cleanup", () => {
 		try {
 			const configPath = join(wd, "config.toml");
 			const original = [
-				'model = "gpt-5.5"',
+				'model = "gpt-5.6-sol"',
 				"",
 				"[tui]",
 				'theme = "dark"',
@@ -781,7 +781,7 @@ describe("config generator idempotency (#384)", () => {
 			await mergeConfig(configPath, wd);
 			const toml = await readFile(configPath, "utf-8");
 
-			assert.match(toml, /^model = "gpt-5.5"$/m);
+			assert.match(toml, /^model = "gpt-5.6-sol"$/m);
 			assert.match(
 				toml,
 				/^# oh-my-codex seeded behavioral defaults \(uninstall removes unchanged defaults\)$/m,
@@ -794,15 +794,15 @@ describe("config generator idempotency (#384)", () => {
 		}
 	});
 
-	it("can override gpt-5.3-codex to gpt-5.5 and seed 250k context defaults", async () => {
+	it("can override gpt-5.6-terra to gpt-5.6-sol and seed 250k context defaults", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-idem-"));
 		try {
-			const toml = buildMergedConfig('model = \"gpt-5.3-codex\"\n', wd, {
-				modelOverride: "gpt-5.5",
+			const toml = buildMergedConfig('model = \"gpt-5.6-terra\"\n', wd, {
+				modelOverride: "gpt-5.6-sol",
 			});
 
-			assert.match(toml, /^model = "gpt-5\.5"$/m);
-			assert.doesNotMatch(toml, /^model = "gpt-5\.3-codex"$/m);
+			assert.match(toml, /^model = "gpt-5\.6-sol"$/m);
+			assert.doesNotMatch(toml, /^model = "gpt-5\.6-terra"$/m);
 			assert.match(
 				toml,
 				/^# oh-my-codex seeded behavioral defaults \(uninstall removes unchanged defaults\)$/m,
@@ -814,7 +814,7 @@ describe("config generator idempotency (#384)", () => {
 			await rm(wd, { recursive: true, force: true });
 		}
 	});
-	it("does not seed 250k context defaults for non-gpt-5.5 models", async () => {
+	it("does not seed 250k context defaults for non-gpt-5.6-sol models", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-idem-"));
 		try {
 			const configPath = join(wd, "config.toml");
@@ -837,13 +837,15 @@ describe("config generator idempotency (#384)", () => {
 			const configPath = join(wd, "config.toml");
 			await writeFile(
 				configPath,
-				['model = "gpt-5.5"', "model_context_window = 640000", ""].join("\n"),
+				['model = "gpt-5.6-sol"', "model_context_window = 640000", ""].join(
+					"\n",
+				),
 			);
 
 			await mergeConfig(configPath, wd);
 			const toml = await readFile(configPath, "utf-8");
 
-			assert.match(toml, /^model = "gpt-5\.5"$/m);
+			assert.match(toml, /^model = "gpt-5\.6-sol"$/m);
 			assert.match(toml, /^model_context_window = 640000$/m);
 			assert.match(toml, /^model_auto_compact_token_limit = 200000$/m);
 		} finally {
@@ -858,7 +860,7 @@ describe("config generator idempotency (#384)", () => {
 			await writeFile(
 				configPath,
 				[
-					'model = "gpt-5.5"',
+					'model = "gpt-5.6-sol"',
 					"model_auto_compact_token_limit = 150000",
 					"",
 				].join("\n"),
@@ -867,7 +869,7 @@ describe("config generator idempotency (#384)", () => {
 			await mergeConfig(configPath, wd);
 			const toml = await readFile(configPath, "utf-8");
 
-			assert.match(toml, /^model = "gpt-5\.5"$/m);
+			assert.match(toml, /^model = "gpt-5\.6-sol"$/m);
 			assert.match(toml, /^model_context_window = 250000$/m);
 			assert.match(toml, /^model_auto_compact_token_limit = 150000$/m);
 		} finally {
@@ -881,7 +883,9 @@ describe("config generator idempotency (#384)", () => {
 			const configPath = join(wd, "config.toml");
 			await writeFile(
 				configPath,
-				['model = "gpt-5.5"', "model_context_window = 640000", ""].join("\n"),
+				['model = "gpt-5.6-sol"', "model_context_window = 640000", ""].join(
+					"\n",
+				),
 			);
 
 			await mergeConfig(configPath, wd);
@@ -908,7 +912,7 @@ describe("config generator idempotency (#384)", () => {
 
 			const toml = await readFile(configPath, "utf-8");
 			assert.equal(
-				count(toml, /^model = "gpt-5\.5"$/gm),
+				count(toml, /^model = "gpt-5\.6-sol"$/gm),
 				1,
 				"seeded model should appear once",
 			);
@@ -1133,7 +1137,7 @@ describe("config generator idempotency (#384)", () => {
 
 	it("preserves trailing user config after an unmatched managed hook trust-state start marker", () => {
 		const malformed = [
-			'model = "gpt-5.5"',
+			'model = "gpt-5.6-sol"',
 			"",
 			"# OMX-owned Codex hook trust state",
 			"# Missing the end fence must not cause trailing user config deletion.",
@@ -1174,7 +1178,7 @@ describe("config generator idempotency (#384)", () => {
 		assert.ok(managedPostCompactHash);
 		assert.ok(managedStopHash);
 		const orphaned = [
-			'model = "gpt-5.5"',
+			'model = "gpt-5.6-sol"',
 			"",
 			"[hooks.state]",
 			"",
@@ -1216,7 +1220,7 @@ describe("config generator idempotency (#384)", () => {
 	it("preserves same-key user hook trust state and suppresses generated duplicates", () => {
 		const hooksPath = "/tmp/codex/hooks.json";
 		const config = [
-			'model = "gpt-5.5"',
+			'model = "gpt-5.6-sol"',
 			"",
 			'[hooks.state."/tmp/codex/hooks.json:post_compact:0:0"]',
 			'trusted_hash = "sha256:user"',
@@ -1323,7 +1327,7 @@ describe("config generator idempotency (#384)", () => {
 	it("dedupes prior fenced managed hook trust-state blocks before writing a replacement", () => {
 		const first = upsertManagedCodexHookTrustState(
 			[
-				'model = "gpt-5.5"',
+				'model = "gpt-5.6-sol"',
 				"",
 				'[hooks.state."custom:/hooks.json:stop:0:0"]',
 				'trusted_hash = "sha256:user"',
@@ -1534,7 +1538,7 @@ describe("config generator idempotency (#384)", () => {
 
 	it("removes an existing multiline developer_instructions assignment as one root entry", () => {
 		const existing = [
-			'model = "gpt-5.5"',
+			'model = "gpt-5.6-sol"',
 			'developer_instructions = """Custom instructions survive as valid TOML.',
 			"This line used to be orphaned by setup.",
 			'This closing line used to break parsing."""',
