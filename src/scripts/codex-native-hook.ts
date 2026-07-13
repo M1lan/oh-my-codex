@@ -16,7 +16,7 @@ import {
 	stat,
 	writeFile,
 } from "fs/promises";
-import { extname, isAbsolute, join, relative, resolve } from "path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "path";
 import { pathToFileURL } from "url";
 import {
 	readModeStateForActiveDecision,
@@ -101,6 +101,10 @@ import {
 	detectMcpTransportFailure,
 	hasAnyPattern,
 } from "./codex-native-pre-post.js";
+import {
+	performInteropCavemanInjection,
+	resolveInteropCavemanActivation,
+} from "./notify-hook/interop-caveman.js";
 import { handleTeamWorkerPostToolUseSuccess } from "./notify-hook/team-worker-posttooluse.js";
 import { maybeNudgeLeaderForAllowedWorkerStop } from "./notify-hook/team-worker-stop.js";
 import {
@@ -2338,6 +2342,42 @@ async function buildPersistedSubagentReopenContext(
 	}
 
 	return lines.join("\n");
+}
+
+/**
+ * OMC<->OMX interop: on a top-level (non-subagent) codex SessionStart, activate
+ * the codex caveman skill at the level the OMC leader requested via
+ * `OMX_INTEROP_CAVEMAN_LEVEL`, injecting `use caveman <level> mode` into codex's
+ * own pane exactly once. A per-session marker dedupes repeated startup events
+ * and avoids fighting the OMC-side idempotent keystroke fallback.
+ */
+async function maybeInjectInteropCavemanActivation(options: {
+	stateDir: string;
+	sessionId: string;
+}): Promise<void> {
+	const activation = resolveInteropCavemanActivation(process.env);
+	if (!activation) return;
+	const sessionId = safeString(options.sessionId).trim();
+	const markerPath = sessionId
+		? join(
+				options.stateDir,
+				"sessions",
+				sessionId,
+				"interop-caveman-injected",
+			)
+		: join(options.stateDir, "interop-caveman-injected");
+	if (existsSync(markerPath)) return;
+	const result = await performInteropCavemanInjection(activation);
+	if (!result.injected) return;
+	await mkdir(dirname(markerPath), { recursive: true }).catch(() => {});
+	await writeFile(
+		markerPath,
+		JSON.stringify({
+			level: activation.level,
+			activation: activation.activation,
+			injected_at: new Date().toISOString(),
+		}),
+	).catch(() => {});
 }
 
 async function buildSessionStartContext(
@@ -13096,6 +13136,15 @@ export async function dispatchCodexNativeHook(
 			(await buildStopHookOutput(payload, cwd, stateDir, {
 				skipRalphStopBlock: isSubagentStop,
 			})) ?? (await buildCompletedGoalCleanupStopOutput(payload, cwd));
+	}
+
+	// OMC<->OMX interop caveman activation runs only for a top-level (non-subagent)
+	// SessionStart so workers never switch to the leader's requested caveman level.
+	if (hookEventName === "SessionStart" && !isSubagentSessionStart) {
+		await maybeInjectInteropCavemanActivation({
+			stateDir,
+			sessionId: sessionIdForState,
+		}).catch(() => {});
 	}
 
 	return {
