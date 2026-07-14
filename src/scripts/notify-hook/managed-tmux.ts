@@ -85,12 +85,16 @@ function readAuthoritativeTmuxSessionName(sessionState: {
 function readCurrentTmuxSessionName(): string {
 	if (!process.env.TMUX) return "";
 	try {
-		return execFileSync(resolveTmuxBinaryForPlatform() || "tmux", ["display-message", "-p", "#S"], {
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 2000,
-			windowsHide: true,
-		}).trim();
+		return execFileSync(
+			resolveTmuxBinaryForPlatform() || "tmux",
+			["display-message", "-p", "#S"],
+			{
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 2000,
+				windowsHide: true,
+			},
+		).trim();
 	} catch {
 		return "";
 	}

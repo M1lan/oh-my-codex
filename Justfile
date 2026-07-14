@@ -1,17 +1,16 @@
-# ── oh-my-codex Justfile -- pnpm + cargo, airtight gates, dual-TUI launcher ──
+# ── oh-my-codex Justfile -- pnpm + cargo, CI gates, guided launcher ──
 #
 # Thin by design: recipes are one-liners that call pnpm, cargo, or a helper
-# under .just/helpers/. The multi-modal UI (splash, gum menu, fzf launcher,
-# doctor, bootstrap) lives in those helpers -- never inline, never a heredoc.
+# under .just/helpers/. The splash, guided menu, doctor, and bootstrap live in
+# those helpers -- never inline, never a heredoc.
 #
 #   just            full-screen splash + countdown (the default; START HERE)
-#   just menu       guided gum command builder (params become forms)
-#   just fzf        flat fzf power launcher (tab multi-select, batch run)
+#   just menu       guided command builder (parameters become forms)
 #   just help       the plain `--list`
 #   make            bootstrap deps if needed, then hand to `just`
 #
-# Every recipe carries a [group('...')] so the menu/fzf launchers categorize
-# it and the self-updating menu can read it from `just --dump`.
+# Every recipe carries a [group('...')] so the menu can categorize it from
+# `just --dump`.
 
 set shell := ["/opt/homebrew/bin/bash", "-euo", "pipefail", "-c"]
 set dotenv-load := false
@@ -46,17 +45,11 @@ version:
     @echo "pnpm  $({{pnpm_cmd}} --version 2>/dev/null || echo 'not installed')"
     @echo "cargo $(cargo --version 2>/dev/null || echo 'not installed')"
 
-# Guided gum command builder (parameters become fill-in forms)
+# Guided command builder (parameters become fill-in forms)
 [group('meta')]
 [no-exit-message]
 menu:
     @'{{helpers}}/menu.bash'
-
-# Flat fzf power launcher (tab multi-select runs a batch)
-[group('meta')]
-[no-exit-message]
-fzf:
-    @'{{helpers}}/fzf.bash'
 
 # Dependency + project health audit (tiers, versions, fixes)
 [group('meta')]
@@ -74,7 +67,7 @@ doctor-install:
 setup:
     {{pnpm_cmd}} install
     {{pnpm_cmd}} run build
-    @echo "setup complete -- run 'just verify' to confirm the gate is green"
+    @echo "setup complete -- run 'just ci' to confirm the gate is green"
 
 # ── Build & Run ──
 
@@ -222,11 +215,11 @@ rust-fmt-check:
 
 # ── Check & Verify (gates) ──
 
-# Full pre-push gate (TS format + lint + typecheck + tests + docs)
+# Full CI gate (TS format + lint + typecheck + tests + docs)
 [group('check')]
-verify: fmt-check lint check-unused check-pnpm test md-lint
+ci: fmt-check lint check-unused check-pnpm test md-lint
 
-# Rust pre-push gate (format + clippy + tests)
+# Rust CI gate (format + clippy + tests)
 [group('check')]
 verify-rust: rust-fmt-check rust-lint rust-test
 

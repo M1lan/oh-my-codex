@@ -308,7 +308,8 @@ export function buildPlatformCommandSpec(
 		!isWindowsPathLike(command) &&
 		basename(command, extname(command)).toLowerCase() === "tmux"
 	) {
-		command = resolveTmuxBinaryForPlatform(platform, env, existsImpl) || command;
+		command =
+			resolveTmuxBinaryForPlatform(platform, env, existsImpl) || command;
 	}
 
 	if (platform !== "win32") {

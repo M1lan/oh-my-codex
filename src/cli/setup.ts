@@ -1353,8 +1353,6 @@ async function refreshOmxPluginDiscoveryCache(
 		)
 			continue;
 
-
-
 		staleDirs.push(cacheDir);
 		if (!options.dryRun) {
 			await rm(cacheDir, { recursive: true, force: true });

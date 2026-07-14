@@ -595,9 +595,11 @@ function removeLocalOmxPluginLegacyScalar(config: string): string {
 		result.push(line);
 	}
 
-	return result.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+	return result
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trimEnd();
 }
-
 
 export function hasLocalOmxPluginMcpServerRegistrations(
 	config: string,

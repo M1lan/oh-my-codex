@@ -59,16 +59,19 @@ describe("plugin marketplace config upserts", () => {
 		const repaired = upsertLocalOmxPluginEnablement(
 			[
 				'model = "gpt-5.6-sol"',
-				'',
-				'[plugins]',
+				"",
+				"[plugins]",
 				`"${OMX_LOCAL_PLUGIN_CONFIG_KEY}" = true`,
-				'other-plugin = true',
-				'',
+				"other-plugin = true",
+				"",
 			].join("\n"),
 		);
 
 		assert.doesNotThrow(() => TOML.parse(repaired));
-		assert.doesNotMatch(repaired, new RegExp(`^"${OMX_LOCAL_PLUGIN_CONFIG_KEY}"\\s*=`, "m"));
+		assert.doesNotMatch(
+			repaired,
+			new RegExp(`^"${OMX_LOCAL_PLUGIN_CONFIG_KEY}"\\s*=`, "m"),
+		);
 		assert.match(repaired, /^other-plugin = true$/m);
 		assert.equal(
 			countMatches(
