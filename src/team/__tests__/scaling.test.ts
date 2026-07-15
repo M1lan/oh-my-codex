@@ -2293,6 +2293,95 @@ exit 0
     }
   });
 
+  it('rolls back all preparation when the split target pane ID is PID-reused before split-window', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-scale-up-split-target-pid-reuse-'));
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-scale-up-split-target-pid-reuse-bin-'));
+    const tmuxLogPath = join(fakeBinDir, 'tmux.log');
+    const proofCountPath = join(fakeBinDir, 'proof-count');
+    const tmuxStubPath = join(fakeBinDir, 'tmux');
+    const previousPath = process.env.PATH;
+
+    try {
+      await writeFile(tmuxStubPath, [
+        '#!/bin/sh',
+        'set -eu',
+        `printf '%s\\n' "$*" >> "${tmuxLogPath}"`,
+        'case "${1:-}" in',
+        '  -V)',
+        '    echo "tmux 3.2a"',
+        '    ;;',
+        '  list-panes)',
+        `    count=0; [ ! -f "${proofCountPath}" ] || count=$(cat "${proofCountPath}")`,
+        '    count=$((count + 1))',
+        `    printf '%s' "$count" > "${proofCountPath}"`,
+        '    if [ "$count" -eq 1 ]; then',
+        "      printf '%s\\t%s\\t%s\\n' '%21' '0' '42421'",
+        '    else',
+        "      printf '%s\\t%s\\t%s\\n' '%21' '0' '52421'",
+        '    fi',
+        '    ;;',
+        '  split-window)',
+        '    echo "%31"',
+        '    ;;',
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'));
+      await chmod(tmuxStubPath, 0o755);
+      await writeFile(tmuxLogPath, '');
+      process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
+
+      const teamName = 'split-target-pid-reuse';
+      await initTeamState(teamName, 'task', 'executor', 1, cwd);
+      await configureScaleUpTeamForDirectDispatch(teamName, cwd);
+      const config = await readTeamConfig(teamName, cwd);
+      assert.ok(config);
+      if (!config) return;
+      config.workers[0]!.pid = 42421;
+      await saveTeamConfig(config, cwd);
+
+      const teamStateDir = join(cwd, '.omx', 'state', 'team', teamName);
+      const configPath = join(teamStateDir, 'config.json');
+      const tasksDir = join(teamStateDir, 'tasks');
+      const workersDir = join(teamStateDir, 'workers');
+      const runtimeDir = join(teamStateDir, 'runtime');
+
+      const configBefore = await readFile(configPath, 'utf-8');
+      const taskEntriesBefore = (await readdir(tasksDir)).sort();
+      const workerEntriesBefore = (await readdir(workersDir)).sort();
+      const runtimeDirExistedBefore = existsSync(runtimeDir);
+
+
+      const result = await scaleUp(
+        teamName,
+        1,
+        'executor',
+        [{ subject: 'must not persist', description: 'PID reuse rollback', owner: 'worker-2' }],
+        cwd,
+        { OMX_TEAM_SCALING_ENABLED: '1', OMX_TEAM_SKIP_READY_WAIT: '1' },
+      );
+
+      assert.deepEqual(result, {
+        ok: false,
+        error: 'scale_up_split_target_pid_changed:%21:42421:52421',
+      });
+      const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
+      assert.equal(tmuxCommands.filter((command) => command.startsWith('list-panes ')).length, 2);
+      assert.equal(tmuxCommands.some((command) => command.startsWith('split-window ')), false);
+      assert.equal(tmuxCommands.some((command) => command.startsWith('send-keys ')), false);
+      assert.equal(await readFile(configPath, 'utf-8'), configBefore);
+      assert.deepEqual((await readdir(tasksDir)).sort(), taskEntriesBefore);
+      assert.deepEqual((await readdir(workersDir)).sort(), workerEntriesBefore);
+      assert.equal(existsSync(join(workersDir, 'worker-2')), false);
+      assert.equal(existsSync(runtimeDir), runtimeDirExistedBefore);
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
+      await rm(cwd, { recursive: true, force: true });
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
+  });
+
   it('provisions detached worktrees for scaled-up workers from persisted team worktree mode', async () => {
     const repo = await initRepo();
     const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-scale-up-detached-bin-'));

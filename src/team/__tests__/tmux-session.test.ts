@@ -4729,7 +4729,7 @@ case "$1" in
         if [ -f "${proofStatePath}" ]; then proof_count=$(cat "${proofStatePath}"); fi
         proof_count=$((proof_count + 1))
         printf '%s' "$proof_count" > "${proofStatePath}"
-        if [ "$proof_count" -eq 9 ]; then
+        if [ "$proof_count" -eq 14 ]; then
           printf 'not-a-pane-snapshot\n'
         else
           printf "%%11\t0\t2000000011\n%%44\t0\t2000000044\n"
@@ -4776,6 +4776,52 @@ esac
     }
   });
 
+  it('rejects a replaced leader PID or owner before standalone HUD topology discovery', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-hud-entry-authorization-'));
+    try {
+      await withMockTmuxFixture(
+        'omx-tmux-standalone-hud-entry-authorization-',
+        (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  list-panes)
+    if [ "$2" = "-a" ]; then
+      proof_count=0
+      [ -f "${logPath}.proof-count" ] && proof_count=$(cat "${logPath}.proof-count")
+      proof_count=$((proof_count + 1))
+      printf '%s' "$proof_count" > "${logPath}.proof-count"
+      if [ "$proof_count" -eq 1 ]; then printf '%%11\\t0\\t2000000011\\n'; else printf '%%11\\t0\\t2000000099\\n'; fi
+    else
+      printf '%%11\\tzsh\\tzsh\\n%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /omx.js hud --watch\\n'
+    fi
+    ;;
+  split-window) printf '%%45\\n' ;;
+  *) exit 0 ;;
+esac
+`,
+        async ({ logPath }) => {
+          let ownerAuthorizationChecks = 0;
+          assert.throws(
+            () => restoreStandaloneHudPane('%11', cwd, {
+              expectedLeaderPanePid: 2000000011,
+              assertLeaderPaneAuthorization: () => {
+                ownerAuthorizationChecks += 1;
+                throw new Error('leader owner changed');
+              },
+            }),
+            /leader owner changed/,
+          );
+          assert.equal(ownerAuthorizationChecks, 1);
+          const commands = await readFile(logPath, 'utf-8');
+          assert.doesNotMatch(commands, /list-panes -t %11|kill-pane|split-window|resize-pane|select-pane/);
+        },
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed before a standalone HUD split when the adjacent leader proof is unavailable', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-hud-proof-loss-'));
     try {
@@ -4813,7 +4859,7 @@ esac
     }
   });
 
-  it('does not adopt a leader PID replacement between standalone HUD checks and the cwd read', async () => {
+  it('does not adopt a leader PID replacement before standalone HUD topology discovery', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-hud-leader-pid-reuse-'));
     try {
       await withMockTmuxFixture(
@@ -4847,7 +4893,7 @@ esac
             /tmux pane identity changed: %11/,
           );
           const commands = await readFile(logPath, 'utf-8');
-          assert.doesNotMatch(commands, /display-message|split-window|resize-pane|select-pane/);
+          assert.doesNotMatch(commands, /list-panes -t %11|display-message|kill-pane|split-window|resize-pane|select-pane/);
         },
       );
     } finally {
@@ -4870,7 +4916,7 @@ case "$1" in
       if [ -f "${logPath}.proof-count" ]; then count=$(cat "${logPath}.proof-count"); fi
       count=$((count + 1))
       printf '%s' "$count" > "${logPath}.proof-count"
-      if [ "$count" -ge 3 ]; then
+      if [ "$count" -ge 4 ]; then
         printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000099\\n'
       else
         printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000044\\n'
@@ -4911,7 +4957,7 @@ case "$1" in
       if [ -f "${logPath}.proof-count" ]; then count=$(cat "${logPath}.proof-count"); fi
       count=$((count + 1))
       printf '%s' "$count" > "${logPath}.proof-count"
-      if [ "$count" -ge 5 ]; then
+      if [ "$count" -ge 6 ]; then
         printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000099\\n'
       else
         printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000044\\n'
@@ -4954,7 +5000,11 @@ case "$1" in
       if [ -f "${logPath}.proof-count" ]; then count=$(cat "${logPath}.proof-count"); fi
       count=$((count + 1))
       printf '%s' "$count" > "${logPath}.proof-count"
-      if [ "$count" -ge 3 ]; then printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000099\\n'; else printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000044\\n'; fi
+      if [ "$count" -ge 4 ]; then
+        printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000099\\n'
+      else
+        printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000044\\n'
+      fi
     else
       printf '%%11\\tzsh\\tzsh\\n%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /omx.js hud --watch\\n'
     fi

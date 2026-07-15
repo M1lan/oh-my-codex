@@ -2557,12 +2557,12 @@ function isValidGonePaneDescendantCleanupDebt(value: unknown): value is GonePane
       || !Number.isSafeInteger(candidate.authorized_pane_pid)
       || (candidate.authorized_pane_pid as number) <= 0) return false;
     if (candidate.evidence === 'process_identity_unavailable') {
-      if (!Array.isArray(candidate.tracked_pids) || candidate.tracked_pids.length === 0
-        || candidate.tracked_pids.some((pid: unknown) => !Number.isSafeInteger(pid) || (pid as number) <= 0)
-        || new Set(candidate.tracked_pids).size !== candidate.tracked_pids.length) return false;
+      const trackedPids = candidate.tracked_pids as number[];
+      if (!Array.isArray(candidate.tracked_pids) || trackedPids.length === 0
+        || trackedPids.some((pid) => !Number.isSafeInteger(pid) || pid <= 0)
+        || new Set(trackedPids).size !== trackedPids.length) return false;
       if (candidate.tracked_processes === undefined) return true;
       if (!Array.isArray(candidate.tracked_processes) || !candidate.tracked_processes.every(isValidProcessIdentity)) return false;
-      const trackedPids = candidate.tracked_pids as number[];
       const trackedProcesses = candidate.tracked_processes as ProcessIdentity[];
       return trackedProcesses.every((identity) => trackedPids.includes(identity.pid))
         && new Set(trackedProcesses.map((identity) => identity.pid)).size === trackedProcesses.length;

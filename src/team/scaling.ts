@@ -825,6 +825,18 @@ export async function scaleUp(
         workerLaunchArgs,
         workerCli,
       } = workerLaunchPlan;
+      // Freeze the split target and its identity before preparing any artifacts.
+      // Later proof must establish that this exact pane process still owns the
+      // target; a recycled pane ID must never become split authority.
+      const splitTargetWorker = config.workers[config.workers.length - 1];
+      const splitTarget = splitTargetWorker?.pane_id ?? config.leader_pane_id ?? '';
+      const expectedSplitTargetPid = typeof splitTargetWorker?.pid === 'number'
+        && Number.isSafeInteger(splitTargetWorker.pid)
+        && splitTargetWorker.pid > 0
+        ? splitTargetWorker.pid
+        : initialSplitTargetProof.pid;
+      const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
+
       nextIndex = workerIndex + 1;
       if (workerLaunchPlan.mixedTaskRoles.length > 1) {
         console.log(`[omx:scaling] ${workerName}: mixed task roles [${workerLaunchPlan.mixedTaskRoles.join(', ')}], falling back to ${agentType}`);
@@ -951,17 +963,19 @@ export async function scaleUp(
         );
       }
 
-      // Find the right-most worker pane to split from, or fall back to leader pane.
-      // Keep the initial split from leader horizontal to preserve the leader-left
-      // / workers-right composition.
-      const splitTarget = config.workers.length > 0
-        ? (config.workers[config.workers.length - 1]?.pane_id ?? config.leader_pane_id ?? '')
-        : (config.leader_pane_id ?? '');
-      const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
+      // The target and its expected PID were frozen before preparation. Prove
+      // the same identity immediately before the split-window side effect.
+
       const splitTargetProof = readExactPaneProofSync(splitTarget);
       if (splitTargetProof.status !== 'live') {
         return await rollbackScaleUp(
           `scale_up_split_target_proof_unavailable:${splitTarget}:${splitTargetProof.reason}`,
+          { workerName, worktreePath: workerWorkspace?.worktreePath },
+        );
+      }
+      if (splitTargetProof.pid !== expectedSplitTargetPid) {
+        return await rollbackScaleUp(
+          `scale_up_split_target_pid_changed:${splitTarget}:${expectedSplitTargetPid}:${splitTargetProof.pid}`,
           { workerName, worktreePath: workerWorkspace?.worktreePath },
         );
       }

@@ -216,13 +216,14 @@ function requireLiveExactPaneSync(paneId: string, expectedPid?: number): string 
   return proof.paneId;
 }
 
-function killExactPaneSync(paneId: string, expectedPid?: number): void {
+function killExactPaneSync(paneId: string, expectedPid?: number, assertAuthorization?: () => void): void {
   const proof = readExactPaneProofSync(paneId);
   if (proof.status === 'unavailable') throw new ExactPaneProofUnavailableError(proof);
   if (proof.status === 'gone') return;
   if (expectedPid !== undefined && proof.pid !== expectedPid) {
     throw new Error(`tmux pane identity changed: ${paneId}`);
   }
+  assertAuthorization?.();
   const result = runTmux(['kill-pane', '-t', proof.paneId]);
   if (!result.ok) throw new Error(`failed to kill tmux pane ${proof.paneId}: ${result.stderr}`);
   const afterKill = readExactPaneProofSync(proof.paneId);
@@ -2087,6 +2088,8 @@ export function restoreStandaloneHudPane(
     options.assertLeaderPaneAuthorization?.();
     return requireLiveExactPaneSync(normalizedLeaderPaneId, options.expectedLeaderPanePid ?? leaderPanePid);
   };
+  requireAuthorizedLeaderPane();
+
   const [existingHudPaneId, ...duplicateHudPaneIds] = findOwnedHudPaneIds(
     normalizedLeaderPaneId,
     normalizedLeaderPaneId,
@@ -2100,22 +2103,26 @@ export function restoreStandaloneHudPane(
     ownedHudPanePids.set(paneId, proof.pid);
   }
   for (const paneId of duplicateHudPaneIds) {
-    killExactPaneSync(paneId, ownedHudPanePids.get(paneId));
+    killExactPaneSync(paneId, ownedHudPanePids.get(paneId), requireAuthorizedLeaderPane);
   }
   if (existingHudPaneId) {
     if (isNativeWindows()) {
-      const reconcile = runTmux(buildHudResizeArgs(requireLiveExactPaneSync(
+      const exactHudPaneId = requireLiveExactPaneSync(
         existingHudPaneId,
         ownedHudPanePids.get(existingHudPaneId),
-      )));
+      );
+      requireAuthorizedLeaderPane();
+      const reconcile = runTmux(buildHudResizeArgs(exactHudPaneId));
       if (!reconcile.ok) throw new Error(`failed to reconcile standalone HUD resize: ${reconcile.stderr}`);
     } else {
+      requireAuthorizedLeaderPane();
       runTmux(buildScheduleDelayedHudResizeArgs(
         existingHudPaneId,
         HUD_RESIZE_RECONCILE_DELAY_SECONDS,
         HUD_TMUX_TEAM_HEIGHT_LINES,
         ownedHudPanePids.get(existingHudPaneId),
       ));
+      requireAuthorizedLeaderPane();
       runTmux(buildReconcileHudResizeArgs(
         existingHudPaneId,
         HUD_TMUX_TEAM_HEIGHT_LINES,
@@ -2166,15 +2173,19 @@ export function restoreStandaloneHudPane(
     return proof.pid;
   })();
   if (isNativeWindows()) {
-    const reconcile = runTmux(buildHudResizeArgs(requireLiveExactPaneSync(paneId, hudPanePid)));
+    const exactHudPaneId = requireLiveExactPaneSync(paneId, hudPanePid);
+    requireAuthorizedLeaderPane();
+    const reconcile = runTmux(buildHudResizeArgs(exactHudPaneId));
     if (!reconcile.ok) throw new Error(`failed to reconcile standalone HUD resize: ${reconcile.stderr}`);
   } else {
+    requireAuthorizedLeaderPane();
     runTmux(buildScheduleDelayedHudResizeArgs(
       paneId,
       HUD_RESIZE_RECONCILE_DELAY_SECONDS,
       HUD_TMUX_TEAM_HEIGHT_LINES,
       hudPanePid,
     ));
+    requireAuthorizedLeaderPane();
     runTmux(buildReconcileHudResizeArgs(paneId, HUD_TMUX_TEAM_HEIGHT_LINES, hudPanePid));
   }
   runTmux(['select-pane', '-t', requireAuthorizedLeaderPane()]);
