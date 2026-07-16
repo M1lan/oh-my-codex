@@ -74,12 +74,24 @@ Setup-owned trust state is limited to those generated wrapper identities; user h
 
 The Main-root Conductor write guard blocks source, package, git, and substantive
 plan/spec/review edits from the leader while allowing workflow metadata writes.
-Delegated performer lanes are exempt only when the event is a known typed role
-and trusted lane provenance exists. Native Codex events may provide that
-provenance either through `source.subagent.thread_spawn.parent_thread_id` or
-through an existing `.omx/state/subagent-tracking.json` entry whose `thread_id`
-is recorded as `kind:"subagent"`. A bare typed role on the leader event is not
-enough to bypass the guard.
+Trust for delegated performer lanes is scoped by guard:
+
+- Planning boundary guards (`ralplan`, `deep-interview`) exempt a delegated lane
+  only when the event is a known typed role (catalog-bounded or an installed
+  `*.toml` role) **and** trusted lane provenance exists. This keeps untyped
+  `collaboration.spawn_agent` children from writing source before an execution
+  handoff/approval.
+- The Main-root Conductor / Ralph executing guard additionally trusts a delegated
+  lane on trusted provenance alone, regardless of role label, so native
+  `collaboration.spawn_agent` children and descendants can perform bounded writes
+  during execution (#3116).
+
+Native Codex events may provide that provenance either through
+`source.subagent.thread_spawn.parent_thread_id` or through an existing
+`.omx/state/subagent-tracking.json` entry whose `thread_id` is recorded as
+`kind:"subagent"`. The session leader thread is never trusted through either
+path, so a bare typed role on the leader event — or provenance attached to the
+leader thread — is not enough to bypass the guard.
 
 ## Document-refresh warning MVP
 
@@ -193,6 +205,14 @@ Unsupported overlaps should preserve the current state unchanged and direct the
 operator to clear incompatible state explicitly via `omx state ...` or the
 `omx_state.*` MCP tools before retrying. See
 `docs/contracts/multi-state-transition-contract.md`.
+
+## UserPromptSubmit: session provenance
+
+`UserPromptSubmit` resolves session authority from the explicit native payload before consulting the workspace pointer. A valid `payload.session_id` selects that Codex logical owner directly; the singleton `.omx/state/session.json` pointer may supply a canonical storage alias only when its recorded native/owner aliases prove the same logical session. When the payload identity is absent, pointer fallback uses the selected pointer's validated owner/native aliases and canonical session. Cwd, directory existence, and last-writer pointer state are not ownership proof.
+
+Native and notify leader turns classify provenance once and pass an immutable authorization context to activation, continuation, HUD, auto-nudge, pane injection, and Ralph helpers. Notify's compatibility fork keeps Codex owner P separate from an already-existing OMX storage scope F; only the notify resolver may authorize that relation. Trusted child provenance is compared to the Codex owner, never the storage directory: a proven child of the current owner is silently suppressed, while foreign or ambiguous child evidence rejects the turn before workflow reads or writes.
+
+Rejected turns perform no activation, continuation, steering, plugin, HUD, pane, timestamp, or neighboring-session mutation. They may append one redacted `prompt_session_provenance_rejected` diagnostic under the already-selected state root; the record contains the reason and producer but no raw session/thread identifiers, prompt text, environment value, or foreign path. `PreToolUse`, `Stop`, SessionStart reconciliation, and authoritative-root selection retain their existing contracts.
 
 ## UserPromptSubmit: triage advisory context
 

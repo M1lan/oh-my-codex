@@ -213,10 +213,15 @@ export async function shouldDispatchOpenClaw(
  * Reads config, checks if the event is enabled, formats the message,
  * and dispatches to all configured platforms. Non-blocking, swallows errors.
  */
+interface NotificationLifecycleOptions {
+  persistScopedReceipts?: boolean;
+}
+
 export async function notifyLifecycle(
 	event: NotificationEvent,
 	data: Partial<FullNotificationPayload> & { sessionId: string },
 	profileName?: string,
+  options: NotificationLifecycleOptions = {},
 ): Promise<DispatchResult | null> {
 	try {
 		const config = getNotificationConfig(profileName);
@@ -344,7 +349,7 @@ export async function notifyLifecycle(
 		}
 
 		const result = await dispatchNotifications(config, event, payload);
-		if (result.anySuccess) {
+    if (result.anySuccess && options.persistScopedReceipts !== false) {
 			recordLifecycleNotificationSent(lifecycleStateDir, payload);
 			if (event === "session-idle" && sessionIdleTmuxTailAllowed) {
 				recordSessionIdleTmuxTailSent(
@@ -359,7 +364,7 @@ export async function notifyLifecycle(
 			await dispatchOpenClawLater();
 		}
 
-		if (result.anySuccess && payload.tmuxPaneId) {
+    if (result.anySuccess && payload.tmuxPaneId && options.persistScopedReceipts !== false) {
 			try {
 				const { registerMessage } = await import("./session-registry.js");
 				for (const r of result.results) {

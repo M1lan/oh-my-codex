@@ -50,6 +50,17 @@ import {
 import { getBaseStateDir } from "../../state/paths.js";
 import { maybeNudgeLeaderForAllowedWorkerStop } from "../notify-hook/team-worker-stop.js";
 import { MAX_NATIVE_STDIN_JSON_BYTES } from "../hook-payload-guard.js";
+import {
+	readSubagentTrackingState,
+	recordPendingRoleIntent,
+} from "../../subagents/tracker.js";
+import { buildRoleIntentSpawnTaskName } from "../../leader/contract.js";
+
+import {
+	NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE,
+	readRoleRoutingMarker,
+	writeRoleRoutingMarker,
+} from "../../subagents/role-routing-marker.js";
 
 function nativeHookScriptPath(): string {
 	return join(process.cwd(), "dist", "scripts", "codex-native-hook.js");
@@ -311,6 +322,24 @@ exit 0
 `;
 }
 
+function buildSessionOwnerEvidenceTmux(
+	paneInstanceId: string,
+	sessionInstanceId = "",
+): string {
+	return `#!/usr/bin/env bash
+set -eu
+case "\${1:-}" in
+display-message) printf '%s\n' "omx-owner-evidence" ;;
+show-option|show-options)
+case "\${@: -1}" in
+@omx_pane_instance_id) printf '%s\n' "${paneInstanceId}" ;;
+@omx_instance_id) printf '%s\n' "${sessionInstanceId}" ;;
+esac
+;;
+esac
+`;
+}
+
 async function initTempGitRepo(prefix: string): Promise<string> {
 	const cwd = await mkdtemp(join(tmpdir(), prefix));
 	execFileSync("git", ["init"], { cwd, stdio: "ignore" });
@@ -426,6 +455,7 @@ const TEAM_ENV_KEYS = [
 	"OMX_TEAM_INTERNAL_WORKER",
 	"OMX_TEAM_STATE_ROOT",
 	"OMX_TEAM_LEADER_CWD",
+	"OMX_TEAM_MODE",
 	"OMX_SESSION_ID",
 	"OMX_ROOT",
 	"OMX_STATE_ROOT",
@@ -922,6 +952,110 @@ describe("codex native hook dispatch", () => {
 			assert.equal(output.decision, undefined);
 			assert.equal(output.reason, undefined);
 			assert.equal(output.systemMessage, undefined);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows Ralplan Markdown draft-only apply_patch on the live CLI path while denying mixed targets", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-cli-ralplan-draft-boundary-"),
+		);
+		const sessionId = "sess-cli-ralplan-draft-boundary";
+		const stateDir = join(cwd, ".omx", "state");
+		try {
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "skill-active-state.json"),
+				{
+					active: true,
+					skill: "ralplan",
+					phase: "planning",
+					session_id: sessionId,
+					active_skills: [
+						{
+							skill: "ralplan",
+							phase: "planning",
+							active: true,
+							session_id: sessionId,
+						},
+					],
+				},
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralplan-state.json"),
+				{
+					active: true,
+					mode: "ralplan",
+					current_phase: "planning",
+					session_id: sessionId,
+				},
+			);
+
+			for (const [name, target] of [
+				["relative", ".omx/drafts/issue-3105.md"],
+				["repository-absolute", join(cwd, ".omx", "drafts", "issue-3105.md")],
+			] as const) {
+				const result = runNativeHookCliResult(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: `thread-cli-ralplan-draft-${name}`,
+						tool_name: "apply_patch",
+						tool_input: {
+							input: `*** Begin Patch\n*** Add File: ${target}\n+# Draft\n*** End Patch\n`,
+						},
+					},
+					{ cwd },
+				);
+
+				assert.equal(result.status, 0, result.stderr || result.stdout);
+				assert.deepEqual(parseSingleJsonStdout(result.stdout), {});
+			}
+
+			const mixedResult = runNativeHookCliResult(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: "thread-cli-ralplan-draft-mixed",
+					tool_name: "apply_patch",
+					tool_input: {
+						input:
+							"*** Begin Patch\n*** Add File: .omx/drafts/issue-3105.md\n+# Draft\n*** Add File: src/leak.ts\n+leak\n*** End Patch\n",
+					},
+				},
+				{ cwd },
+			);
+
+			assert.equal(
+				mixedResult.status,
+				0,
+				mixedResult.stderr || mixedResult.stdout,
+			);
+			const mixedOutput = parseSingleJsonStdout(mixedResult.stdout);
+			const hookSpecificOutput = mixedOutput.hookSpecificOutput as Record<
+				string,
+				unknown
+			>;
+			assert.deepEqual(Object.keys(mixedOutput).sort(), ["hookSpecificOutput"]);
+			assert.equal(hookSpecificOutput.hookEventName, "PreToolUse");
+			assert.equal(hookSpecificOutput.permissionDecision, "deny");
+			assert.match(
+				String(hookSpecificOutput.permissionDecisionReason ?? ""),
+				/src\/leak\.ts/,
+			);
+			assert.match(
+				String(hookSpecificOutput.permissionDecisionReason ?? ""),
+				/implementation\/write tools are blocked/,
+			);
+			assert.equal(mixedOutput.decision, undefined);
+			assert.equal(mixedOutput.reason, undefined);
+			assert.equal(mixedOutput.systemMessage, undefined);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -1875,6 +2009,4642 @@ PY`,
 		}
 	});
 
+	it("preserves all structural blockers through raw UserPromptSubmit state and Stop", async () => {
+		const cases = [
+			{
+				name: "unsafe-token-boundary",
+				prompt: "$ralplan\u200B.md",
+				expectedSkill: null,
+			},
+			{ name: "at-suffix", prompt: "$ralplan@docs", expectedSkill: null },
+			{ name: "hash-suffix", prompt: "$ralplan#docs", expectedSkill: null },
+			{ name: "equals-suffix", prompt: "$ralplan=docs", expectedSkill: null },
+			{
+				name: "fullwidth-at-suffix",
+				prompt: "$ralplan＠docs",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-hash-suffix",
+				prompt: "$ralplan＃docs",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-equals-suffix",
+				prompt: "$ralplan＝docs",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-use-ralplan",
+				prompt: "use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-please-use-ralplan",
+				prompt: "please use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-run-ralplan",
+				prompt: "run $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-list-use-ralplan",
+				prompt: "- use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-documentation-then-command",
+				prompt:
+					"use $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-then-implicit-command",
+				prompt:
+					"use $ralplan is the consensus-planning command\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-trailing-prose-then-command",
+				prompt:
+					"use $ralplan is the workflow command for planning\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-implicit-prose",
+				prompt: "use $ralplan is the workflow command for autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-alias-prose",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is its alias.",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-coordinated-documentation-then-command",
+				prompt:
+					"- use $ralplan and $autopilot are workflow commands\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-semicolon-directive",
+				prompt:
+					"use $ralplan is the consensus-planning command; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-two-documentation-blocks",
+				prompt:
+					"use $ralplan is the consensus-planning command\nuse $autopilot is the autonomous workflow command\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-embedded-token-then-command",
+				prompt:
+					"use $ralplan is the workflow command for $team\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-task-noun-followup",
+				prompt:
+					"use $ralplan is the workflow command; use $autopilot update the documentation",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-implicit-semicolon-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-transition-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command; then use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-explicit-alias",
+				prompt:
+					"use $ralplan is the consensus-planning command; $team is its alias",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-implicit-chain",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is its alias.\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-fullwidth-separator",
+				prompt: "use $ralplan，$autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-compact-slash",
+				prompt:
+					"use $ralplan/$autopilot are workflow commands\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "reference-prompts-title-then-command",
+				prompt:
+					'[docs]: /target "title\nUse /prompts:architect"\n$ralph execute it',
+				expectedSkill: "ralph",
+			},
+			{
+				name: "doc-period-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-bare-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command; autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-semicolon",
+				prompt:
+					"use $ralplan is the consensus-planning command； use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-but-followup",
+				prompt:
+					"use $ralplan is the workflow command; but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-oxford",
+				prompt: "use $ralplan， $autopilot， and $team are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "reference-zero-title",
+				prompt: "[docs]: ./target\n(autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-also-alias-explicit",
+				prompt:
+					"use $ralplan is the consensus-planning command; $team is also its alias",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-also-alias-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is also its alias.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-embedded-mention",
+				prompt:
+					"use $ralplan is the workflow command; $team appears in the documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "chained-negation",
+				prompt: "$ralplan; $autopilot is prohibited",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "long-negation",
+				prompt: `$ralplan; $autopilot${" ".repeat(193)}is prohibited`,
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "doc-arabic-comma",
+				prompt: "use $ralplan، $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "arabic-negation",
+				prompt: "$ralplan، $autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-arabic-negation",
+				prompt: "Autopilot mode، deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-frame-reset",
+				prompt: "For instance: manual mode is slower。 Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-abbreviation",
+				prompt:
+					"use $ralplan is the workflow command, e.g. use $autopilot in examples.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-mention",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode appears in the documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-chain",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is its alias; $ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "long-command-gap",
+				prompt: `use $ralplan is the workflow command; use${" ".repeat(161)}$autopilot build it`,
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "ideographic-negation",
+				prompt: "$ralplan、 $autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ideographic-negation",
+				prompt: "Autopilot mode、 deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-exclamation-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command! run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-question-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command？ run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-predecessor",
+				prompt: "Autopilot mode is workflow documentation.\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "confusable-use-verb",
+				prompt: "uſe $ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-please-prefix",
+				prompt: "pleaſe use $ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-prompts-token-then-command",
+				prompt: "/promptſ:architect; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reserved-em-dash-boundary",
+				prompt: "/prompts:architect— use autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "reserved-fullwidth-comma-boundary",
+				prompt: "/prompts:architect， use autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-implicit-verb",
+				prompt: "Do not use deep interview but uſe autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-fullwidth-colon",
+				prompt: "For instance： use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-fullwidth-comma",
+				prompt: "For instance， use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-arabic-comma",
+				prompt: "For instance، use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-ideo-comma",
+				prompt: "For instance、 use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-explicit-documented",
+				prompt:
+					"use $ralplan is the workflow command; $autopilot is documented in the guide.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-explicit-described",
+				prompt: "$autopilot is described in the manual.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-comma-followup",
+				prompt:
+					"use $ralplan is the workflow command, but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fw-comma-followup",
+				prompt:
+					"use $ralplan is the workflow command， but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-arabic-followup",
+				prompt:
+					"use $ralplan is the workflow command، but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-ideo-followup",
+				prompt:
+					"use $ralplan is the workflow command、 but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-arabic-followup",
+				prompt: "Do not run $ralplan، use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-ideo-followup",
+				prompt: "Do not run $ralplan、 use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-prefix-next",
+				prompt: "The docs mention autopilot mode.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-doc-prefix-same-line",
+				prompt: "The docs mention autopilot mode; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-doc-subject-same-line",
+				prompt:
+					"Autopilot mode is workflow documentation; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "compact-explicit-negation",
+				prompt: "$ralplan,$autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "compact-implicit-negation",
+				prompt: "Autopilot mode،deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-clause-local-prefix",
+				prompt: "$ralplan; $autopilot is documented in the guide.",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-chain-described",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is documented in the guide; $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "doc-chain-workflow",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is workflow documentation; use $ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "ref-inline-explicit",
+				prompt: "[docs]: $ralplan\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "ref-inline-prompts",
+				prompt: "[docs]: /prompts:architect\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "list-fullwidth-explicit-doc",
+				prompt: "- $ralplan： consensus-planning workflow",
+				expectedSkill: null,
+			},
+			{
+				name: "list-fullwidth-implicit-doc",
+				prompt: "- autopilot mode： autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-straight",
+				prompt: "$ralplan's workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-curly",
+				prompt: "$ralplan’s workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-fullwidth",
+				prompt: "$ralplan＇s workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-prompts",
+				prompt: "/prompts:architect's syntax is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-kata",
+				prompt: "$・autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-half",
+				prompt: "$･autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-arabic",
+				prompt: "$٪autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-division",
+				prompt: "$∕autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-but-directive",
+				prompt: "use $autopilot is documented but use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "list-directive-fw-colon",
+				prompt: "- use $ralplan： consensus-planning workflow",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-arabic-question",
+				prompt: "use $ralplan is the workflow command؟ run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "arabic-semicolon-negation",
+				prompt: "$ralplan؛ $autopilot is prohibited",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "confusable-postposed-transition",
+				prompt: "$ralplan is prohibited but uſe autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-negation",
+				prompt: "Autopilot mode and $ralplan are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "both-mixed-negation",
+				prompt: "Both autopilot mode and $ralplan are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-documentation",
+				prompt: "use $ralplan and autopilot mode are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "prose-doc-no-reopen",
+				prompt: "$ralplan is prohibited because docs use $autopilot.",
+				expectedSkill: null,
+			},
+			{
+				name: "neg-fw-dot-reopen",
+				prompt: "Do not run $ralplan． use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-greek-q-reopen",
+				prompt: "Do not run $ralplan; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "unicode-attached-contrast",
+				prompt: "Do not use deep interview яbut use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "prefix-list-followup",
+				prompt: "Do not run $ralplan, $autopilot; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "mixed-postposed-chain",
+				prompt: "$ralplan, autopilot mode, $team are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-first-doc-chain",
+				prompt:
+					"Autopilot mode and $ralplan are workflow commands; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "both-mixed-doc-followup",
+				prompt:
+					"Both autopilot mode and $ralplan are workflow commands; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "doc-semicolon-preserves-earlier",
+				prompt: "Use autopilot mode; use $ralplan is the workflow command.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-independent-comma",
+				prompt: "Use autopilot mode, and $ralplan is documented in the guide.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reference-unclosed-quote-destination",
+				prompt: '[docs]: "target\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-unclosed-inline-destination",
+				prompt: "[docs]: `target\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-prefix-negation-implicit",
+				prompt: "Do not run $ralplan and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "repeated-postposed-followup",
+				prompt: "$team is prohibited and is forbidden; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-preserves-earlier",
+				prompt:
+					'Use autopilot mode; "note"; use $ralplan is the workflow command.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-colon-followup",
+				prompt: "use $ralplan is the workflow command: use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-followup",
+				prompt:
+					"Mode | Meaning\n--- | ---\nmanual | documentation\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "neg-advance-reopen",
+				prompt: "Do not run $ralplan but advance to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "neg-jump-reopen",
+				prompt: "Do not run $ralplan but jump straight to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "reference-plain-title",
+				prompt: '[docs]: /target "title\nplain text"\n$ralplan plan it',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-plain-destination",
+				prompt: "[docs]: ./target\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-use-the",
+				prompt: "Do not run $ralplan; use the $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-continue-after-quote",
+				prompt: '"quoted"\ncontinue with $ralplan',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-advance-followup",
+				prompt: "use $ralplan is the workflow command; advance to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-run-analyze",
+				prompt: "run $analyze",
+				expectedSkill: "analyze",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-run-code-review",
+				prompt: "run $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-please-use-code-review",
+				prompt: "please use $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-please-run-ralplan",
+				prompt: "please run $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-start-ralplan",
+				prompt: "start $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-enable-deep-interview",
+				prompt: "enable $deep-interview",
+				expectedSkill: "deep-interview",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-launch-autopilot",
+				prompt: "launch $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-invoke-ralph",
+				prompt: "invoke $ralph",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-activate-ultrawork",
+				prompt: "activate $ultrawork",
+				expectedSkill: "ultrawork",
+			},
+			{
+				name: "directive-resume-ralplan",
+				prompt: "resume $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-continue-code-review",
+				prompt: "continue $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-documentation",
+				prompt: "use $ralplan is the consensus-planning command",
+				expectedSkill: null,
+			},
+			{
+				name: "g1a-ordered-multi-skill",
+				prompt: "$ralplan, $autopilot; $team",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: ["autopilot", "team"],
+				expectedActiveSkills: ["ralplan"],
+				expectedActiveDetailSkills: ["ralplan"],
+				insideTmux: true,
+			},
+			{
+				name: "g1c-duplicate-alias",
+				prompt: "$autopilot $oh-my-codex:autopilot build it",
+				expectedSkill: "autopilot",
+				expectedDeferredSkills: [],
+				expectedActiveSkills: ["autopilot"],
+			},
+			{
+				name: "b3-longer-valid-fence",
+				prompt: "```text\n$ralplan plan it\n````\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "b4-shorter-invalid-fence",
+				prompt: "````text\n$ralplan plan it\n```\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "b5-different-marker-invalid-fence",
+				prompt: "```text\n$ralplan plan it\n~~~\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-non-leading-prose",
+				prompt: "The docs say use $ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "nested-bounded-child-unbounded-parent",
+				prompt: '"`x`\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "first-contiguous-block-terminal",
+				prompt: '$ralplan plan it\n"x"\n$autopilot build it',
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "leading-reserved-dominance",
+				prompt: '/prompts:architect\n"x"\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "list-fence-root-opener",
+				prompt: "- ```\n  sample\n```\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "list-fence-relative-closer",
+				prompt: "- ```\n  sample\n    ```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-multiline-title-explicit",
+				prompt:
+					'[docs]: /target "title\nuse /prompts:architect\n$ralplan plan it"',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-multiline-title-implicit",
+				prompt: '[docs]: /target "title\nuse autopilot mode"',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-next-line-title",
+				prompt: "[docs]: ./target\n  (autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "reference-next-line-destination-title",
+				prompt: "[docs]:\n  ./target\n  (autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "kelvin-case-fold-suffix",
+				prompt: "$ultraworK execute",
+				expectedSkill: null,
+			},
+			{
+				name: "katakana-middle-dot-suffix",
+				prompt: "$ralplan・suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "halfwidth-middle-dot-suffix",
+				prompt: "$ralplan･suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "arabic-percent-suffix",
+				prompt: "$ralplan٪docs",
+				expectedSkill: null,
+			},
+			{
+				name: "division-slash-suffix",
+				prompt: "$ralplan∕config",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative",
+				prompt: "Do not use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-list",
+				prompt: "Do not use deep interview, autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-nor",
+				prompt: "Do not use deep interview, nor autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-avoid",
+				prompt: "Avoid autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-suffix",
+				prompt: "Autopilot mode is not allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-contraction",
+				prompt: "Autopilot mode isn't allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-prohibited",
+				prompt: "Autopilot mode is prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-no-prefix",
+				prompt: "No autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-quoted-doc",
+				prompt: 'The docs call this "autopilot mode".',
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fenced",
+				prompt: "```\nautopilot mode\n```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-fenced",
+				prompt: "- ```\n  autopilot mode\n  ```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-sibling-list-fence",
+				prompt: "- ```\n  first example\n- ```\n  autopilot mode\n  ```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-prompts-protocol",
+				prompt: "use /prompts:architect autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-quoted-prompts-positive",
+				prompt:
+					'Ignore the quoted "/prompts:architect" and use autopilot mode.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-verb",
+				prompt: "This documents autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-guide-frame",
+				prompt:
+					"The guide says do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-link",
+				prompt: "[autopilot mode](./docs.md)",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-heading",
+				prompt: "## Autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-table",
+				prompt: "| autopilot mode | workflow command |",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-dash-documentation",
+				prompt: "Autopilot mode — autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-unicode-adjacency",
+				prompt: "문서autopilot mode한글",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-korean-negative",
+				prompt: "autopilot mode는 사용하지 마세요",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-coordinated-negative",
+				prompt: "Autopilot mode and deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-modal-negative",
+				prompt: "Autopilot mode should be avoided.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-frame",
+				prompt:
+					"Example: do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fullwidth-single-quote",
+				prompt: "＇autopilot mode＇",
+				expectedSkill: null,
+			},
+			{
+				name: "escaped-plugin-autopilot",
+				prompt: "\\$oh-my-codex:autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-comma-coordinated-negative",
+				prompt: "Autopilot mode, deep interview, and team are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-example-frame",
+				prompt:
+					"For example, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-docs-comma-frame",
+				prompt:
+					"According to the docs, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-curly-dont-negative",
+				prompt: "Don’t use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fullwidth-dont-negative",
+				prompt: "Don＇t use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-curly-isnt-negative",
+				prompt: "Autopilot mode isn’t allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-copular-infinitive-negative",
+				prompt: "Autopilot mode is to be avoided.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-past-copular-infinitive-negative",
+				prompt: "Autopilot mode was to be disabled.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-article-coordinated-negative",
+				prompt:
+					"Autopilot mode and the deep interview workflow are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-example-frame",
+				prompt:
+					"As an example, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-instance-frame",
+				prompt:
+					"For instance, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-reference-link",
+				prompt: "[autopilot mode][docs]",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-plural-coordinated-negative",
+				prompt: "Autopilot mode and deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-example-governing-frame",
+				prompt: "As an example, ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-instance-governing-frame",
+				prompt: "For instance, ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-definition",
+				prompt: "[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-shortcut-label",
+				prompt: "[autopilot mode]",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-setext",
+				prompt: "Autopilot mode\n===",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-markdown-pipe-table",
+				prompt: "$ralplan | workflow\n--- | ---",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-table-body",
+				prompt:
+					"Mode | Meaning\n--- | ---\nautopilot mode | autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-well-as-negative",
+				prompt:
+					"Autopilot mode as well as deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-along-with-negative",
+				prompt:
+					"Autopilot mode along with deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-together-with-negative",
+				prompt:
+					"Autopilot mode together with deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ampersand-negative",
+				prompt: "Autopilot mode & deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-colon-frame",
+				prompt: "As an example: ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-em-dash-frame",
+				prompt: "For instance — ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-hyphen-frame",
+				prompt: "For example - ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-colon-frame-no-doc-word",
+				prompt: "For instance: use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-em-dash-frame-no-doc-word",
+				prompt: "For instance — use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-later-table-body",
+				prompt:
+					"Mode | Meaning\n--- | ---\nmanual | docs\nautopilot mode | autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-embedded-shortcut-definition",
+				prompt: "See [autopilot mode] for details.\n\n[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-as-well-negative",
+				prompt:
+					"Autopilot mode, as well as deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-along-negative",
+				prompt:
+					"Autopilot mode, along with deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-together-negative",
+				prompt:
+					"Autopilot mode, together with deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-normalized-shortcut-definition",
+				prompt:
+					"See [autopilot   mode] for details.\n\n[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ignore-exclusion",
+				prompt: "Ignore autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-skip-exclusion",
+				prompt: "Skip autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-exclude-exclusion",
+				prompt: "Exclude autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-prohibited",
+				prompt: "$ralplan is prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-modal-negative",
+				prompt: "$ralplan should not be run.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-coordinated-negative",
+				prompt: "$ralplan and $autopilot are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-article-coordination",
+				prompt: "$ralplan and the $autopilot workflow are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-implicit-coordination",
+				prompt: "$ralplan and autopilot mode are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-blockquote-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n> [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n- [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-indented-blockquote-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n>   [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-list-contained-indented-code",
+				prompt: "-     $ralplan",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-contained-indented-code",
+				prompt: "1.     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-four-space-blockquote-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n>    [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-multiline-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n[autopilot mode]:\n  ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-list-tab-code-boundary",
+				prompt: "-   \t$ralplan",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-nested-list-contained-code",
+				prompt: "- -     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-nested-blockquote",
+				prompt: "- > autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-deep-nested-list-contained-code",
+				prompt: "- - - - - - - - -     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ordered-list-nested-blockquote",
+				prompt: "1234. > autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-nested-list-positive",
+				prompt: "- - $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-four-digit-ordered-list-positive",
+				prompt: "1234. $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-list-fence-then-positive",
+				prompt: "- ```\n  $ralplan\n  ```\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-nested-list-doc-then-positive",
+				prompt:
+					"- - $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-after-closed-blockquote",
+				prompt: "> quoted context\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-closed-fence",
+				prompt: "```text\nquoted context\n```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-indented-code",
+				prompt: "    quoted context\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-closed-quote",
+				prompt: '"quoted context"\n$ralplan plan it',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-prompts-context",
+				prompt: "Use /prompts:architect.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-bare-prompts-precedence",
+				prompt: "Prose\n/prompts:architect\n$ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-unclosed-fence",
+				prompt: "```text\nquoted context\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-mismatched-fence",
+				prompt: "```text\nquoted context\n~~~\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-unclosed-quote",
+				prompt: '"quoted context\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-blockquote-prose",
+				prompt: "> quoted context\nThe docs mention $ralplan only",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-quote-negative",
+				prompt: '"quoted context"\nDo not run $ralplan',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-prose",
+				prompt: "> quoted context\nProse\n$ralplan implement this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-directive-clause",
+				prompt: "> quoted context\nProse\nUse $ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-prompts",
+				prompt: "> quoted context\n/prompts:architect\n$ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-second-block",
+				prompt:
+					"> quoted context\n$ralplan plan it\nLater discussion.\n$autopilot build it",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "explicit-negative-before-unclosed-quote",
+				prompt: 'Do not run $ralplan.\n"unclosed context\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-reference-before-unclosed-quote",
+				prompt: '[$ralplan]: ./docs\n"unclosed context\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-prompts-inside-unclosed-quote",
+				prompt: '"Use /prompts:architect\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-malformed-prompts-suffix",
+				prompt: "/prompts:architect한글\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-nested-list-prompts-positive",
+				prompt: "- Use /prompts:architect.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-nested-list-fence-positive",
+				prompt: "- - ```\n    quoted context\n    ```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-reference-destination",
+				prompt: "[docs]:\nautopilot",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-middle-dot-suffix",
+				prompt: "$ralplan·suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-percent-suffix",
+				prompt: "$ralplan%docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-fullwidth-percent-suffix",
+				prompt: "$ralplan％docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-also-negative",
+				prompt: "$ralplan is also prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-still-negative",
+				prompt: "Autopilot mode is still prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-commonmark-case-fold",
+				prompt:
+					"See [ẞ autopilot mode] for details.\n\n[SS autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-commonmark-escaped-bracket",
+				prompt:
+					"See [foo\\] autopilot mode] for details.\n\n[foo\\] autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-version-decimal-frame",
+				prompt: "For instance: in version 1.2, use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-abbreviation-frame",
+				prompt: "For instance: e.g. use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-slash-documentation",
+				prompt: "Autopilot mode / deep interview are workflow commands.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-low-quote",
+				prompt: "„autopilot mode“",
+				expectedSkill: null,
+			},
+			{
+				name: "slash-list-documentation",
+				prompt: "- $ralplan / $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "compact-slash-list-documentation",
+				prompt: "- $ralplan/$autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "slash-list-composition",
+				prompt:
+					"- $ralplan / $autopilot are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "compact-slash-list-composition",
+				prompt:
+					"- $ralplan/$autopilot are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "but-use-positive",
+				prompt: "Do not run $ralplan but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "but-instead-use-positive",
+				prompt: "Do not run $ralplan but instead use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "em-dash-instead-use-positive",
+				prompt: "Do not run $ralplan — instead use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-contrast",
+				prompt: "Do not use deep interview, but use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-but-instead-positive",
+				prompt: "Do not use deep interview but instead use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-list-verb-positive",
+				prompt: "List files and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-dont-stop-positive",
+				prompt: "No, don't stop.",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "implicit-doc-suffix",
+				prompt: "autopilot mode is workflow documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-inline-code",
+				prompt: "`autopilot mode`",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-blockquote",
+				prompt: "> autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-then-positive",
+				prompt:
+					"Autopilot mode is workflow documentation.\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "prompts-then-positive",
+				prompt: "Use /prompts:architect.\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "mixed-negative-explicit-positive-implicit",
+				prompt: "Do not run $ralplan but instead use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "mixed-quoted-explicit-positive-implicit",
+				prompt: 'Ignore "$ralplan" and use autopilot mode.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-positive-implicit",
+				prompt: "Ignore \\/prompts:architect and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "url-prompts-positive-implicit",
+				prompt:
+					"See https://example.com/prompts:architect and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-used",
+				prompt: "Autopilot mode should be used.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-enabled",
+				prompt: "Autopilot mode must be enabled.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-run",
+				prompt: "Autopilot mode can be run.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-fullwidth-possessive-positive",
+				prompt: "User＇s request: use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "markdown-prompts-link-positive",
+				prompt: "See [/prompts:architect](./docs.md) and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-subordinate-positive",
+				prompt: "Use autopilot mode, while deep interview is prohibited.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-sentence-then-positive",
+				prompt: "Read the docs. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-semicolon-then-positive",
+				prompt: "The docs are stale; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-comma-directive-positive",
+				prompt: "Ignore the docs, use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-explicit-followup",
+				prompt: "Ignore \\/prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "url-prompts-explicit-followup",
+				prompt: "See https://example.com/prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "link-prompts-explicit-followup",
+				prompt: "See [/prompts:architect](./docs.md)\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "linked-explicit-implicit-positive",
+				prompt: "See [$ralplan](./docs.md) and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "url-explicit-implicit-positive",
+				prompt: "See https://example.com/$ralplan and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-coordinated-clause-positive",
+				prompt: "Use autopilot mode, and deep interview is prohibited.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-and-directive-positive",
+				prompt: "Ignore the docs and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-same-line-explicit",
+				prompt: "Ignore \\/prompts:architect; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "url-prompts-same-line-explicit",
+				prompt:
+					"See https://example.com/prompts:architect; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "link-prompts-same-line-explicit",
+				prompt: "See [/prompts:architect](./docs.md); use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-prompts-same-line-explicit",
+				prompt: "See [/prompts:architect][docs]; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "heading-prompts-explicit-followup",
+				prompt: "## /prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "table-prompts-explicit-followup",
+				prompt: "| /prompts:architect |\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "heading-explicit-implicit-positive",
+				prompt: "## $ralplan\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-explicit-implicit-positive",
+				prompt: "| $ralplan |\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reference-explicit-implicit-positive",
+				prompt: "See [$ralplan][docs] and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "windows-path-explicit-implicit-positive",
+				prompt: "See C:\\docs\\$ralplan and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-fullwidth-plural-possessive-positive",
+				prompt: "Users＇ request: use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-modal-coordinated-clause-positive",
+				prompt: "Use autopilot mode, and deep interview should be avoided.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-but-directive-positive",
+				prompt: "Ignore the docs but use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "prompts-markdown-definition-explicit-followup",
+				prompt: "[/prompts:architect]: ./docs\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "prompts-markdown-shortcut-explicit-followup",
+				prompt: "[/prompts:architect]\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-markdown-definition-implicit-positive",
+				prompt: "[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-shortcut-implicit-positive",
+				prompt: "[$ralplan]\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-setext-implicit-positive",
+				prompt: "$ralplan\n===\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-pipe-table-implicit-positive",
+				prompt: "$ralplan | workflow\n--- | ---\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "heading-explicit-later-explicit",
+				prompt: "## $ralplan\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "linked-explicit-later-explicit",
+				prompt: "See [$ralplan](./docs.md); use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "windows-path-explicit-later-explicit",
+				prompt: "See C:\\docs\\$ralplan; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-body-explicit-later-explicit",
+				prompt:
+					"Mode | Meaning\n--- | ---\n$ralplan | planning\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "embedded-shortcut-explicit-implicit-positive",
+				prompt:
+					"See [$ralplan] for details.\n\n[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "quoted-explicit-later-explicit",
+				prompt: 'Ignore "$ralplan" and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inline-code-explicit-later-explicit",
+				prompt: "Ignore `$ralplan` and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "normalized-shortcut-explicit-implicit-positive",
+				prompt:
+					"See [$ralplan   ] for details.\n\n[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "intro-frame-sentence-reset-positive",
+				prompt: "For instance: manual mode is slower. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inline-link-overlap-later-explicit",
+				prompt: "See [`$ralplan`](./docs.md) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-exclusion-later-positive",
+				prompt: "Ignore deep interview and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "link-destination-later-explicit",
+				prompt:
+					"See [docs](https://example.com/$ralplan) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "link-title-later-explicit",
+				prompt:
+					'See [docs](./docs.md "$ralplan reference") and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "nested-destination-later-explicit",
+				prompt:
+					"See [docs](https://example.com/(v1)/$ralplan) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "nested-link-text-later-explicit",
+				prompt:
+					"See [$ralplan](https://example.com/(v1)) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "quoted-title-parenthesis-later-explicit",
+				prompt:
+					'See [docs](./docs.md "$ralplan (reference") and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "blockquote-code-definition-boundary",
+				prompt:
+					"See [autopilot mode] for details.\n\n>     [autopilot mode]: ./docs",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-list-tab-content-boundary",
+				prompt: "-\t $ralplan",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "postposed-negative-but-later-explicit",
+				prompt: "$ralplan is prohibited but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "postposed-negative-and-later-explicit",
+				prompt: "$ralplan is prohibited and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "later-positive",
+				prompt: "Do not run $ralplan, instead $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "list-documentation",
+				prompt: "- $ralplan, $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "list-composition",
+				prompt:
+					"- $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-quote",
+				prompt: '"$ralplan \\"; $autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "fence-prefix",
+				prompt: "```\n$ralplan\n> ```\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "matching-fence-control",
+				prompt: "> ```\n> $ralplan\n> ```\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			const cwd = await mkdtemp(
+				join(tmpdir(), `omx-native-raw-classification-${testCase.name}-`),
+			);
+			const sessionId = `sess-raw-${testCase.name}`;
+			const previousTmux = process.env.TMUX;
+			const previousTmuxPane = process.env.TMUX_PANE;
+			const previousTeamMode = process.env.OMX_TEAM_MODE;
+			if ("insideTmux" in testCase && testCase.insideTmux) {
+				process.env.TMUX = "/tmp/tmux-pr3140-regression";
+				process.env.TMUX_PANE = "%3140";
+				process.env.OMX_TEAM_MODE = "enabled";
+			} else {
+				delete process.env.TMUX;
+				delete process.env.TMUX_PANE;
+				delete process.env.OMX_TEAM_MODE;
+			}
+			try {
+				const submit = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "UserPromptSubmit",
+						cwd,
+						source: "codex-app",
+						session_id: sessionId,
+						thread_id: `thread-${testCase.name}`,
+						turn_id: `turn-${testCase.name}`,
+						prompt: testCase.prompt,
+					},
+					{ cwd },
+				);
+				assert.equal(
+					(submit.outputJson as { continue?: boolean } | null)?.continue,
+					undefined,
+					testCase.name,
+				);
+
+				const sessionDir = join(cwd, ".omx", "state", "sessions", sessionId);
+				const skillStatePath = join(sessionDir, "skill-active-state.json");
+				if (testCase.expectedSkill === null) {
+					assert.equal(existsSync(skillStatePath), false, testCase.name);
+				} else {
+					const skillState = JSON.parse(
+						await readFile(skillStatePath, "utf-8"),
+					) as {
+						active?: boolean;
+						skill?: string;
+						deferred_skills?: string[];
+						active_skills?: Array<{ skill?: string }>;
+					};
+					assert.equal(skillState.active, true, testCase.name);
+					assert.equal(skillState.skill, testCase.expectedSkill, testCase.name);
+					if ("expectedDeferredSkills" in testCase) {
+						assert.deepEqual(
+							skillState.deferred_skills ?? [],
+							testCase.expectedDeferredSkills,
+							testCase.name,
+						);
+					}
+					if ("expectedActiveSkills" in testCase) {
+						assert.deepEqual(
+							skillState.active_skills?.map((entry) => entry.skill) ?? [],
+							testCase.expectedActiveSkills,
+							testCase.name,
+						);
+					}
+					if ("expectedActiveDetailSkills" in testCase) {
+						const activeDetailSkills = (
+							await Promise.all(
+								["ralplan", "autopilot"].map(async (skill) => {
+									const detailPath = join(sessionDir, `${skill}-state.json`);
+									if (!existsSync(detailPath)) return null;
+									const detailState = JSON.parse(
+										await readFile(detailPath, "utf-8"),
+									) as { active?: boolean };
+									return detailState.active ? skill : null;
+								}),
+							)
+						).filter((skill): skill is string => skill !== null);
+						assert.deepEqual(
+							activeDetailSkills,
+							testCase.expectedActiveDetailSkills,
+							testCase.name,
+						);
+					}
+				}
+
+				const stop = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						source: "codex-app",
+						session_id: sessionId,
+						thread_id: `thread-${testCase.name}`,
+						turn_id: `stop-${testCase.name}`,
+					},
+					{ cwd },
+				);
+				if (testCase.expectedSkill === null)
+					assert.equal(stop.outputJson, null, testCase.name);
+				else if (
+					"expectedStopBlock" in testCase &&
+					!testCase.expectedStopBlock
+				) {
+					assert.notEqual(
+						(stop.outputJson as { decision?: string } | null)?.decision,
+						"block",
+						testCase.name,
+					);
+				} else
+					assert.equal(
+						(stop.outputJson as { decision?: string } | null)?.decision,
+						"block",
+						testCase.name,
+					);
+			} finally {
+				if (previousTmux === undefined) delete process.env.TMUX;
+				else process.env.TMUX = previousTmux;
+				if (previousTmuxPane === undefined) delete process.env.TMUX_PANE;
+				else process.env.TMUX_PANE = previousTmuxPane;
+				if (previousTeamMode === undefined) delete process.env.OMX_TEAM_MODE;
+				else process.env.OMX_TEAM_MODE = previousTeamMode;
+				await rm(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it("preserves exact structural prompt classification through compiled UserPromptSubmit state and Stop", async () => {
+		const cases = [
+			{
+				name: "mixed-indent",
+				prompt: " \t$ralplan plan this",
+				expectedSkill: null,
+			},
+			{ name: "at-suffix", prompt: "$ralplan@docs", expectedSkill: null },
+			{ name: "hash-suffix", prompt: "$ralplan#docs", expectedSkill: null },
+			{ name: "equals-suffix", prompt: "$ralplan=docs", expectedSkill: null },
+			{
+				name: "fullwidth-at-suffix",
+				prompt: "$ralplan＠docs",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-hash-suffix",
+				prompt: "$ralplan＃docs",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-equals-suffix",
+				prompt: "$ralplan＝docs",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-use-ralplan",
+				prompt: "use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-please-use-ralplan",
+				prompt: "please use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-run-ralplan",
+				prompt: "run $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-list-use-ralplan",
+				prompt: "- use $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-documentation-then-command",
+				prompt:
+					"use $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-then-implicit-command",
+				prompt:
+					"use $ralplan is the consensus-planning command\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-trailing-prose-then-command",
+				prompt:
+					"use $ralplan is the workflow command for planning\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-implicit-prose",
+				prompt: "use $ralplan is the workflow command for autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-alias-prose",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is its alias.",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-coordinated-documentation-then-command",
+				prompt:
+					"- use $ralplan and $autopilot are workflow commands\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-semicolon-directive",
+				prompt:
+					"use $ralplan is the consensus-planning command; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-two-documentation-blocks",
+				prompt:
+					"use $ralplan is the consensus-planning command\nuse $autopilot is the autonomous workflow command\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-embedded-token-then-command",
+				prompt:
+					"use $ralplan is the workflow command for $team\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-task-noun-followup",
+				prompt:
+					"use $ralplan is the workflow command; use $autopilot update the documentation",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-implicit-semicolon-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-transition-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command; then use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-documentation-explicit-alias",
+				prompt:
+					"use $ralplan is the consensus-planning command; $team is its alias",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-implicit-chain",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is its alias.\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-documentation-fullwidth-separator",
+				prompt: "use $ralplan，$autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-documentation-compact-slash",
+				prompt:
+					"use $ralplan/$autopilot are workflow commands\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "reference-prompts-title-then-command",
+				prompt:
+					'[docs]: /target "title\nUse /prompts:architect"\n$ralph execute it',
+				expectedSkill: "ralph",
+			},
+			{
+				name: "doc-period-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-bare-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command; autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-semicolon",
+				prompt:
+					"use $ralplan is the consensus-planning command； use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-but-followup",
+				prompt:
+					"use $ralplan is the workflow command; but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-oxford",
+				prompt: "use $ralplan， $autopilot， and $team are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "reference-zero-title",
+				prompt: "[docs]: ./target\n(autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-also-alias-explicit",
+				prompt:
+					"use $ralplan is the consensus-planning command; $team is also its alias",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-also-alias-implicit",
+				prompt:
+					"use $ralplan is the consensus-planning command\nAutopilot mode is also its alias.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-embedded-mention",
+				prompt:
+					"use $ralplan is the workflow command; $team appears in the documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "chained-negation",
+				prompt: "$ralplan; $autopilot is prohibited",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "long-negation",
+				prompt: `$ralplan; $autopilot${" ".repeat(193)}is prohibited`,
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "doc-arabic-comma",
+				prompt: "use $ralplan، $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "arabic-negation",
+				prompt: "$ralplan، $autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-arabic-negation",
+				prompt: "Autopilot mode، deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "fullwidth-frame-reset",
+				prompt: "For instance: manual mode is slower。 Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-abbreviation",
+				prompt:
+					"use $ralplan is the workflow command, e.g. use $autopilot in examples.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-mention",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode appears in the documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-chain",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is its alias; $ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "long-command-gap",
+				prompt: `use $ralplan is the workflow command; use${" ".repeat(161)}$autopilot build it`,
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "ideographic-negation",
+				prompt: "$ralplan、 $autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ideographic-negation",
+				prompt: "Autopilot mode、 deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-exclamation-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command! run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fullwidth-question-followup",
+				prompt:
+					"use $ralplan is the consensus-planning command？ run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-predecessor",
+				prompt: "Autopilot mode is workflow documentation.\n$ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "confusable-use-verb",
+				prompt: "uſe $ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-please-prefix",
+				prompt: "pleaſe use $ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-prompts-token-then-command",
+				prompt: "/promptſ:architect; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reserved-em-dash-boundary",
+				prompt: "/prompts:architect— use autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "reserved-fullwidth-comma-boundary",
+				prompt: "/prompts:architect， use autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "confusable-implicit-verb",
+				prompt: "Do not use deep interview but uſe autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-fullwidth-colon",
+				prompt: "For instance： use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-fullwidth-comma",
+				prompt: "For instance， use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-arabic-comma",
+				prompt: "For instance، use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "frame-ideo-comma",
+				prompt: "For instance、 use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-explicit-documented",
+				prompt:
+					"use $ralplan is the workflow command; $autopilot is documented in the guide.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-explicit-described",
+				prompt: "$autopilot is described in the manual.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-comma-followup",
+				prompt:
+					"use $ralplan is the workflow command, but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-fw-comma-followup",
+				prompt:
+					"use $ralplan is the workflow command， but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-arabic-followup",
+				prompt:
+					"use $ralplan is the workflow command، but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-ideo-followup",
+				prompt:
+					"use $ralplan is the workflow command、 but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-arabic-followup",
+				prompt: "Do not run $ralplan، use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-ideo-followup",
+				prompt: "Do not run $ralplan、 use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-prefix-next",
+				prompt: "The docs mention autopilot mode.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-doc-prefix-same-line",
+				prompt: "The docs mention autopilot mode; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-doc-subject-same-line",
+				prompt:
+					"Autopilot mode is workflow documentation; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "compact-explicit-negation",
+				prompt: "$ralplan,$autopilot are prohibited",
+				expectedSkill: null,
+			},
+			{
+				name: "compact-implicit-negation",
+				prompt: "Autopilot mode،deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-clause-local-prefix",
+				prompt: "$ralplan; $autopilot is documented in the guide.",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-chain-described",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is documented in the guide; $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "doc-chain-workflow",
+				prompt:
+					"use $ralplan is the workflow command; autopilot mode is workflow documentation; use $ralph execute it",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "ref-inline-explicit",
+				prompt: "[docs]: $ralplan\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "ref-inline-prompts",
+				prompt: "[docs]: /prompts:architect\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "list-fullwidth-explicit-doc",
+				prompt: "- $ralplan： consensus-planning workflow",
+				expectedSkill: null,
+			},
+			{
+				name: "list-fullwidth-implicit-doc",
+				prompt: "- autopilot mode： autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-straight",
+				prompt: "$ralplan's workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-curly",
+				prompt: "$ralplan’s workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-fullwidth",
+				prompt: "$ralplan＇s workflow is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "possessive-prompts",
+				prompt: "/prompts:architect's syntax is documented",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-kata",
+				prompt: "$・autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-half",
+				prompt: "$･autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-arabic",
+				prompt: "$٪autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "malformed-prefix-division",
+				prompt: "$∕autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-but-directive",
+				prompt: "use $autopilot is documented but use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "list-directive-fw-colon",
+				prompt: "- use $ralplan： consensus-planning workflow",
+				expectedSkill: null,
+			},
+			{
+				name: "doc-arabic-question",
+				prompt: "use $ralplan is the workflow command؟ run $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "arabic-semicolon-negation",
+				prompt: "$ralplan؛ $autopilot is prohibited",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "confusable-postposed-transition",
+				prompt: "$ralplan is prohibited but uſe autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-negation",
+				prompt: "Autopilot mode and $ralplan are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "both-mixed-negation",
+				prompt: "Both autopilot mode and $ralplan are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-documentation",
+				prompt: "use $ralplan and autopilot mode are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "prose-doc-no-reopen",
+				prompt: "$ralplan is prohibited because docs use $autopilot.",
+				expectedSkill: null,
+			},
+			{
+				name: "neg-fw-dot-reopen",
+				prompt: "Do not run $ralplan． use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "neg-greek-q-reopen",
+				prompt: "Do not run $ralplan; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "unicode-attached-contrast",
+				prompt: "Do not use deep interview яbut use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "prefix-list-followup",
+				prompt: "Do not run $ralplan, $autopilot; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "mixed-postposed-chain",
+				prompt: "$ralplan, autopilot mode, $team are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-first-doc-chain",
+				prompt:
+					"Autopilot mode and $ralplan are workflow commands; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "both-mixed-doc-followup",
+				prompt:
+					"Both autopilot mode and $ralplan are workflow commands; use $team execute it",
+				expectedSkill: "team",
+				expectedStopBlock: false,
+				insideTmux: true,
+			},
+			{
+				name: "doc-semicolon-preserves-earlier",
+				prompt: "Use autopilot mode; use $ralplan is the workflow command.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-independent-comma",
+				prompt: "Use autopilot mode, and $ralplan is documented in the guide.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reference-unclosed-quote-destination",
+				prompt: '[docs]: "target\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-unclosed-inline-destination",
+				prompt: "[docs]: `target\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "mixed-prefix-negation-implicit",
+				prompt: "Do not run $ralplan and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "repeated-postposed-followup",
+				prompt: "$team is prohibited and is forbidden; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-preserves-earlier",
+				prompt:
+					'Use autopilot mode; "note"; use $ralplan is the workflow command.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "doc-colon-followup",
+				prompt: "use $ralplan is the workflow command: use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-followup",
+				prompt:
+					"Mode | Meaning\n--- | ---\nmanual | documentation\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "neg-advance-reopen",
+				prompt: "Do not run $ralplan but advance to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "neg-jump-reopen",
+				prompt: "Do not run $ralplan but jump straight to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "reference-plain-title",
+				prompt: '[docs]: /target "title\nplain text"\n$ralplan plan it',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-plain-destination",
+				prompt: "[docs]: ./target\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-use-the",
+				prompt: "Do not run $ralplan; use the $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-continue-after-quote",
+				prompt: '"quoted"\ncontinue with $ralplan',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "doc-advance-followup",
+				prompt: "use $ralplan is the workflow command; advance to $ultragoal",
+				expectedSkill: "ultragoal",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-run-analyze",
+				prompt: "run $analyze",
+				expectedSkill: "analyze",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-run-code-review",
+				prompt: "run $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-please-use-code-review",
+				prompt: "please use $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-please-run-ralplan",
+				prompt: "please run $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-start-ralplan",
+				prompt: "start $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-enable-deep-interview",
+				prompt: "enable $deep-interview",
+				expectedSkill: "deep-interview",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-launch-autopilot",
+				prompt: "launch $autopilot",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "directive-invoke-ralph",
+				prompt: "invoke $ralph",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "directive-activate-ultrawork",
+				prompt: "activate $ultrawork",
+				expectedSkill: "ultrawork",
+			},
+			{
+				name: "directive-resume-ralplan",
+				prompt: "resume $ralplan plan this",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "directive-continue-code-review",
+				prompt: "continue $code-review",
+				expectedSkill: "code-review",
+				expectedStopBlock: false,
+			},
+			{
+				name: "directive-documentation",
+				prompt: "use $ralplan is the consensus-planning command",
+				expectedSkill: null,
+			},
+			{
+				name: "g1a-ordered-multi-skill",
+				prompt: "$ralplan, $autopilot; $team",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: ["autopilot", "team"],
+				expectedActiveSkills: ["ralplan"],
+				expectedActiveDetailSkills: ["ralplan"],
+				insideTmux: true,
+			},
+			{
+				name: "g1c-duplicate-alias",
+				prompt: "$autopilot $oh-my-codex:autopilot build it",
+				expectedSkill: "autopilot",
+				expectedDeferredSkills: [],
+				expectedActiveSkills: ["autopilot"],
+			},
+			{
+				name: "b3-longer-valid-fence",
+				prompt: "```text\n$ralplan plan it\n````\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "b4-shorter-invalid-fence",
+				prompt: "````text\n$ralplan plan it\n```\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "b5-different-marker-invalid-fence",
+				prompt: "```text\n$ralplan plan it\n~~~\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "directive-non-leading-prose",
+				prompt: "The docs say use $ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "nested-bounded-child-unbounded-parent",
+				prompt: '"`x`\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "first-contiguous-block-terminal",
+				prompt: '$ralplan plan it\n"x"\n$autopilot build it',
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "leading-reserved-dominance",
+				prompt: '/prompts:architect\n"x"\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "list-fence-root-opener",
+				prompt: "- ```\n  sample\n```\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "list-fence-relative-closer",
+				prompt: "- ```\n  sample\n    ```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-multiline-title-explicit",
+				prompt:
+					'[docs]: /target "title\nuse /prompts:architect\n$ralplan plan it"',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-multiline-title-implicit",
+				prompt: '[docs]: /target "title\nuse autopilot mode"',
+				expectedSkill: null,
+			},
+			{
+				name: "reference-next-line-title",
+				prompt: "[docs]: ./target\n  (autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "reference-next-line-destination-title",
+				prompt: "[docs]:\n  ./target\n  (autopilot mode)",
+				expectedSkill: null,
+			},
+			{
+				name: "kelvin-case-fold-suffix",
+				prompt: "$ultraworK execute",
+				expectedSkill: null,
+			},
+			{
+				name: "katakana-middle-dot-suffix",
+				prompt: "$ralplan・suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "halfwidth-middle-dot-suffix",
+				prompt: "$ralplan･suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "arabic-percent-suffix",
+				prompt: "$ralplan٪docs",
+				expectedSkill: null,
+			},
+			{
+				name: "division-slash-suffix",
+				prompt: "$ralplan∕config",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative",
+				prompt: "Do not use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-list",
+				prompt: "Do not use deep interview, autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-nor",
+				prompt: "Do not use deep interview, nor autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-avoid",
+				prompt: "Avoid autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-suffix",
+				prompt: "Autopilot mode is not allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-contraction",
+				prompt: "Autopilot mode isn't allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-negative-prohibited",
+				prompt: "Autopilot mode is prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-no-prefix",
+				prompt: "No autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-quoted-doc",
+				prompt: 'The docs call this "autopilot mode".',
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fenced",
+				prompt: "```\nautopilot mode\n```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-fenced",
+				prompt: "- ```\n  autopilot mode\n  ```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-sibling-list-fence",
+				prompt: "- ```\n  first example\n- ```\n  autopilot mode\n  ```",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-prompts-protocol",
+				prompt: "use /prompts:architect autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-quoted-prompts-positive",
+				prompt:
+					'Ignore the quoted "/prompts:architect" and use autopilot mode.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-doc-verb",
+				prompt: "This documents autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-guide-frame",
+				prompt:
+					"The guide says do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-link",
+				prompt: "[autopilot mode](./docs.md)",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-heading",
+				prompt: "## Autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-table",
+				prompt: "| autopilot mode | workflow command |",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-dash-documentation",
+				prompt: "Autopilot mode — autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-unicode-adjacency",
+				prompt: "문서autopilot mode한글",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-korean-negative",
+				prompt: "autopilot mode는 사용하지 마세요",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-coordinated-negative",
+				prompt: "Autopilot mode and deep interview are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-modal-negative",
+				prompt: "Autopilot mode should be avoided.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-frame",
+				prompt:
+					"Example: do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fullwidth-single-quote",
+				prompt: "＇autopilot mode＇",
+				expectedSkill: null,
+			},
+			{
+				name: "escaped-plugin-autopilot",
+				prompt: "\\$oh-my-codex:autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-comma-coordinated-negative",
+				prompt: "Autopilot mode, deep interview, and team are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-example-frame",
+				prompt:
+					"For example, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-docs-comma-frame",
+				prompt:
+					"According to the docs, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-curly-dont-negative",
+				prompt: "Don’t use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-fullwidth-dont-negative",
+				prompt: "Don＇t use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-curly-isnt-negative",
+				prompt: "Autopilot mode isn’t allowed.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-copular-infinitive-negative",
+				prompt: "Autopilot mode is to be avoided.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-past-copular-infinitive-negative",
+				prompt: "Autopilot mode was to be disabled.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-article-coordinated-negative",
+				prompt:
+					"Autopilot mode and the deep interview workflow are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-example-frame",
+				prompt:
+					"As an example, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-instance-frame",
+				prompt:
+					"For instance, do not use deep interview but instead use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-reference-link",
+				prompt: "[autopilot mode][docs]",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-plural-coordinated-negative",
+				prompt: "Autopilot mode and deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-example-governing-frame",
+				prompt: "As an example, ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-for-instance-governing-frame",
+				prompt: "For instance, ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-definition",
+				prompt: "[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-shortcut-label",
+				prompt: "[autopilot mode]",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-setext",
+				prompt: "Autopilot mode\n===",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-markdown-pipe-table",
+				prompt: "$ralplan | workflow\n--- | ---",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-table-body",
+				prompt:
+					"Mode | Meaning\n--- | ---\nautopilot mode | autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-as-well-as-negative",
+				prompt:
+					"Autopilot mode as well as deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-along-with-negative",
+				prompt:
+					"Autopilot mode along with deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-together-with-negative",
+				prompt:
+					"Autopilot mode together with deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ampersand-negative",
+				prompt: "Autopilot mode & deep interview workflows are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-colon-frame",
+				prompt: "As an example: ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-em-dash-frame",
+				prompt: "For instance — ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-example-hyphen-frame",
+				prompt: "For example - ignore the docs and use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-colon-frame-no-doc-word",
+				prompt: "For instance: use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-instance-em-dash-frame-no-doc-word",
+				prompt: "For instance — use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-markdown-later-table-body",
+				prompt:
+					"Mode | Meaning\n--- | ---\nmanual | docs\nautopilot mode | autonomous workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-embedded-shortcut-definition",
+				prompt: "See [autopilot mode] for details.\n\n[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-as-well-negative",
+				prompt:
+					"Autopilot mode, as well as deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-along-negative",
+				prompt:
+					"Autopilot mode, along with deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-parenthetical-together-negative",
+				prompt:
+					"Autopilot mode, together with deep interview workflows, are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-normalized-shortcut-definition",
+				prompt:
+					"See [autopilot   mode] for details.\n\n[autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ignore-exclusion",
+				prompt: "Ignore autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-skip-exclusion",
+				prompt: "Skip autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-exclude-exclusion",
+				prompt: "Exclude autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-prohibited",
+				prompt: "$ralplan is prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-modal-negative",
+				prompt: "$ralplan should not be run.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-coordinated-negative",
+				prompt: "$ralplan and $autopilot are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-article-coordination",
+				prompt: "$ralplan and the $autopilot workflow are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-implicit-coordination",
+				prompt: "$ralplan and autopilot mode are prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-blockquote-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n> [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n- [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-indented-blockquote-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n>   [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-list-contained-indented-code",
+				prompt: "-     $ralplan",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-contained-indented-code",
+				prompt: "1.     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-four-space-blockquote-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n>    [autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-multiline-reference-definition",
+				prompt:
+					"See [autopilot mode] for details.\n\n[autopilot mode]:\n  ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-list-tab-code-boundary",
+				prompt: "-   \t$ralplan",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-nested-list-contained-code",
+				prompt: "- -     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-nested-blockquote",
+				prompt: "- > autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-deep-nested-list-contained-code",
+				prompt: "- - - - - - - - -     autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-ordered-list-nested-blockquote",
+				prompt: "1234. > autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-nested-list-positive",
+				prompt: "- - $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-four-digit-ordered-list-positive",
+				prompt: "1234. $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-list-fence-then-positive",
+				prompt: "- ```\n  $ralplan\n  ```\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-nested-list-doc-then-positive",
+				prompt:
+					"- - $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-after-closed-blockquote",
+				prompt: "> quoted context\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-closed-fence",
+				prompt: "```text\nquoted context\n```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-indented-code",
+				prompt: "    quoted context\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-closed-quote",
+				prompt: '"quoted context"\n$ralplan plan it',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-prompts-context",
+				prompt: "Use /prompts:architect.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-after-bare-prompts-precedence",
+				prompt: "Prose\n/prompts:architect\n$ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-unclosed-fence",
+				prompt: "```text\nquoted context\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-mismatched-fence",
+				prompt: "```text\nquoted context\n~~~\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-unclosed-quote",
+				prompt: '"quoted context\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-blockquote-prose",
+				prompt: "> quoted context\nThe docs mention $ralplan only",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-after-quote-negative",
+				prompt: '"quoted context"\nDo not run $ralplan',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-prose",
+				prompt: "> quoted context\nProse\n$ralplan implement this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-directive-clause",
+				prompt: "> quoted context\nProse\nUse $ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-prompts",
+				prompt: "> quoted context\n/prompts:architect\n$ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-stale-predecessor-second-block",
+				prompt:
+					"> quoted context\n$ralplan plan it\nLater discussion.\n$autopilot build it",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: [],
+			},
+			{
+				name: "explicit-negative-before-unclosed-quote",
+				prompt: 'Do not run $ralplan.\n"unclosed context\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-reference-before-unclosed-quote",
+				prompt: '[$ralplan]: ./docs\n"unclosed context\n$autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-prompts-inside-unclosed-quote",
+				prompt: '"Use /prompts:architect\n$ralplan plan it',
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-malformed-prompts-suffix",
+				prompt: "/prompts:architect한글\n$ralplan plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-nested-list-prompts-positive",
+				prompt: "- Use /prompts:architect.\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-nested-list-fence-positive",
+				prompt: "- - ```\n    quoted context\n    ```\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "implicit-reference-destination",
+				prompt: "[docs]:\nautopilot",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-middle-dot-suffix",
+				prompt: "$ralplan·suffix plan it",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-percent-suffix",
+				prompt: "$ralplan%docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-fullwidth-percent-suffix",
+				prompt: "$ralplan％docs",
+				expectedSkill: null,
+			},
+			{
+				name: "explicit-postposed-also-negative",
+				prompt: "$ralplan is also prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-postposed-still-negative",
+				prompt: "Autopilot mode is still prohibited.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-commonmark-case-fold",
+				prompt:
+					"See [ẞ autopilot mode] for details.\n\n[SS autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-commonmark-escaped-bracket",
+				prompt:
+					"See [foo\\] autopilot mode] for details.\n\n[foo\\] autopilot mode]: ./docs",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-version-decimal-frame",
+				prompt: "For instance: in version 1.2, use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-abbreviation-frame",
+				prompt: "For instance: e.g. use autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-slash-documentation",
+				prompt: "Autopilot mode / deep interview are workflow commands.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-low-quote",
+				prompt: "„autopilot mode“",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-list-documentation",
+				prompt: "- autopilot mode is a workflow command",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-prefix",
+				prompt: "The reference describes autopilot mode.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-doc-suffix",
+				prompt: "autopilot mode is workflow documentation.",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-inline-code",
+				prompt: "`autopilot mode`",
+				expectedSkill: null,
+			},
+			{
+				name: "implicit-blockquote",
+				prompt: "> autopilot mode",
+				expectedSkill: null,
+			},
+			{
+				name: "documentation-suffix",
+				prompt: "$ralplan.md is the workflow documentation file",
+				expectedSkill: null,
+			},
+			{ name: "path-suffix", prompt: "$autopilot/config", expectedSkill: null },
+			{ name: "unicode-suffix", prompt: "$ralplan한글", expectedSkill: null },
+			{
+				name: "zero-width-suffix",
+				prompt: "$ralplan\u200B.md",
+				expectedSkill: null,
+			},
+			{
+				name: "compatibility-path-suffix",
+				prompt: "$ralplan／config",
+				expectedSkill: null,
+			},
+			{ name: "nul-suffix", prompt: "$ralplan\u0000md", expectedSkill: null },
+			{
+				name: "bidi-control-suffix",
+				prompt: "$ralplan\u202Emd",
+				expectedSkill: null,
+			},
+			{ name: "bom-suffix", prompt: "$ralplan\uFEFF.md", expectedSkill: null },
+			{
+				name: "fullwidth-dot-suffix",
+				prompt: "$ralplan．md",
+				expectedSkill: null,
+			},
+			{
+				name: "direct-prompts-reservation",
+				prompt: "/prompts:architect $ralplan plan this",
+				expectedSkill: null,
+			},
+			{
+				name: "list-documentation",
+				prompt: "- $ralplan is the consensus-planning command",
+				expectedSkill: null,
+			},
+			{
+				name: "colon-list-documentation",
+				prompt: "- $ralplan: consensus-planning workflow",
+				expectedSkill: null,
+			},
+			{
+				name: "dash-list-documentation",
+				prompt: "- $ralplan — consensus-planning command",
+				expectedSkill: null,
+			},
+			{
+				name: "plural-list-documentation",
+				prompt: "- $ralplan, $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "conjunction-list-documentation",
+				prompt: "- $ralplan and $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "oxford-list-documentation",
+				prompt: "- $ralplan, $autopilot, and $team are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "slash-list-documentation",
+				prompt: "- $ralplan / $autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "compact-slash-list-documentation",
+				prompt: "- $ralplan/$autopilot are workflow commands",
+				expectedSkill: null,
+			},
+			{
+				name: "negative-then-positive",
+				prompt: "Do not run $ralplan; instead $autopilot build issue #3140",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "comma-negative-then-positive",
+				prompt: "Do not run $ralplan, instead $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "use-negative-then-positive",
+				prompt: "Do not run $ralplan; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "but-use-negative-then-positive",
+				prompt: "Do not run $ralplan but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "but-instead-use-negative-then-positive",
+				prompt: "Do not run $ralplan but instead use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "em-dash-instead-use-positive",
+				prompt: "Do not run $ralplan — instead use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-contrast",
+				prompt: "Do not use deep interview, but use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-but-instead-positive",
+				prompt: "Do not use deep interview but instead use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-list-verb-positive",
+				prompt: "List files and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-dont-stop-positive",
+				prompt: "No, don't stop.",
+				expectedSkill: "ralph",
+			},
+			{
+				name: "implicit-doc-then-positive",
+				prompt:
+					"Autopilot mode is workflow documentation.\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "prompts-then-positive",
+				prompt: "Use /prompts:architect.\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "mixed-negative-explicit-positive-implicit",
+				prompt: "Do not run $ralplan but instead use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "mixed-quoted-explicit-positive-implicit",
+				prompt: 'Ignore "$ralplan" and use autopilot mode.',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-positive-implicit",
+				prompt: "Ignore \\/prompts:architect and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "url-prompts-positive-implicit",
+				prompt:
+					"See https://example.com/prompts:architect and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-used",
+				prompt: "Autopilot mode should be used.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-enabled",
+				prompt: "Autopilot mode must be enabled.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-positive-modal-run",
+				prompt: "Autopilot mode can be run.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-fullwidth-possessive-positive",
+				prompt: "User＇s request: use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "markdown-prompts-link-positive",
+				prompt: "See [/prompts:architect](./docs.md) and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-subordinate-positive",
+				prompt: "Use autopilot mode, while deep interview is prohibited.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-sentence-then-positive",
+				prompt: "Read the docs. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-semicolon-then-positive",
+				prompt: "The docs are stale; use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-comma-directive-positive",
+				prompt: "Ignore the docs, use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-explicit-followup",
+				prompt: "Ignore \\/prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "url-prompts-explicit-followup",
+				prompt: "See https://example.com/prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "link-prompts-explicit-followup",
+				prompt: "See [/prompts:architect](./docs.md)\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "linked-explicit-implicit-positive",
+				prompt: "See [$ralplan](./docs.md) and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "url-explicit-implicit-positive",
+				prompt: "See https://example.com/$ralplan and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-coordinated-clause-positive",
+				prompt: "Use autopilot mode, and deep interview is prohibited.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-and-directive-positive",
+				prompt: "Ignore the docs and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-prompts-same-line-explicit",
+				prompt: "Ignore \\/prompts:architect; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "url-prompts-same-line-explicit",
+				prompt:
+					"See https://example.com/prompts:architect; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "link-prompts-same-line-explicit",
+				prompt: "See [/prompts:architect](./docs.md); use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "reference-prompts-same-line-explicit",
+				prompt: "See [/prompts:architect][docs]; use $ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "heading-prompts-explicit-followup",
+				prompt: "## /prompts:architect\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "table-prompts-explicit-followup",
+				prompt: "| /prompts:architect |\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "heading-explicit-implicit-positive",
+				prompt: "## $ralplan\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-explicit-implicit-positive",
+				prompt: "| $ralplan |\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "reference-explicit-implicit-positive",
+				prompt: "See [$ralplan][docs] and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "windows-path-explicit-implicit-positive",
+				prompt: "See C:\\docs\\$ralplan and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-fullwidth-plural-possessive-positive",
+				prompt: "Users＇ request: use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-modal-coordinated-clause-positive",
+				prompt: "Use autopilot mode, and deep interview should be avoided.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "docs-but-directive-positive",
+				prompt: "Ignore the docs but use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "prompts-markdown-definition-explicit-followup",
+				prompt: "[/prompts:architect]: ./docs\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "prompts-markdown-shortcut-explicit-followup",
+				prompt: "[/prompts:architect]\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "explicit-markdown-definition-implicit-positive",
+				prompt: "[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-shortcut-implicit-positive",
+				prompt: "[$ralplan]\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-setext-implicit-positive",
+				prompt: "$ralplan\n===\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-markdown-pipe-table-implicit-positive",
+				prompt: "$ralplan | workflow\n--- | ---\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "heading-explicit-later-explicit",
+				prompt: "## $ralplan\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "linked-explicit-later-explicit",
+				prompt: "See [$ralplan](./docs.md); use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "windows-path-explicit-later-explicit",
+				prompt: "See C:\\docs\\$ralplan; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "table-body-explicit-later-explicit",
+				prompt:
+					"Mode | Meaning\n--- | ---\n$ralplan | planning\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "embedded-shortcut-explicit-implicit-positive",
+				prompt:
+					"See [$ralplan] for details.\n\n[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "quoted-explicit-later-explicit",
+				prompt: 'Ignore "$ralplan" and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inline-code-explicit-later-explicit",
+				prompt: "Ignore `$ralplan` and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "normalized-shortcut-explicit-implicit-positive",
+				prompt:
+					"See [$ralplan   ] for details.\n\n[$ralplan]: ./docs\nUse autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "intro-frame-sentence-reset-positive",
+				prompt: "For instance: manual mode is slower. Use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inline-link-overlap-later-explicit",
+				prompt: "See [`$ralplan`](./docs.md) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "implicit-exclusion-later-positive",
+				prompt: "Ignore deep interview and use autopilot mode.",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "link-destination-later-explicit",
+				prompt:
+					"See [docs](https://example.com/$ralplan) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "link-title-later-explicit",
+				prompt:
+					'See [docs](./docs.md "$ralplan reference") and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "nested-destination-later-explicit",
+				prompt:
+					"See [docs](https://example.com/(v1)/$ralplan) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "nested-link-text-later-explicit",
+				prompt:
+					"See [$ralplan](https://example.com/(v1)) and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "quoted-title-parenthesis-later-explicit",
+				prompt:
+					'See [docs](./docs.md "$ralplan (reference") and use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "blockquote-code-definition-boundary",
+				prompt:
+					"See [autopilot mode] for details.\n\n>     [autopilot mode]: ./docs",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "explicit-list-tab-content-boundary",
+				prompt: "-\t $ralplan",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "postposed-negative-but-later-explicit",
+				prompt: "$ralplan is prohibited but use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "postposed-negative-and-later-explicit",
+				prompt: "$ralplan is prohibited and use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inline-negative-then-positive",
+				prompt: "Quoted inline-code `$ralplan`; use $autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "negative-line-then-positive",
+				prompt: "Without $ralplan.\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "quoted-then-positive",
+				prompt: 'Quoted example: "$ralplan plan it".\n$autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "inert-prompts-then-positive",
+				prompt: '"Use /prompts:architect"\n$ralplan plan it',
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "list-doc-then-positive",
+				prompt:
+					"- $ralplan is the consensus-planning command\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "prompt-doc-then-positive",
+				prompt:
+					"- /prompts:architect is the prompt command documentation\n$ralplan plan it",
+				expectedSkill: "ralplan",
+			},
+			{
+				name: "conjunction-list-doc-then-positive",
+				prompt:
+					"- $ralplan and $autopilot are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "oxford-list-doc-then-positive",
+				prompt:
+					"- $ralplan, $autopilot, and $team are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "slash-list-doc-then-positive",
+				prompt:
+					"- $ralplan / $autopilot are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "compact-slash-list-doc-then-positive",
+				prompt:
+					"- $ralplan/$autopilot are workflow commands\n$autopilot execute it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "escaped-quote-range",
+				prompt: '"$ralplan \\"; $autopilot build it',
+				expectedSkill: null,
+			},
+			{
+				name: "blockquote-fence-closer",
+				prompt: "```\n$ralplan\n> ```\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "double-negative-control",
+				prompt: "Do not run $ralplan; do not run $autopilot",
+				expectedSkill: null,
+			},
+			{
+				name: "comma-negative-control",
+				prompt: "Do not run $ralplan, $autopilot",
+				expectedSkill: null,
+			},
+			{
+				name: "unseparated-control",
+				prompt: "Do not run $ralplan and use $autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "even-escape-control",
+				prompt: '"$ralplan \\\\"; use $autopilot build it',
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "matching-fence-control",
+				prompt: "> ```\n> $ralplan\n> ```\n$autopilot build it",
+				expectedSkill: "autopilot",
+			},
+			{
+				name: "invalid-fence-closer",
+				prompt: "```\n$ralplan\n``` still code\n$autopilot build it",
+				expectedSkill: null,
+			},
+			{
+				name: "documentation-clause-control",
+				prompt: "Do not run $ralplan. We only document $autopilot behavior",
+				expectedSkill: null,
+			},
+			{
+				name: "punctuation-multi-workflow",
+				prompt: "$ralplan, $autopilot build issue #3140",
+				expectedSkill: "ralplan",
+				expectedDeferredSkills: ["autopilot"],
+			},
+		] as const;
+
+		for (const [caseIndex, testCase] of cases.entries()) {
+			const cwd = await mkdtemp(
+				join(tmpdir(), `omx-native-compiled-classification-${caseIndex}-`),
+			);
+			const sessionId = `sess-compiled-${caseIndex}`;
+			const env = {
+				...process.env,
+				OMX_ROOT: "",
+				OMX_STATE_ROOT: "",
+				OMX_SESSION_ID: "",
+				CODEX_SESSION_ID: "",
+				OMX_TEAM_STATE_ROOT: "",
+				OMX_TEAM_WORKER: "",
+				OMX_TEAM_INTERNAL_WORKER: "",
+				OMX_TEAM_LEADER_CWD: "",
+				OMX_TEAM_MODE:
+					"insideTmux" in testCase && testCase.insideTmux ? "enabled" : "",
+				SESSION_ID: "",
+				OMX_QUESTION_RETURN_PANE: "",
+				OMX_LEADER_PANE_ID: "",
+				OMX_TMUX_HUD_OWNER: "",
+				TMUX:
+					"insideTmux" in testCase && testCase.insideTmux
+						? "/tmp/tmux-pr3140-regression"
+						: "",
+				TMUX_PANE:
+					"insideTmux" in testCase && testCase.insideTmux ? "%3140" : "",
+			};
+			try {
+				const submit = parseSingleJsonStdout(
+					runNativeHookCli(
+						{
+							hook_event_name: "UserPromptSubmit",
+							cwd,
+							source: "codex-app",
+							session_id: sessionId,
+							thread_id: `thread-${caseIndex}`,
+							turn_id: `turn-${caseIndex}`,
+							prompt: testCase.prompt,
+						},
+						{ cwd, env },
+					),
+				);
+				assert.equal(submit.continue, undefined, testCase.name);
+
+				const sessionDir = join(cwd, ".omx", "state", "sessions", sessionId);
+				const skillStatePath = join(sessionDir, "skill-active-state.json");
+				if (testCase.expectedSkill === null) {
+					assert.equal(existsSync(skillStatePath), false, testCase.name);
+					assert.equal(
+						existsSync(join(sessionDir, "ralplan-state.json")),
+						false,
+						testCase.name,
+					);
+					assert.equal(
+						existsSync(join(sessionDir, "autopilot-state.json")),
+						false,
+						testCase.name,
+					);
+				} else {
+					assert.equal(existsSync(skillStatePath), true, testCase.name);
+					const skillState = JSON.parse(
+						await readFile(skillStatePath, "utf-8"),
+					) as {
+						active?: boolean;
+						skill?: string;
+						deferred_skills?: string[];
+						active_skills?: Array<{ skill?: string }>;
+					};
+					assert.equal(skillState.active, true, testCase.name);
+					assert.equal(skillState.skill, testCase.expectedSkill, testCase.name);
+					if ("expectedDeferredSkills" in testCase) {
+						assert.deepEqual(
+							skillState.deferred_skills ?? [],
+							testCase.expectedDeferredSkills,
+							testCase.name,
+						);
+					}
+					if ("expectedActiveSkills" in testCase) {
+						assert.deepEqual(
+							skillState.active_skills?.map((entry) => entry.skill) ?? [],
+							testCase.expectedActiveSkills,
+							testCase.name,
+						);
+					}
+					if ("expectedActiveDetailSkills" in testCase) {
+						const activeDetailSkills = (
+							await Promise.all(
+								["ralplan", "autopilot"].map(async (skill) => {
+									const detailPath = join(sessionDir, `${skill}-state.json`);
+									if (!existsSync(detailPath)) return null;
+									const detailState = JSON.parse(
+										await readFile(detailPath, "utf-8"),
+									) as { active?: boolean };
+									return detailState.active ? skill : null;
+								}),
+							)
+						).filter((skill): skill is string => skill !== null);
+						assert.deepEqual(
+							activeDetailSkills,
+							testCase.expectedActiveDetailSkills,
+							testCase.name,
+						);
+					}
+				}
+
+				const stop = parseSingleJsonStdout(
+					runNativeHookCli(
+						{
+							hook_event_name: "Stop",
+							cwd,
+							source: "codex-app",
+							session_id: sessionId,
+							thread_id: `thread-${caseIndex}`,
+							turn_id: `stop-${caseIndex}`,
+						},
+						{ cwd, env },
+					),
+				);
+				if (testCase.expectedSkill === null)
+					assert.deepEqual(stop, {}, testCase.name);
+				else if (
+					"expectedStopBlock" in testCase &&
+					!testCase.expectedStopBlock
+				) {
+					assert.notEqual(stop.decision, "block", testCase.name);
+				} else assert.equal(stop.decision, "block", testCase.name);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it("restarts terminal Autopilot through disabled-Team explicit UserPromptSubmit and blocks compiled Stop", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-disabled-team-terminal-restart-"),
+		);
+		const sessionId = "sess-disabled-team-terminal-restart";
+		const threadId = "thread-disabled-team-terminal-restart";
+		const turnId = "turn-disabled-team-terminal-restart";
+		const sessionDir = join(cwd, ".omx", "state", "sessions", sessionId);
+		const autopilotPath = join(sessionDir, "autopilot-state.json");
+		try {
+			await writeJson(join(cwd, ".omx", "setup-scope.json"), {
+				scope: "project",
+				teamMode: "disabled",
+			});
+			await writeJson(autopilotPath, {
+				mode: "autopilot",
+				active: false,
+				current_phase: "complete",
+				completed_at: "2026-07-12T23:00:00.000Z",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: turnId,
+			});
+			const before = await readFile(autopilotPath);
+
+			const restart = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: sessionId,
+					thread_id: threadId,
+					turn_id: turnId,
+					prompt: "$team $autopilot retry",
+				},
+				{ cwd },
+			);
+			assert.equal(restart.skillState?.skill, "autopilot");
+			assert.equal(restart.skillState?.active, true);
+			assert.equal(
+				existsSync(join(cwd, ".omx", "state", "team-state.json")),
+				false,
+			);
+
+			const restartedState = JSON.parse(
+				await readFile(autopilotPath, "utf-8"),
+			) as {
+				active?: boolean;
+				current_phase?: string;
+			};
+			assert.notDeepEqual(await readFile(autopilotPath), before);
+			assert.equal(restartedState.active, true);
+			assert.equal(restartedState.current_phase, "deep-interview");
+
+			const stop = parseSingleJsonStdout(
+				runNativeHookCli(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						source: "codex-app",
+						session_id: sessionId,
+						thread_id: threadId,
+						turn_id: "stop-disabled-team-terminal-restart",
+					},
+					{
+						cwd,
+						env: { ...process.env, OMX_ROOT: "", OMX_STATE_ROOT: "" },
+					},
+				),
+			);
+			assert.equal(stop.decision, "block");
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	async function assertG2aDocumentationReferenceIsInert(
+		transport: "raw" | "compiled",
+	): Promise<void> {
+		const name = `g2a-${transport}`;
+		const cwd = await mkdtemp(join(tmpdir(), `omx-native-${name}-`));
+		const sessionId = `sess-${name}`;
+		const threadId = `thread-${name}`;
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionDir = join(stateDir, "sessions", sessionId);
+		const skillDetailPaths = [
+			join(stateDir, "skill-active-state.json"),
+			join(stateDir, "ralplan-state.json"),
+			join(sessionDir, "skill-active-state.json"),
+			join(sessionDir, "ralplan-state.json"),
+		];
+		const env = {
+			...process.env,
+			OMX_ROOT: "",
+			OMX_STATE_ROOT: "",
+			OMX_TEAM_MODE: "",
+		};
+		const payload = {
+			hook_event_name: "UserPromptSubmit" as const,
+			cwd,
+			source: "codex-app",
+			session_id: sessionId,
+			thread_id: threadId,
+			turn_id: `turn-${name}`,
+			prompt: "use $ralplan is the consensus-planning command",
+		};
+		try {
+			await writeJson(join(cwd, ".omx", "setup-scope.json"), {
+				scope: "project",
+				teamMode: "disabled",
+			});
+			assert.deepEqual(
+				skillDetailPaths.map(existsSync),
+				[false, false, false, false],
+				name,
+			);
+			if (transport === "raw") {
+				const submit = await dispatchCodexNativeHook(payload, { cwd });
+				assert.equal(submit.skillState, null, name);
+				assert.equal(submit.outputJson, null, name);
+			} else {
+				assert.deepEqual(
+					parseSingleJsonStdout(runNativeHookCli(payload, { cwd, env })),
+					{},
+					name,
+				);
+			}
+			assert.deepEqual(
+				skillDetailPaths.map(existsSync),
+				[false, false, false, false],
+				name,
+			);
+			const stopPayload = {
+				...payload,
+				hook_event_name: "Stop" as const,
+				turn_id: `stop-${name}`,
+			};
+			if (transport === "raw") {
+				assert.equal(
+					(await dispatchCodexNativeHook(stopPayload, { cwd })).outputJson,
+					null,
+					name,
+				);
+			} else {
+				assert.notEqual(
+					parseSingleJsonStdout(runNativeHookCli(stopPayload, { cwd, env }))
+						.decision,
+					"block",
+					name,
+				);
+			}
+			assert.deepEqual(
+				skillDetailPaths.map(existsSync),
+				[false, false, false, false],
+				name,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	}
+
+	async function assertG2bTerminalStateIsInert(
+		transport: "raw" | "compiled",
+	): Promise<void> {
+		const name = `g2b-${transport}`;
+		const cwd = await mkdtemp(join(tmpdir(), `omx-native-${name}-`));
+		const sessionId = `sess-${name}`;
+		const threadId = `thread-${name}`;
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionDir = join(stateDir, "sessions", sessionId);
+		const paths = [
+			join(stateDir, "skill-active-state.json"),
+			join(stateDir, "autopilot-state.json"),
+			join(sessionDir, "skill-active-state.json"),
+			join(sessionDir, "autopilot-state.json"),
+			join(stateDir, "session.json"),
+		];
+		const env = {
+			...process.env,
+			OMX_ROOT: "",
+			OMX_STATE_ROOT: "",
+			OMX_TEAM_MODE: "",
+		};
+		const payload = {
+			hook_event_name: "UserPromptSubmit" as const,
+			cwd,
+			source: "codex-app",
+			session_id: sessionId,
+			thread_id: threadId,
+			turn_id: `turn-${name}`,
+			prompt: "do not start $autopilot — café",
+		};
+		try {
+			await writeJson(join(cwd, ".omx", "setup-scope.json"), {
+				scope: "project",
+				teamMode: "disabled",
+			});
+			await writeJson(paths[0], {
+				active: false,
+				skill: "ralplan",
+				phase: "complete",
+				session_id: "root-skill-session",
+				thread_id: "root-skill-thread",
+				turn_id: "root-skill-turn",
+				completed_at: "2026-07-01T00:00:00.000Z",
+				updated_at: "2026-07-01T00:00:01.000Z",
+			});
+			await writeJson(paths[1], {
+				active: false,
+				mode: "autopilot",
+				current_phase: "complete",
+				session_id: "root-detail-session",
+				thread_id: "root-detail-thread",
+				turn_id: "root-detail-turn",
+				completed_at: "2026-07-02T00:00:00.000Z",
+				updated_at: "2026-07-02T00:00:01.000Z",
+			});
+			await writeJson(paths[2], {
+				active: false,
+				skill: "team",
+				phase: "complete",
+				session_id: "session-skill-session",
+				thread_id: "session-skill-thread",
+				turn_id: "session-skill-turn",
+				completed_at: "2026-07-03T00:00:00.000Z",
+				updated_at: "2026-07-03T00:00:01.000Z",
+			});
+			await writeJson(paths[3], {
+				active: false,
+				mode: "autopilot",
+				current_phase: "complete",
+				session_id: "session-detail-session",
+				thread_id: "session-detail-thread",
+				turn_id: "session-detail-turn",
+				completed_at: "2026-07-04T00:00:00.000Z",
+				updated_at: "2026-07-04T00:00:01.000Z",
+			});
+			await writeJson(paths[4], {
+				session_id: sessionId,
+				native_session_id: `native-${name}`,
+				thread_id: "pointer-thread",
+				turn_id: "pointer-turn",
+				created_at: "2026-07-05T00:00:00.000Z",
+				updated_at: "2026-07-05T00:00:01.000Z",
+				cwd,
+			});
+			const buffers = await Promise.all(paths.map((path) => readFile(path)));
+			if (transport === "raw") {
+				const submit = await dispatchCodexNativeHook(payload, { cwd });
+				assert.equal(submit.skillState, null, name);
+				assert.equal(submit.outputJson, null, name);
+			} else {
+				assert.deepEqual(
+					parseSingleJsonStdout(runNativeHookCli(payload, { cwd, env })),
+					{},
+					name,
+				);
+			}
+			assert.deepEqual(
+				await Promise.all(paths.map((path) => readFile(path))),
+				buffers,
+				name,
+			);
+			const stopPayload = {
+				...payload,
+				hook_event_name: "Stop" as const,
+				turn_id: `stop-${name}`,
+			};
+			if (transport === "raw") {
+				assert.equal(
+					(await dispatchCodexNativeHook(stopPayload, { cwd })).outputJson,
+					null,
+					name,
+				);
+			} else {
+				assert.notEqual(
+					parseSingleJsonStdout(runNativeHookCli(stopPayload, { cwd, env }))
+						.decision,
+					"block",
+					name,
+				);
+			}
+			assert.deepEqual(
+				await Promise.all(paths.map((path) => readFile(path))),
+				buffers,
+				name,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	}
+
+	it("keeps G2a documentation reference state-free through raw UserPromptSubmit and Stop", async () => {
+		await assertG2aDocumentationReferenceIsInert("raw");
+	});
+
+	it("keeps G2a documentation reference state-free through compiled UserPromptSubmit and Stop", async () => {
+		await assertG2aDocumentationReferenceIsInert("compiled");
+	});
+
+	it("keeps G2b negated terminal root/session conflict byte-identical through raw UserPromptSubmit and Stop", async () => {
+		await assertG2bTerminalStateIsInert("raw");
+	});
+
+	it("keeps G2b negated terminal root/session conflict byte-identical through compiled UserPromptSubmit and Stop", async () => {
+		await assertG2bTerminalStateIsInert("compiled");
+	});
+
+	async function assertG1bURestart(
+		transport: "raw" | "compiled",
+	): Promise<void> {
+		const cwd = await mkdtemp(
+			join(tmpdir(), `omx-native-${transport}-g1bu-restart-`),
+		);
+		const sessionId = `sess-g1bu-${transport}`;
+		const threadId = `thread-g1bu-${transport}`;
+		const priorTurnId = `turn-g1bu-${transport}-old`;
+		const turnId = `turn-g1bu-${transport}-new`;
+		const prompt = "$team $autopilot restart — café";
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionDir = join(stateDir, "sessions", sessionId);
+		const sessionSkillPath = join(sessionDir, "skill-active-state.json");
+		const sessionAutopilotPath = join(sessionDir, "autopilot-state.json");
+		const env = {
+			...process.env,
+			OMX_ROOT: "",
+			OMX_STATE_ROOT: "",
+			OMX_TEAM_MODE: "",
+			TMUX: "",
+			TMUX_PANE: "",
+		};
+		try {
+			await writeJson(join(cwd, ".omx", "setup-scope.json"), {
+				scope: "project",
+				teamMode: "disabled",
+			});
+			await writeJson(join(stateDir, "skill-active-state.json"), {
+				active: true,
+				skill: "autopilot",
+				phase: "completing",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: priorTurnId,
+				marker: "root-skill",
+				active_skills: [
+					{
+						skill: "autopilot",
+						phase: "completing",
+						active: true,
+						session_id: sessionId,
+						thread_id: threadId,
+						turn_id: priorTurnId,
+					},
+				],
+			});
+			await writeJson(join(stateDir, "autopilot-state.json"), {
+				active: false,
+				mode: "autopilot",
+				current_phase: "complete",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: priorTurnId,
+				marker: "root-autopilot",
+			});
+			await writeJson(sessionSkillPath, {
+				active: true,
+				skill: "autopilot",
+				phase: "completing",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: priorTurnId,
+				marker: "session-skill",
+				active_skills: [
+					{
+						skill: "autopilot",
+						phase: "completing",
+						active: true,
+						session_id: sessionId,
+						thread_id: threadId,
+						turn_id: priorTurnId,
+					},
+				],
+			});
+			await writeJson(sessionAutopilotPath, {
+				active: false,
+				mode: "autopilot",
+				current_phase: "complete",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: priorTurnId,
+				marker: "session-autopilot",
+			});
+			const payload = {
+				hook_event_name: "UserPromptSubmit" as const,
+				cwd,
+				source: "codex-app",
+				session_id: sessionId,
+				thread_id: threadId,
+				turn_id: turnId,
+				prompt,
+			};
+			let output: Record<string, unknown> | null;
+			if (transport === "raw") {
+				const result = await dispatchCodexNativeHook(payload, { cwd });
+				assert.equal(result.skillState?.skill, "autopilot");
+				assert.equal(result.skillState?.active, true);
+				output = result.outputJson;
+			} else {
+				const input = Buffer.from(JSON.stringify(payload), "utf-8");
+				assert.equal(input.toString("utf-8"), JSON.stringify(payload));
+				output = parseSingleJsonStdout(
+					runNativeHookCli(input.toString("utf-8"), { cwd, env }),
+				);
+			}
+			assert.doesNotMatch(JSON.stringify(output), /\$team" -> team/);
+			assert.doesNotMatch(JSON.stringify(output), /\$team" -> team/);
+			const skillState = JSON.parse(
+				await readFile(sessionSkillPath, "utf-8"),
+			) as {
+				active?: boolean;
+				skill?: string;
+				turn_id?: string;
+				active_skills?: Array<{ skill?: string }>;
+			};
+			assert.equal(skillState.active, true);
+			assert.equal(skillState.skill, "autopilot");
+			assert.equal(skillState.turn_id, turnId);
+			assert.deepEqual(
+				skillState.active_skills?.map((entry) => entry.skill),
+				["autopilot"],
+			);
+			const autopilotState = JSON.parse(
+				await readFile(sessionAutopilotPath, "utf-8"),
+			) as {
+				active?: boolean;
+				current_phase?: string;
+				turn_id?: string;
+				state?: {
+					handoff_artifacts?: { context_snapshot?: { path?: string } };
+				};
+			};
+			assert.equal(autopilotState.active, true);
+			assert.equal(autopilotState.current_phase, "deep-interview");
+			assert.equal(autopilotState.turn_id, turnId);
+			const contextSnapshotPath =
+				autopilotState.state?.handoff_artifacts?.context_snapshot?.path;
+			assert.ok(contextSnapshotPath);
+			assert.ok(
+				(await readFile(resolve(cwd, contextSnapshotPath))).includes(
+					Buffer.from(prompt, "utf-8"),
+				),
+			);
+			assert.equal(existsSync(join(stateDir, "team-state.json")), false);
+			const stopPayload = {
+				...payload,
+				hook_event_name: "Stop" as const,
+				turn_id: `stop-g1bu-${transport}`,
+			};
+			if (transport === "raw") {
+				assert.equal(
+					(await dispatchCodexNativeHook(stopPayload, { cwd })).outputJson
+						?.decision,
+					"block",
+				);
+			} else {
+				assert.equal(
+					parseSingleJsonStdout(runNativeHookCli(stopPayload, { cwd, env }))
+						.decision,
+					"block",
+				);
+			}
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	}
+
+	it("restarts terminal Autopilot through disabled-Team raw UserPromptSubmit for G1b-U", async () => {
+		await assertG1bURestart("raw");
+	});
+
+	it("restarts terminal Autopilot through disabled-Team compiled UserPromptSubmit for G1b-U", async () => {
+		await assertG1bURestart("compiled");
+	});
+
 	it("does not crash Stop hook dispatch when the exec follow-up queue is malformed", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-stop-exec-followup-corrupt-"),
@@ -2051,24 +6821,108 @@ PY`,
 					},
 					{ cwd },
 				),
-			) as {
-				decision?: string;
-				reason?: string;
-				statePath?: string;
-				canonicalDisagreement?: string;
-			};
+			);
 
 			assert.equal(output.decision, "block");
+			assert.equal(output.stopReason, "autopilot_ultragoal");
 			assert.match(
 				String(output.reason ?? ""),
 				/state: \.omx\/state\/sessions\/sess-autopilot-diagnostic\/autopilot-state\.json/,
 			);
 			assert.match(String(output.reason ?? ""), /canonical: canonical_agrees/);
-			assert.equal(
-				output.statePath,
-				".omx/state/sessions/sess-autopilot-diagnostic/autopilot-state.json",
+			assert.match(
+				String(output.systemMessage ?? ""),
+				/state: \.omx\/state\/sessions\/sess-autopilot-diagnostic\/autopilot-state\.json/,
 			);
-			assert.equal(output.canonicalDisagreement, "canonical_agrees");
+			assert.match(
+				String(output.systemMessage ?? ""),
+				/canonical: canonical_agrees/,
+			);
+			assert.deepEqual(Object.keys(output).sort(), [
+				"decision",
+				"reason",
+				"stopReason",
+				"systemMessage",
+			]);
+			assert.equal("statePath" in output, false);
+			assert.equal("canonicalDisagreement" in output, false);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps canonical phase disagreements in active Autopilot Stop diagnostics", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-autopilot-canonical-phase-"),
+		);
+		try {
+			const sessionId = "sess-autopilot-canonical-phase";
+			await writeJson(join(cwd, ".omx", "state", "session.json"), {
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(join(cwd, ".omx", "state", "skill-active-state.json"), {
+				version: 1,
+				active: true,
+				skill: "autopilot",
+				phase: "execution",
+				session_id: sessionId,
+				active_skills: [
+					{
+						skill: "autopilot",
+						phase: "execution",
+						active: true,
+						session_id: sessionId,
+					},
+				],
+			});
+			await writeJson(
+				join(
+					cwd,
+					".omx",
+					"state",
+					"sessions",
+					sessionId,
+					"autopilot-state.json",
+				),
+				{
+					active: true,
+					mode: "autopilot",
+					current_phase: "ultragoal",
+					session_id: sessionId,
+				},
+			);
+
+			const output = parseSingleJsonStdout(
+				runNativeHookCli(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						session_id: sessionId,
+						thread_id: "thread-autopilot-canonical-phase",
+					},
+					{ cwd },
+				),
+			);
+
+			assert.equal(output.decision, "block");
+			assert.equal(output.stopReason, "autopilot_ultragoal");
+			assert.match(
+				String(output.reason ?? ""),
+				/canonical: canonical_phase:execution/,
+			);
+			assert.match(
+				String(output.systemMessage ?? ""),
+				/canonical: canonical_phase:execution/,
+			);
+			assert.deepEqual(Object.keys(output).sort(), [
+				"decision",
+				"reason",
+				"stopReason",
+				"systemMessage",
+			]);
+			assert.equal("statePath" in output, false);
+			assert.equal("canonicalDisagreement" in output, false);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -2740,6 +7594,423 @@ PY`,
 			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("issue #3138 converges owner-env terminal write and native Stop on one canonical scope", async () => {
+		const root = await mkdtemp(join(tmpdir(), "omx-native-hook-3138-"));
+		const fakeBinDir = join(root, "fake-bin");
+		const tmuxPath = join(fakeBinDir, "tmux");
+		const previousSessionId = process.env.OMX_SESSION_ID;
+		const previousTmux = process.env.TMUX;
+		const previousTmuxPane = process.env.TMUX_PANE;
+		const previousPath = process.env.PATH;
+
+		const setOwnerEvidence = async (
+			instanceId: string,
+			sessionInstanceId = "",
+		): Promise<void> => {
+			await mkdir(fakeBinDir, { recursive: true });
+			await writeFile(
+				tmuxPath,
+				buildSessionOwnerEvidenceTmux(instanceId, sessionInstanceId),
+				"utf-8",
+			);
+			await chmod(tmuxPath, 0o755);
+			process.env.TMUX = "/tmp/omx-3138";
+			process.env.TMUX_PANE = "%3138";
+			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
+		};
+
+		try {
+			const cwd = join(root, "bound");
+			const canonicalSessionId = "native-canonical-3138";
+			const nativeSessionId = "native-canonical-3138";
+			const ownerSessionId = "omx-owner-3138";
+			const stateDir = join(cwd, ".omx", "state");
+			await mkdir(cwd, { recursive: true });
+			await writeSessionStart(cwd, canonicalSessionId, {
+				nativeSessionId,
+				pid: process.pid,
+				tmuxSessionName: "omx-owner-evidence",
+				tmuxPaneId: "%3138",
+			});
+			process.env.OMX_SESSION_ID = ownerSessionId;
+			await setOwnerEvidence(ownerSessionId, canonicalSessionId);
+
+			const beforeAlias = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: nativeSessionId,
+					thread_id: "thread-owner-3138",
+					turn_id: "turn-before-alias-3138",
+					prompt: "$deep-interview establish canonical scope",
+				},
+				{ cwd },
+			);
+			assert.equal(beforeAlias.skillState?.session_id, canonicalSessionId);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						canonicalSessionId,
+						"deep-interview-state.json",
+					),
+				),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						ownerSessionId,
+						"deep-interview-state.json",
+					),
+				),
+				false,
+			);
+
+			await dispatchCodexNativeHook(
+				{ hook_event_name: "SessionStart", cwd, session_id: nativeSessionId },
+				{ cwd, sessionOwnerPid: process.pid },
+			);
+			await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd,
+					session_id: nativeSessionId,
+					source: "resume",
+				},
+				{ cwd, sessionOwnerPid: process.pid },
+			);
+			const reboundPointer = JSON.parse(
+				await readFile(join(stateDir, "session.json"), "utf-8"),
+			) as {
+				session_id?: string;
+				native_session_id?: string;
+				owner_omx_session_id?: string;
+			};
+			assert.equal(reboundPointer.session_id, canonicalSessionId);
+			assert.equal(reboundPointer.native_session_id, nativeSessionId);
+			assert.equal(reboundPointer.owner_omx_session_id, ownerSessionId);
+
+			const afterAlias = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: nativeSessionId,
+					thread_id: "thread-owner-3138",
+					turn_id: "turn-after-alias-3138",
+					prompt: "$deep-interview establish canonical scope",
+				},
+				{ cwd },
+			);
+			assert.equal(afterAlias.skillState?.session_id, canonicalSessionId);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						canonicalSessionId,
+						"deep-interview-state.json",
+					),
+				),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						ownerSessionId,
+						"deep-interview-state.json",
+					),
+				),
+				false,
+			);
+
+			const terminalWrite = await executeStateOperation("state_write", {
+				mode: "deep-interview",
+				active: false,
+				current_phase: "complete",
+				workingDirectory: cwd,
+			});
+			assert.notEqual(terminalWrite.isError, true);
+			assert.equal(
+				(terminalWrite.payload as { path?: string }).path,
+				join(
+					stateDir,
+					"sessions",
+					canonicalSessionId,
+					"deep-interview-state.json",
+				),
+			);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						ownerSessionId,
+						"deep-interview-state.json",
+					),
+				),
+				false,
+			);
+
+			const stop = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd,
+					session_id: nativeSessionId,
+					thread_id: "thread-owner-3138",
+				},
+				{ cwd },
+			);
+			assert.equal(stop.outputJson, null);
+
+			const replacementCwd = join(root, "replacement");
+			const replacementStateDir = join(replacementCwd, ".omx", "state");
+			const replacementOwner = "omx-prior-3138";
+			const replacementCandidate = "omx-replacement-3138";
+			await mkdir(replacementCwd, { recursive: true });
+			await writeSessionStart(replacementCwd, replacementOwner, {
+				nativeSessionId: "native-before-new-3138",
+				pid: process.pid,
+			});
+			process.env.OMX_SESSION_ID = replacementCandidate;
+			await setOwnerEvidence(replacementCandidate);
+			await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd: replacementCwd,
+					session_id: "native-after-new-3138",
+				},
+				{ cwd: replacementCwd, sessionOwnerPid: process.pid },
+			);
+			const replacementPointer = JSON.parse(
+				await readFile(join(replacementStateDir, "session.json"), "utf-8"),
+			) as {
+				session_id?: string;
+				owner_omx_session_id?: string;
+			};
+			assert.equal(replacementPointer.session_id, "native-after-new-3138");
+			assert.equal(replacementPointer.owner_omx_session_id, replacementOwner);
+			assert.notEqual(
+				replacementPointer.owner_omx_session_id,
+				replacementCandidate,
+			);
+
+			const nativeOnlyCwd = join(root, "native-only");
+			await mkdir(nativeOnlyCwd, { recursive: true });
+			delete process.env.OMX_SESSION_ID;
+			await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd: nativeOnlyCwd,
+					session_id: "native-only-3138",
+				},
+				{ cwd: nativeOnlyCwd, sessionOwnerPid: process.pid },
+			);
+			const nativeOnlyPointer = JSON.parse(
+				await readFile(
+					join(nativeOnlyCwd, ".omx", "state", "session.json"),
+					"utf-8",
+				),
+			) as { session_id?: string; owner_omx_session_id?: string };
+			assert.equal(nativeOnlyPointer.session_id, "native-only-3138");
+			assert.equal(nativeOnlyPointer.owner_omx_session_id, undefined);
+
+			const conflictingCwd = join(root, "conflicting");
+			const conflictingOwner = "omx-conflicting-3138";
+			await mkdir(conflictingCwd, { recursive: true });
+			await writeSessionStart(conflictingCwd, "native-conflicting-3138", {
+				nativeSessionId: "native-conflicting-3138",
+				pid: process.pid,
+			});
+			process.env.OMX_SESSION_ID = conflictingOwner;
+			await setOwnerEvidence("omx-foreign-3138");
+			await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd: conflictingCwd,
+					session_id: "native-conflicting-3138",
+				},
+				{ cwd: conflictingCwd, sessionOwnerPid: process.pid },
+			);
+			const conflictingPointer = JSON.parse(
+				await readFile(
+					join(conflictingCwd, ".omx", "state", "session.json"),
+					"utf-8",
+				),
+			) as { owner_omx_session_id?: string };
+			assert.equal(conflictingPointer.owner_omx_session_id, undefined);
+			const conflictingActivation = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd: conflictingCwd,
+					session_id: "native-conflicting-3138",
+					prompt: "$deep-interview must not create an owner scope",
+				},
+				{ cwd: conflictingCwd },
+			);
+			assert.equal(conflictingActivation.skillState, null);
+			assert.equal(
+				existsSync(
+					join(
+						conflictingCwd,
+						".omx",
+						"state",
+						"sessions",
+						"native-conflicting-3138",
+						"deep-interview-state.json",
+					),
+				),
+				false,
+			);
+
+			const staleCwd = join(root, "stale");
+			const staleStatePath = join(staleCwd, ".omx", "state", "session.json");
+			await writeJson(staleStatePath, {
+				session_id: "native-stale-3138",
+				native_session_id: "native-stale-3138",
+				cwd: staleCwd,
+				started_at: "2026-01-01T00:00:00.000Z",
+				pid: 999_999,
+			});
+			process.env.OMX_SESSION_ID = "omx-stale-3138";
+			await setOwnerEvidence("omx-stale-3138");
+			await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd: staleCwd,
+					session_id: "native-stale-3138",
+				},
+				{ cwd: staleCwd, sessionOwnerPid: process.pid },
+			);
+			const stalePointer = JSON.parse(
+				await readFile(staleStatePath, "utf-8"),
+			) as {
+				session_id?: string;
+				owner_omx_session_id?: string;
+			};
+			assert.equal(stalePointer.session_id, "native-stale-3138");
+			assert.equal(stalePointer.owner_omx_session_id, "omx-stale-3138");
+
+			const foreignCwd = join(root, "foreign");
+			const foreignStatePath = join(
+				foreignCwd,
+				".omx",
+				"state",
+				"session.json",
+			);
+			await writeJson(foreignStatePath, {
+				session_id: "native-foreign-3138",
+				native_session_id: "native-foreign-3138",
+				cwd: join(root, "other-worktree"),
+				started_at: "2026-01-01T00:00:00.000Z",
+				pid: process.pid,
+			});
+			const foreignPointerBefore = await readFile(foreignStatePath, "utf-8");
+			process.env.OMX_SESSION_ID = "omx-foreign-3138";
+			await setOwnerEvidence("omx-foreign-3138");
+			const foreignStart = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "SessionStart",
+					cwd: foreignCwd,
+					session_id: "native-foreign-3138",
+				},
+				{ cwd: foreignCwd, sessionOwnerPid: process.pid },
+			);
+			assert.equal(foreignStart.outputJson, null);
+			assert.equal(
+				await readFile(foreignStatePath, "utf-8"),
+				foreignPointerBefore,
+			);
+			const foreignPointer = JSON.parse(
+				await readFile(foreignStatePath, "utf-8"),
+			) as { owner_omx_session_id?: string };
+			assert.equal(foreignPointer.owner_omx_session_id, undefined);
+			const foreignActivation = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd: foreignCwd,
+					session_id: "native-unmatched-foreign-3138",
+					prompt: "$deep-interview must not escape a foreign pointer",
+				},
+				{ cwd: foreignCwd },
+			);
+			assert.equal(foreignActivation.skillState, null);
+			assert.equal(
+				existsSync(
+					join(
+						foreignCwd,
+						".omx",
+						"state",
+						"sessions",
+						"native-unmatched-foreign-3138",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(foreignCwd, ".omx", "state", "skill-active-state.json"),
+				),
+				false,
+			);
+
+			const foreignStop = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd: foreignCwd,
+					session_id: "native-foreign-3138",
+				},
+				{ cwd: foreignCwd },
+			);
+			assert.equal(foreignStop.outputJson?.decision, "block");
+			assert.equal(
+				foreignStop.outputJson?.stopReason,
+				"session_pointer_unusable",
+			);
+			assert.equal(
+				existsSync(join(foreignCwd, ".omx", "state", "native-stop-state.json")),
+				false,
+			);
+
+			const unmatchedStop = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd: conflictingCwd,
+					session_id: "native-unmatched-stop-3138",
+				},
+				{ cwd: conflictingCwd },
+			);
+			assert.equal(unmatchedStop.outputJson?.decision, "block");
+			assert.equal(
+				unmatchedStop.outputJson?.stopReason,
+				"session_scope_unmatched",
+			);
+			assert.equal(
+				existsSync(
+					join(conflictingCwd, ".omx", "state", "native-stop-state.json"),
+				),
+				false,
+			);
+		} finally {
+			if (typeof previousSessionId === "string")
+				process.env.OMX_SESSION_ID = previousSessionId;
+			else delete process.env.OMX_SESSION_ID;
+			if (typeof previousTmux === "string") process.env.TMUX = previousTmux;
+			else delete process.env.TMUX;
+			if (typeof previousTmuxPane === "string")
+				process.env.TMUX_PANE = previousTmuxPane;
+			else delete process.env.TMUX_PANE;
+			if (typeof previousPath === "string") process.env.PATH = previousPath;
+			else delete process.env.PATH;
+			await rm(root, { recursive: true, force: true });
 		}
 	});
 
@@ -3672,7 +8943,7 @@ PY`,
 				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
 					recursive: true,
 				});
-				await writeSessionStart(cwd, canonicalSessionId);
+				await writeSessionStart(cwd, canonicalSessionId, { nativeSessionId });
 
 				const sessionStatePath = join(stateDir, "session.json");
 				const sessionState = JSON.parse(
@@ -3736,7 +9007,7 @@ PY`,
 			await mkdir(join(stateDir, "sessions", canonicalSessionId), {
 				recursive: true,
 			});
-			await writeSessionStart(cwd, canonicalSessionId);
+			await writeSessionStart(cwd, canonicalSessionId, { nativeSessionId });
 
 			let reconcileCall: { cwd: string; sessionId?: string } | null = null;
 			const promptResult = await dispatchCodexNativeHook(
@@ -8523,6 +13794,360 @@ export async function onHookEvent(event) {
 		}
 	});
 
+	it("rejects inert and reserved direct-looking submits across native and CLI surfaces without Stop blockers", async () => {
+		const cases = [
+			{
+				source: "codex-app",
+				sessionId: "sess-inert-native",
+				prompt: "Do not run $autopilot",
+			},
+			{
+				source: "cli",
+				sessionId: "sess-reserved-cli",
+				prompt: "/prompts:architect $autopilot",
+			},
+			{
+				source: "codex-app",
+				sessionId: "sess-marked-native",
+				prompt: "[omx question answered] $autopilot",
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			const cwd = await mkdtemp(
+				join(tmpdir(), `omx-native-hook-${testCase.sessionId}-`),
+			);
+			try {
+				await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+				const submit = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "UserPromptSubmit",
+						cwd,
+						source: testCase.source,
+						session_id: testCase.sessionId,
+						thread_id: `thread-${testCase.sessionId}`,
+						prompt: testCase.prompt,
+					},
+					{ cwd },
+				);
+
+				assert.equal(submit.skillState, null);
+				assert.equal(
+					existsSync(
+						join(
+							cwd,
+							".omx",
+							"state",
+							"sessions",
+							testCase.sessionId,
+							"skill-active-state.json",
+						),
+					),
+					false,
+				);
+				assert.equal(
+					existsSync(join(cwd, ".omx", "state", "skill-active-state.json")),
+					false,
+				);
+				assert.equal(
+					existsSync(
+						join(
+							cwd,
+							".omx",
+							"state",
+							"sessions",
+							testCase.sessionId,
+							"autopilot-state.json",
+						),
+					),
+					false,
+				);
+				assert.doesNotMatch(
+					String(
+						(
+							submit.outputJson as {
+								hookSpecificOutput?: { additionalContext?: string };
+							} | null
+						)?.hookSpecificOutput?.additionalContext ?? "",
+					),
+					/detected workflow keyword|Autopilot protocol|denied workflow keyword/i,
+				);
+
+				const stop = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						source: testCase.source,
+						session_id: testCase.sessionId,
+					},
+					{ cwd },
+				);
+				assert.equal(stop.outputJson, null);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it("keeps issue #3133 negated, multilingual, and quoted ralplan mentions inert on the native entrypoint", async () => {
+		const rejectedInputs = [
+			{
+				source: "codex-app",
+				sessionId: "sess-3133-negated",
+				prompt: "Do not run $ralplan and do not repeat the review.",
+			},
+			{
+				source: "cli",
+				sessionId: "sess-3133-russian",
+				prompt: "Не запускай $ralplan",
+			},
+			{
+				source: "codex-app",
+				sessionId: "sess-3133-quoted",
+				prompt: 'Logged review text: "$ralplan plan this change".',
+			},
+		] as const;
+
+		for (const testCase of rejectedInputs) {
+			const cwd = await mkdtemp(
+				join(tmpdir(), `omx-native-hook-${testCase.sessionId}-`),
+			);
+			try {
+				const stateDir = join(cwd, ".omx", "state");
+				const sessionDir = join(stateDir, "sessions", testCase.sessionId);
+				await mkdir(stateDir, { recursive: true });
+
+				const submit = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "UserPromptSubmit",
+						cwd,
+						source: testCase.source,
+						session_id: testCase.sessionId,
+						thread_id: `thread-${testCase.sessionId}`,
+						turn_id: `turn-${testCase.sessionId}`,
+						prompt: testCase.prompt,
+					},
+					{ cwd },
+				);
+
+				assert.equal(submit.skillState, null);
+				assert.equal(
+					existsSync(join(sessionDir, "skill-active-state.json")),
+					false,
+				);
+				assert.equal(existsSync(join(sessionDir, "ralplan-state.json")), false);
+				assert.equal(
+					existsSync(join(stateDir, "skill-active-state.json")),
+					false,
+				);
+				assert.doesNotMatch(
+					String(
+						(
+							submit.outputJson as {
+								hookSpecificOutput?: { additionalContext?: string };
+							} | null
+						)?.hookSpecificOutput?.additionalContext ?? "",
+					),
+					/ralplan/i,
+				);
+
+				const stop = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						source: testCase.source,
+						session_id: testCase.sessionId,
+						thread_id: `thread-${testCase.sessionId}`,
+						turn_id: `stop-${testCase.sessionId}`,
+					},
+					{ cwd },
+				);
+				assert.equal(stop.outputJson, null);
+				assert.doesNotMatch(JSON.stringify(stop.outputJson ?? {}), /ralplan/i);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		}
+
+		const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-3133-positive-"));
+		const sessionId = "sess-3133-positive";
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			await mkdir(stateDir, { recursive: true });
+			const submit = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: sessionId,
+					thread_id: "thread-3133-positive",
+					turn_id: "turn-3133-positive",
+					prompt: "$ralplan plan this change",
+				},
+				{ cwd },
+			);
+
+			assert.equal(submit.skillState?.skill, "ralplan");
+			assert.equal(submit.skillState?.active, true);
+			assert.equal(
+				existsSync(join(sessionDir, "skill-active-state.json")),
+				true,
+			);
+			assert.equal(existsSync(join(sessionDir, "ralplan-state.json")), true);
+
+			const stop = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd,
+					source: "codex-app",
+					session_id: sessionId,
+					thread_id: "thread-3133-positive",
+					turn_id: "stop-3133-positive",
+				},
+				{ cwd },
+			);
+			assert.equal(stop.outputJson?.decision, "block");
+			assert.match(
+				String(stop.outputJson?.reason ?? ""),
+				/ralplan is still active/i,
+			);
+			assert.match(
+				String(stop.outputJson?.reason ?? ""),
+				/continue from the current ralplan artifact/i,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("activates leading direct workflow invocations on native and CLI prompt submits", async () => {
+		for (const source of ["codex-app", "cli"] as const) {
+			const cwd = await mkdtemp(
+				join(tmpdir(), `omx-native-hook-direct-${source}-`),
+			);
+			const sessionId = `sess-direct-${source}`;
+			try {
+				await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+				const result = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "UserPromptSubmit",
+						cwd,
+						source,
+						session_id: sessionId,
+						thread_id: `thread-${source}`,
+						prompt: "$autopilot resume this task",
+					},
+					{ cwd },
+				);
+
+				assert.equal(result.skillState?.skill, "autopilot");
+				assert.equal(result.skillState?.active, true);
+				assert.equal(
+					existsSync(
+						join(
+							cwd,
+							".omx",
+							"state",
+							"sessions",
+							sessionId,
+							"autopilot-state.json",
+						),
+					),
+					true,
+				);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+
+	it("uses the first effective Team match for native outside-tmux blocking", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-team-first-effective-"),
+		);
+		try {
+			await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+			const ralphFirst = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: "sess-ralph-first-team",
+					thread_id: "thread-ralph-first-team",
+					prompt: "$ralph $team ship this fix",
+				},
+				{ cwd },
+			);
+			assert.equal(ralphFirst.skillState?.skill, "ralph");
+			assert.equal(ralphFirst.skillState?.active, true);
+			assert.doesNotMatch(
+				JSON.stringify(ralphFirst.outputJson),
+				/cannot activate the tmux-only `team` workflow directly/,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"state",
+						"sessions",
+						"sess-ralph-first-team",
+						"ralph-state.json",
+					),
+				),
+				true,
+			);
+			assert.equal(
+				ralphFirst.skillState?.active_skills?.some(
+					(entry) => entry.skill === "team",
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(join(cwd, ".omx", "state", "team-state.json")),
+				false,
+			);
+			assert.doesNotMatch(
+				JSON.stringify(ralphFirst.outputJson),
+				/Use the durable OMX team runtime via `omx team \.\.\.`/,
+			);
+
+			const teamFirst = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: "sess-team-first-ralph",
+					thread_id: "thread-team-first-ralph",
+					prompt: "$team $ralph ship this fix",
+				},
+				{ cwd },
+			);
+			assert.equal(teamFirst.skillState?.skill, "team");
+			assert.equal(teamFirst.skillState?.active, false);
+			assert.match(
+				JSON.stringify(teamFirst.outputJson),
+				/cannot activate the tmux-only `team` workflow directly/,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"state",
+						"sessions",
+						"sess-team-first-ralph",
+						"ralph-state.json",
+					),
+				),
+				false,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("denies direct $team prompt activation from Codex App/native outside tmux", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-team-native-block-"),
@@ -9158,7 +14783,7 @@ export async function onHookEvent(event) {
 			);
 
 			assert.equal(result.outputJson, null);
-			assert.deepEqual(reconcileCall, { cwd, sessionId: canonicalSessionId });
+			assert.equal(reconcileCall, null);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -9329,7 +14954,7 @@ esac
 			await mkdir(join(cwd, ".omx", "state", "sessions", canonicalSessionId), {
 				recursive: true,
 			});
-			await writeSessionStart(cwd, canonicalSessionId);
+			await writeSessionStart(cwd, canonicalSessionId, { nativeSessionId });
 
 			const binDir = await mkdtemp(
 				join(tmpdir(), "omx-native-hook-hud-reuse-bin-"),
@@ -10213,6 +15838,330 @@ exit 0
 				{ cwd },
 			);
 			assert.equal(stateRepair.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows only the authenticated standalone deep-interview complete terminal state write", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-deep-interview-terminal-write-"),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-di-terminal-write";
+			const threadId = "thread-di-terminal-write";
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			await mkdir(sessionDir, { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				cwd,
+			});
+			await writeJson(join(sessionDir, "skill-active-state.json"), {
+				active: true,
+				skill: "deep-interview",
+				phase: "planning",
+				session_id: sessionId,
+				thread_id: threadId,
+				active_skills: [
+					{
+						skill: "deep-interview",
+						phase: "planning",
+						active: true,
+						session_id: sessionId,
+						thread_id: threadId,
+					},
+				],
+			});
+			const activeWrite = await executeStateOperation("state_write", {
+				mode: "deep-interview",
+				active: true,
+				current_phase: "intent-first",
+				session_id: sessionId,
+				thread_id: threadId,
+				workingDirectory: cwd,
+			});
+			assert.notEqual(activeWrite.isError, true);
+			const persistedActiveState = JSON.parse(
+				await readFile(join(sessionDir, "deep-interview-state.json"), "utf-8"),
+			) as { mode?: string; session_id?: string };
+			assert.equal(persistedActiveState.mode, undefined);
+			assert.equal(persistedActiveState.session_id, undefined);
+
+			const preToolUse = (command: string) =>
+				dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: threadId,
+						tool_name: "Bash",
+						tool_input: { command },
+					},
+					{ cwd },
+				);
+			const validPayload = JSON.stringify({
+				mode: "deep-interview",
+				active: false,
+				current_phase: "complete",
+				session_id: sessionId,
+				state: { spec_path: ".omx/interviews/final.md" },
+			});
+			const validCommand = `omx state write --input '${validPayload}' --json`;
+			assert.equal((await preToolUse(validCommand)).outputJson, null);
+			const terminalInputFile = join(cwd, "terminal-input.json");
+			await writeFile(terminalInputFile, validPayload);
+			const foreignInputFile = join(cwd, "foreign-input.json");
+			await writeFile(
+				foreignInputFile,
+				JSON.stringify({
+					mode: "team",
+					active: false,
+					current_phase: "complete",
+					session_id: sessionId,
+				}),
+			);
+			const activePayload = JSON.stringify({
+				mode: "deep-interview",
+				active: true,
+				current_phase: "intent-first",
+				session_id: sessionId,
+			});
+			for (const command of [
+				`env bun --preload ./preload.ts dist/cli/omx.js state write --input '${activePayload}' --json`,
+				`command tsx --tsconfig tsconfig.json dist/cli/omx.js state write --input '${activePayload}' --json`,
+				`time nodejs --require ./preload.js dist/cli/omx.js state write --input '${activePayload}' --json`,
+			]) {
+				assert.equal((await preToolUse(command)).outputJson, null, command);
+			}
+
+			const rejectedCommands = [
+				[
+					"wrong mode",
+					`omx state write --input '${JSON.stringify({ mode: "ralplan", active: false, current_phase: "complete", session_id: sessionId })}' --json`,
+				],
+				[
+					"wrong session",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: "sess-other" })}' --json`,
+				],
+				[
+					"missing session",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete" })}' --json`,
+				],
+				[
+					"missing inactive flag",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", current_phase: "complete", session_id: sessionId })}' --json`,
+				],
+				[
+					"missing complete phase",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, session_id: sessionId })}' --json`,
+				],
+				[
+					"cancelled deactivation",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "cancelled", session_id: sessionId })}' --json`,
+				],
+				[
+					"cleared deactivation",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "cleared", session_id: sessionId })}' --json`,
+				],
+				[
+					"contradictory run outcome",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, run_outcome: "cancelled" })}' --json`,
+				],
+				[
+					"contradictory lifecycle outcome",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, lifecycle_outcome: "askuserQuestion" })}' --json`,
+				],
+				[
+					"nested mode conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, state: { mode: "ralplan" } })}' --json`,
+				],
+				[
+					"nested session conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, state: { session_id: "sess-other" } })}' --json`,
+				],
+				[
+					"paired run outcome conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, lifecycle_outcome: "finished", run_outcome: "cancelled" })}' --json`,
+				],
+				[
+					"paired terminal outcome conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, lifecycle_outcome: "finished", terminal_outcome: "cancelled" })}' --json`,
+				],
+				[
+					"shadowed run outcome conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, run_outcome: "cancelled", state: { run_outcome: "finish" } })}' --json`,
+				],
+				[
+					"shadowed lifecycle outcome conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, lifecycle_outcome: "askuserQuestion", state: { lifecycle_outcome: "finished" } })}' --json`,
+				],
+				[
+					"shadowed terminal outcome conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, terminal_outcome: "cancelled", state: { terminal_outcome: "finished" } })}' --json`,
+				],
+				[
+					"foreign working directory",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, workingDirectory: join(cwd, "other") })}' --json`,
+				],
+				[
+					"top-level owner session conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, owner_omx_session_id: "sess-other" })}' --json`,
+				],
+				[
+					"top-level codex session conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, codex_session_id: "sess-other" })}' --json`,
+				],
+				[
+					"nested owner session conflict",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: false, current_phase: "complete", session_id: sessionId, state: { owner_codex_session_id: "sess-other" } })}' --json`,
+				],
+				[
+					"nested active override",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: true, current_phase: "intent-first", session_id: sessionId, state: { active: false, current_phase: "complete" } })}' --json`,
+				],
+				[
+					"nested camel phase override",
+					`omx state write --input '${JSON.stringify({ mode: "deep-interview", active: true, current_phase: "intent-first", session_id: sessionId, state: { active: false, currentPhase: "complete" } })}' --json`,
+				],
+				["state clear", "omx state clear --mode deep-interview --json"],
+				[
+					"direct input file",
+					`omx state write --input-file ${terminalInputFile} --json`,
+				],
+				["prefix chain", `printf ready && ${validCommand}`],
+				["suffix chain", `${validCommand} && printf done`],
+				["pipeline", `${validCommand} | tee terminal.json`],
+				["command substitution", `printf '%s' \"$(${validCommand})\"`],
+				[
+					"nested shell",
+					`bash -c 'omx state write --input-file ${terminalInputFile} --json'`,
+				],
+				["subshell grouping", `( ${validCommand} )`],
+				["background execution", `${validCommand} &`],
+				["wrapper dispatch", `env ${validCommand}`],
+				[
+					"node runtime wrapper",
+					`node --require ./preload.js dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"bun runtime wrapper",
+					`bun --preload ./preload.ts dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"tsx runtime wrapper",
+					`tsx --require ./preload.ts dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"path-qualified omx",
+					`./attacker/omx state write --input '${validPayload}' --json`,
+				],
+				[
+					"env bun preload wrapper",
+					`env bun --preload ./preload.ts dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"command tsx config wrapper",
+					`command tsx --tsconfig tsconfig.json dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"time node preload wrapper",
+					`time node --require ./preload.js dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"nodejs runtime wrapper",
+					`nodejs --require ./preload.js dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"path-qualified nodejs wrapper",
+					`/usr/bin/nodejs --require ./preload.js dist/cli/omx.js state write --input '${validPayload}' --json`,
+				],
+				[
+					"nested terminal payload wrapper",
+					`env bun --preload ./preload.ts dist/cli/omx.js state write --input '${JSON.stringify({ mode: "deep-interview", session_id: sessionId, state: { active: false, current_phase: "complete" } })}' --json`,
+				],
+				[
+					"foreign completed payload wrapper",
+					`command tsx --tsconfig tsconfig.json dist/cli/omx.js state write --input '${JSON.stringify({ mode: "ralph", active: false, current_phase: "complete", session_id: sessionId })}' --json`,
+				],
+				[
+					"nodejs terminal input file wrapper",
+					`nodejs dist/cli/omx.js state write --input-file ${terminalInputFile} --json`,
+				],
+				[
+					"path-qualified nodejs foreign input file wrapper",
+					`/usr/bin/nodejs dist/cli/omx.js state write --input-file ${foreignInputFile} --json`,
+				],
+				[
+					"split-string nodejs terminal input file wrapper",
+					`env -S "nodejs dist/cli/omx.js state write --input-file ${terminalInputFile} --json"`,
+				],
+				[
+					"long split-string nodejs foreign input file wrapper",
+					`env --split-string "nodejs dist/cli/omx.js state write --input-file ${foreignInputFile} --json"`,
+				],
+				[
+					"split-string bun terminal wrapper",
+					`env -S "bun --preload ./preload.ts dist/cli/omx.js state write --input '${validPayload}' --json"`,
+				],
+				[
+					"split-string tsx foreign wrapper",
+					`env --split-string "tsx --tsconfig tsconfig.json dist/cli/omx.js state write --input '${JSON.stringify({ mode: "team", active: true, current_phase: "running", session_id: sessionId })}' --json"`,
+				],
+				["stdout redirect", `${validCommand} > terminal.json`],
+				["null redirect", `${validCommand} > /dev/null`],
+				["stderr redirect", `${validCommand} 2> terminal.err`],
+				["stdin redirect", `${validCommand} < ${terminalInputFile}`],
+				[
+					"arbitrary state mutation",
+					`omx state write --input '${JSON.stringify({ mode: "team", active: false, current_phase: "complete", session_id: sessionId, state: { arbitrary: true } })}' --json`,
+				],
+			] as const;
+			for (const [name, command] of rejectedCommands) {
+				const result = await preToolUse(command);
+				assert.equal(
+					(result.outputJson as { decision?: string } | null)?.decision,
+					"block",
+					name,
+				);
+			}
+			for (const conflictingState of [
+				{ active: true, mode: "ralplan", current_phase: "intent-first" },
+				{
+					active: true,
+					current_phase: "intent-first",
+					session_id: "sess-other",
+				},
+			]) {
+				await writeJson(
+					join(sessionDir, "deep-interview-state.json"),
+					conflictingState,
+				);
+				assert.equal(
+					(
+						(await preToolUse(validCommand)).outputJson as {
+							decision?: string;
+						} | null
+					)?.decision,
+					"block",
+				);
+				const implementationWrite = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: threadId,
+						tool_name: "Edit",
+						tool_input: { file_path: "src/runtime.ts" },
+					},
+					{ cwd },
+				);
+				assert.equal(
+					(implementationWrite.outputJson as { decision?: string } | null)
+						?.decision,
+					"block",
+				);
+			}
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -11145,7 +17094,7 @@ exit 0
 				);
 			}
 
-			const allowedQuotedModeMentionInPayload = await preToolUse(
+			const blockedForeignModeMutationWithQuotedMention = await preToolUse(
 				{
 					hook_event_name: "PreToolUse",
 					cwd,
@@ -11159,7 +17108,14 @@ exit 0
 				},
 				{ cwd },
 			);
-			assert.equal(allowedQuotedModeMentionInPayload.outputJson, null);
+			assert.equal(
+				(
+					blockedForeignModeMutationWithQuotedMention.outputJson as {
+						decision?: string;
+					} | null
+				)?.decision,
+				"block",
+			);
 
 			const allowedStateInputFile = join(cwd, "allowed-state-input.json");
 			await writeJson(allowedStateInputFile, {
@@ -15307,6 +21263,7 @@ exit 0
 			for (const path of [
 				".omx/context/findings.md",
 				".omx/plans/issue-2863.md",
+				".omx/drafts/issue-3105.md",
 				".omx/specs/issue-2863.md",
 				".omx/state/required-planning-state.json",
 			]) {
@@ -15319,6 +21276,36 @@ exit 0
 					writeResult.outputJson,
 					null,
 					`Write should be allowed for ${path}`,
+				);
+			}
+
+			const allowedDraftEdit = await preToolUse(
+				"Edit",
+				"tool-ralplan-draft-edit",
+				{
+					file_path: ".omx/drafts/issue-3105.md",
+					old_string: "old",
+					new_string: "new",
+				},
+			);
+			assert.equal(allowedDraftEdit.outputJson, null);
+
+			for (const path of [
+				join(cwd, ".omx", "drafts", "issue-3105.md"),
+				".omx/drafts/subdir/../issue-3105.md",
+			]) {
+				const normalizedDraftWrite = await preToolUse(
+					"Write",
+					`tool-ralplan-normalized-draft-${path}`,
+					{
+						file_path: path,
+						content: "# Draft",
+					},
+				);
+				assert.equal(
+					normalizedDraftWrite.outputJson,
+					null,
+					`normalized draft path should be allowed: ${path}`,
 				);
 			}
 
@@ -15391,6 +21378,26 @@ exit 0
 			);
 			assert.equal(allowedPatchUpdate.outputJson, null);
 
+			const allowedDraftPatchAdd = await preToolUse(
+				"apply_patch",
+				"tool-ralplan-draft-patch-add",
+				{
+					input:
+						"*** Begin Patch\n*** Add File: .omx/drafts/issue-3105.md\n+# Draft\n*** End Patch\n",
+				},
+			);
+			assert.equal(allowedDraftPatchAdd.outputJson, null);
+
+			const allowedDraftPatchUpdate = await preToolUse(
+				"ApplyPatch",
+				"tool-ralplan-draft-patch-update",
+				{
+					input:
+						"*** Begin Patch\n*** Update File: .omx/drafts/issue-3105.md\n@@\n-old\n+new\n*** End Patch\n",
+				},
+			);
+			assert.equal(allowedDraftPatchUpdate.outputJson, null);
+
 			const allowedRedirect = await preToolUse(
 				"Bash",
 				"tool-ralplan-redirect-allow",
@@ -15399,6 +21406,15 @@ exit 0
 				},
 			);
 			assert.equal(allowedRedirect.outputJson, null);
+
+			const allowedDraftRedirect = await preToolUse(
+				"Bash",
+				"tool-ralplan-draft-redirect-allow",
+				{
+					command: "printf '# Draft\\n' > .omx/drafts/issue-3105.md",
+				},
+			);
+			assert.equal(allowedDraftRedirect.outputJson, null);
 
 			const allowedTee = await preToolUse("Bash", "tool-ralplan-tee-allow", {
 				command: "printf '\\nmore\\n' | tee -a .omx/specs/issue-2863.md",
@@ -15527,6 +21543,54 @@ exit 0
 			);
 			assert.match(editReason, /Edit path/);
 			assert.match(editReason, /src\/implementation\.ts/);
+			const blockedEditContext = String(
+				(
+					blockedEdit.outputJson as {
+						hookSpecificOutput?: { additionalContext?: string };
+					} | null
+				)?.hookSpecificOutput?.additionalContext ?? "",
+			);
+			assert.match(
+				blockedEditContext,
+				/Markdown drafts under `\.omx\/drafts\/\*\.md`/,
+			);
+			for (const allowedCategory of [
+				".omx/context/",
+				".omx/plans/",
+				".omx/specs/",
+				".omx/tmp/",
+				".omx/state/",
+				".beads/",
+			]) {
+				assert.match(
+					blockedEditContext,
+					new RegExp(allowedCategory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+				);
+			}
+
+			for (const blockedDraftPath of [
+				".omx/drafts/issue-3105.MD",
+				".omx/Drafts/issue-3105.md",
+				".omx/drafts/issue-3105",
+				".omx/drafts/run.sh",
+				".omx/drafts/subdir/issue-3105.md",
+				".omx/drafts/../../src/leak.ts",
+				"/tmp/issue-3105.md",
+			]) {
+				const blockedDraft = await preToolUse(
+					"Write",
+					`tool-ralplan-draft-block-${blockedDraftPath}`,
+					{
+						file_path: blockedDraftPath,
+						content: "bad",
+					},
+				);
+				assert.equal(
+					(blockedDraft.outputJson as { decision?: string } | null)?.decision,
+					"block",
+					`draft path should be blocked: ${blockedDraftPath}`,
+				);
+			}
 
 			const blockedMixedPatch = await preToolUse(
 				"apply_patch",
@@ -15547,6 +21611,48 @@ exit 0
 			);
 			assert.match(mixedReason, /apply_patch target/);
 			assert.match(mixedReason, /src\/leak\.ts/);
+
+			const blockedMixedDraftPatch = await preToolUse(
+				"apply_patch",
+				"tool-ralplan-draft-patch-mixed",
+				{
+					input:
+						"*** Begin Patch\n*** Add File: .omx/drafts/issue-3105.md\n+ok\n*** Add File: src/leak.ts\n+leak\n*** End Patch\n",
+				},
+			);
+			assert.equal(
+				(blockedMixedDraftPatch.outputJson as { decision?: string } | null)
+					?.decision,
+				"block",
+			);
+			assert.match(
+				String(
+					(blockedMixedDraftPatch.outputJson as { reason?: string } | null)
+						?.reason ?? "",
+				),
+				/src\/leak\.ts/,
+			);
+
+			const blockedMixedDraftBash = await preToolUse(
+				"Bash",
+				"tool-ralplan-draft-bash-mixed",
+				{
+					command:
+						"printf '# Draft\\n' > .omx/drafts/issue-3105.md; printf 'bad\\n' > src/leak.ts",
+				},
+			);
+			assert.equal(
+				(blockedMixedDraftBash.outputJson as { decision?: string } | null)
+					?.decision,
+				"block",
+			);
+			assert.match(
+				String(
+					(blockedMixedDraftBash.outputJson as { reason?: string } | null)
+						?.reason ?? "",
+				),
+				/src\/leak\.ts/,
+			);
 
 			const blockedUnparseablePatch = await preToolUse(
 				"apply_patch",
@@ -15586,6 +21692,32 @@ exit 0
 			);
 			assert.match(unresolvedReason, /unresolved Bash write target/);
 			assert.match(unresolvedReason, /\$PLAN_PATH/);
+
+			const blockedUnresolvedDraftRedirect = await preToolUse(
+				"Bash",
+				"tool-ralplan-draft-redirect-unresolved",
+				{
+					command: "cat > \"$DRAFT_PATH\" <<'EOF'\ncontent\nEOF",
+				},
+			);
+			assert.equal(
+				(
+					blockedUnresolvedDraftRedirect.outputJson as {
+						decision?: string;
+					} | null
+				)?.decision,
+				"block",
+			);
+			assert.match(
+				String(
+					(
+						blockedUnresolvedDraftRedirect.outputJson as {
+							reason?: string;
+						} | null
+					)?.reason ?? "",
+				),
+				/\$DRAFT_PATH/,
+			);
 
 			const blockedTraversal = await preToolUse(
 				"Write",
@@ -16502,6 +22634,243 @@ PY`,
 			if (originalOmxTeamStateRoot === undefined)
 				delete process.env.OMX_TEAM_STATE_ROOT;
 			else process.env.OMX_TEAM_STATE_ROOT = originalOmxTeamStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps untyped collaboration child implementation writes blocked under active ralplan planning while typed trusted agents pass (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-ralplan-untyped-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-ralplan-untyped";
+			const leaderThreadId = "thread-3116-ralplan-untyped-leader";
+			const childThreadId = "thread-3116-ralplan-untyped-child";
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			const nowIso = new Date().toISOString();
+			await mkdir(sessionDir, { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+				cwd,
+			});
+			await writeJson(join(sessionDir, "skill-active-state.json"), {
+				version: 1,
+				active: true,
+				skill: "autopilot",
+				phase: "ralplan",
+				session_id: sessionId,
+				thread_id: leaderThreadId,
+				active_skills: [
+					{
+						skill: "autopilot",
+						phase: "ralplan",
+						active: true,
+						session_id: sessionId,
+						thread_id: leaderThreadId,
+					},
+				],
+			});
+			await writeJson(join(sessionDir, "autopilot-state.json"), {
+				active: true,
+				mode: "autopilot",
+				current_phase: "ralplan",
+				session_id: sessionId,
+				thread_id: leaderThreadId,
+			});
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: leaderThreadId,
+							},
+						},
+					},
+				},
+			});
+
+			// Untyped tracked/spawn-provenance child must NOT bypass the ralplan planning guard.
+			const untypedChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "collaboration-child",
+					source: {
+						subagent: { thread_spawn: { parent_thread_id: leaderThreadId } },
+					},
+					tool_name: "Edit",
+					tool_input: {
+						file_path: "src/implementation.ts",
+						old_string: "a",
+						new_string: "b",
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(untypedChild.outputJson?.decision, "block");
+
+			// A typed trusted agent retains its existing planning exemption.
+			const typedChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "executor",
+					source: {
+						subagent: { thread_spawn: { parent_thread_id: leaderThreadId } },
+					},
+					tool_name: "Edit",
+					tool_input: {
+						file_path: "src/implementation.ts",
+						old_string: "a",
+						new_string: "b",
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(typedChild.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps untyped collaboration child implementation writes blocked under active deep-interview planning while typed trusted agents pass (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-di-untyped-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-di-untyped";
+			const leaderThreadId = "thread-3116-di-untyped-leader";
+			const childThreadId = "thread-3116-di-untyped-child";
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			const nowIso = new Date().toISOString();
+			await mkdir(sessionDir, { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+				cwd,
+			});
+			await writeJson(join(sessionDir, "skill-active-state.json"), {
+				version: 1,
+				active: true,
+				skill: "deep-interview",
+				phase: "planning",
+				session_id: sessionId,
+				thread_id: leaderThreadId,
+				active_skills: [
+					{
+						skill: "deep-interview",
+						phase: "planning",
+						active: true,
+						session_id: sessionId,
+						thread_id: leaderThreadId,
+					},
+				],
+			});
+			await writeJson(join(sessionDir, "deep-interview-state.json"), {
+				active: true,
+				mode: "deep-interview",
+				current_phase: "intent-first",
+				session_id: sessionId,
+			});
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: leaderThreadId,
+							},
+						},
+					},
+				},
+			});
+
+			// Untyped tracked/spawn-provenance child must NOT bypass the deep-interview planning guard.
+			const untypedChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "collaboration-child",
+					source: {
+						subagent: { thread_spawn: { parent_thread_id: leaderThreadId } },
+					},
+					tool_name: "Edit",
+					tool_input: {
+						file_path: "src/implementation.ts",
+						old_string: "a",
+						new_string: "b",
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(untypedChild.outputJson?.decision, "block");
+
+			// A typed trusted agent retains its existing planning exemption.
+			const typedChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "executor",
+					source: {
+						subagent: { thread_spawn: { parent_thread_id: leaderThreadId } },
+					},
+					tool_name: "Edit",
+					tool_input: {
+						file_path: "src/implementation.ts",
+						old_string: "a",
+						new_string: "b",
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(typedChild.outputJson, null);
+		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});
@@ -22643,7 +29012,7 @@ PY`,
 		}
 	});
 
-	it("blocks Stop from session-scoped team mode when session.json points to another session", async () => {
+	it("fails closed on Stop when a session-scoped team id is not bound to session.json", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-stop-team-session-mismatch-"),
 		);
@@ -22685,12 +29054,9 @@ PY`,
 			);
 
 			assert.equal(result.omxEventName, "stop");
-			assert.deepEqual(result.outputJson, {
-				decision: "block",
-				reason: `OMX team pipeline is still active (session-live-team) at phase team-exec; continue coordinating until the team reaches a terminal phase.${TEAM_STOP_COMMIT_GUIDANCE}`,
-				stopReason: "team_team-exec",
-				systemMessage: "OMX team pipeline is still active at phase team-exec.",
-			});
+			assert.equal(result.outputJson?.decision, "block");
+			assert.equal(result.outputJson?.stopReason, "session_scope_unmatched");
+			assert.match(String(result.outputJson?.reason ?? ""), /sess-live-team/);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -22807,37 +29173,41 @@ PY`,
 					session_id: nativeSessionId,
 				},
 			);
-			const now = "2026-06-30T00:00:00.000Z";
+			const architectCompletedAt = "2026-06-30T00:00:00.000Z";
+			const criticStartedAt = "2026-06-30T00:01:00.000Z";
+			const criticCompletedAt = "2026-06-30T00:02:00.000Z";
 			await writeJson(join(stateDir, "subagent-tracking.json"), {
 				schemaVersion: 1,
 				sessions: {
 					[nativeSessionId]: {
 						session_id: nativeSessionId,
 						leader_thread_id: "thread-leader",
-						updated_at: now,
+						updated_at: criticCompletedAt,
 						threads: {
 							"thread-leader": {
 								thread_id: "thread-leader",
 								kind: "leader",
-								first_seen_at: now,
-								last_seen_at: now,
+								first_seen_at: architectCompletedAt,
+								last_seen_at: architectCompletedAt,
 								turn_count: 1,
 							},
 							"thread-architect": {
 								thread_id: "thread-architect",
 								kind: "subagent",
-								first_seen_at: now,
-								last_seen_at: now,
-								completed_at: now,
+								first_seen_at: architectCompletedAt,
+								last_seen_at: architectCompletedAt,
+								completed_at: architectCompletedAt,
 								turn_count: 1,
+								mode: "architect",
 							},
 							"thread-critic": {
 								thread_id: "thread-critic",
 								kind: "subagent",
-								first_seen_at: now,
-								last_seen_at: now,
-								completed_at: now,
+								first_seen_at: criticStartedAt,
+								last_seen_at: criticCompletedAt,
+								completed_at: criticCompletedAt,
 								turn_count: 1,
+								mode: "critic",
 							},
 						},
 					},
@@ -24976,35 +31346,29 @@ PY`,
 				"utf-8",
 			);
 
-			const result = await dispatchCodexNativeHook(
-				{
-					hook_event_name: "Stop",
-					cwd,
-					session_id: "sess-stop-doc-refresh",
-					last_assistant_message: "Launch-ready: yes",
-				},
-				{ cwd },
+			const output = parseSingleJsonStdout(
+				runNativeHookCli(
+					{
+						hook_event_name: "Stop",
+						cwd,
+						session_id: "sess-stop-doc-refresh",
+						last_assistant_message: "Launch-ready: yes",
+					},
+					{ cwd },
+				),
 			);
 
-			assert.equal(result.omxEventName, "stop");
-			assert.equal(
-				(result.outputJson as { decision?: string } | null)?.decision,
-				undefined,
-			);
-			assert.equal(
-				(
-					result.outputJson as {
-						hookSpecificOutput?: { hookEventName?: string };
-					} | null
-				)?.hookSpecificOutput?.hookEventName,
-				"Stop",
-			);
+			assert.deepEqual(Object.keys(output).sort(), ["systemMessage"]);
+			assert.equal("hookSpecificOutput" in output, false);
+			assert.equal("decision" in output, false);
+			assert.equal("reason" in output, false);
+			assert.equal("stopReason" in output, false);
 			assert.match(
-				JSON.stringify(result.outputJson),
+				String(output.systemMessage ?? ""),
 				/Document-refresh warning/,
 			);
 			assert.match(
-				JSON.stringify(result.outputJson),
+				String(output.systemMessage ?? ""),
 				/staged \+ unstaged changes/,
 			);
 		} finally {
@@ -25332,7 +31696,7 @@ PY`,
 		}
 	});
 
-	it("blocks Stop from session-scoped Ralph state when session.json points to another session", async () => {
+	it("fails closed on Stop when a session-scoped Ralph id is not bound to session.json", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-stop-ralph-session-mismatch-"),
 		);
@@ -25363,14 +31727,9 @@ PY`,
 			);
 
 			assert.equal(result.omxEventName, "stop");
-			assert.deepEqual(result.outputJson, {
-				decision: "block",
-				reason:
-					"OMX Ralph is still active (phase: executing; state: .omx/state/sessions/sess-live-ralph/ralph-state.json); continue the task and gather fresh verification evidence before stopping.",
-				stopReason: "ralph_executing",
-				systemMessage:
-					"OMX Ralph is still active (phase: executing; state: .omx/state/sessions/sess-live-ralph/ralph-state.json); continue the task and gather fresh verification evidence before stopping.",
-			});
+			assert.equal(result.outputJson?.decision, "block");
+			assert.equal(result.outputJson?.stopReason, "session_scope_unmatched");
+			assert.match(String(result.outputJson?.reason ?? ""), /sess-live-ralph/);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -25416,7 +31775,7 @@ PY`,
 		}
 	});
 
-	it("does not block Stop from stale current-session Ralph state when session.json points to a dead owner", async () => {
+	it("fails closed on Stop when session.json points to an identity-indeterminate owner", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-stop-stale-current-session-ralph-"),
 		);
@@ -25472,7 +31831,8 @@ PY`,
 			);
 
 			assert.equal(result.omxEventName, "stop");
-			assert.equal(result.outputJson, null);
+			assert.equal(result.outputJson?.decision, "block");
+			assert.equal(result.outputJson?.stopReason, "session_pointer_unusable");
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -25656,6 +32016,7 @@ PY`,
 			});
 			await writeJson(join(stateDir, "session.json"), {
 				session_id: canonicalSessionId,
+				native_session_id: nativeSessionId,
 				cwd,
 			});
 			await writeJson(
@@ -25751,6 +32112,7 @@ PY`,
 			});
 			await writeJson(join(stateDir, "session.json"), {
 				session_id: canonicalSessionId,
+				native_session_id: nativeSessionId,
 				cwd,
 			});
 			await writeJson(
@@ -26264,7 +32626,7 @@ PY`,
 		}
 	});
 
-	it("does not block Stop from root Ralph fallback when an explicit session_id is present and session.json points to another worktree", async () => {
+	it("fails closed on Stop when session.json points to another worktree", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-stop-root-fallback-cwd-mismatch-"),
 		);
@@ -26290,7 +32652,8 @@ PY`,
 			);
 
 			assert.equal(result.omxEventName, "stop");
-			assert.equal(result.outputJson, null);
+			assert.equal(result.outputJson?.decision, "block");
+			assert.equal(result.outputJson?.stopReason, "session_pointer_unusable");
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -26511,6 +32874,60 @@ PY`,
 				systemMessage:
 					"OMX native Stop detected a stall/permission-style handoff and continued the turn automatically.",
 			});
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows a native subagent Stop instead of auto-nudging it into another turn", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-auto-nudge-subagent-stop-"),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			await mkdir(stateDir, { recursive: true });
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					"sess-stop-auto-child": {
+						session_id: "sess-stop-auto-child",
+						leader_thread_id: "thread-leader",
+						updated_at: new Date().toISOString(),
+						threads: {
+							"thread-leader": {
+								thread_id: "thread-leader",
+								kind: "leader",
+								first_seen_at: new Date().toISOString(),
+								last_seen_at: new Date().toISOString(),
+								turn_count: 1,
+							},
+							"thread-child": {
+								thread_id: "thread-child",
+								kind: "subagent",
+								first_seen_at: new Date().toISOString(),
+								last_seen_at: new Date().toISOString(),
+								turn_count: 1,
+								mode: "executor",
+							},
+						},
+					},
+				},
+				pending_role_intents: [],
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "Stop",
+					cwd,
+					session_id: "sess-stop-auto-child",
+					thread_id: "thread-child",
+					last_assistant_message: "Keep going and finish the cleanup.",
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.omxEventName, "stop");
+			assert.equal(result.outputJson, null);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -28950,6 +35367,21 @@ PY`,
 
 			assert.equal(result.omxEventName, "pre-tool-use");
 			assert.equal(result.outputJson, null);
+
+			const allowedDraftPatch = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: nativeSessionId,
+					thread_id: "thread-ralplan-native-map-draft-artifact",
+					tool_name: "apply_patch",
+					tool_input: {
+						input: `*** Begin Patch\n*** Add File: ${join(cwd, ".omx", "drafts", "issue-3105.md")}\n+# Draft\n*** End Patch\n`,
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(allowedDraftPatch.outputJson, null);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -29138,6 +35570,21 @@ PY`,
 				},
 			);
 
+			const allowedForeignDraft = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: "019e-ralplan-live-root-unresolved-current",
+					thread_id: "thread-ralplan-live-root-conflict",
+					tool_name: "apply_patch",
+					tool_input: {
+						input: `*** Begin Patch\n*** Add File: ${join(cwd, ".omx", "drafts", "issue-3105.md")}\n+# Draft\n*** End Patch\n`,
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(allowedForeignDraft.outputJson, null);
+
 			const result = await dispatchCodexNativeHook(
 				{
 					hook_event_name: "PreToolUse",
@@ -29268,6 +35715,21 @@ PY`,
 
 			assert.equal(result.omxEventName, "pre-tool-use");
 			assert.equal(result.outputJson, null);
+
+			const allowedDraftPatch = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: nativeSessionId,
+					thread_id: "thread-ralplan-live-root-owner-draft-pass",
+					tool_name: "apply_patch",
+					tool_input: {
+						input: `*** Begin Patch\n*** Add File: ${join(cwd, ".omx", "drafts", "live-root-owner.md")}\n+# Draft\n*** End Patch\n`,
+					},
+				},
+				{ cwd },
+			);
+			assert.equal(allowedDraftPatch.outputJson, null);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -29878,6 +36340,191 @@ PY`,
 		}
 	});
 
+	it("keeps the Conductor unblocked: quoted redirect/source text is not a write target and terminal blocked-state writes survive genuinely unsupported native delegation (#3119)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-conductor-3119-quote-deadlock-"),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-conductor-3119-quote-deadlock";
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ultragoal",
+				"planning",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ultragoal-state.json"),
+				{
+					active: true,
+					mode: "ultragoal",
+					current_phase: "planning",
+					session_id: sessionId,
+				},
+			);
+			// Native delegation is genuinely unsupported (explicit negative evidence).
+			await writeJson(join(stateDir, "native-subagent-support.json"), {
+				schema_version: 1,
+				status: "unsupported",
+				reason: "multi_agent_v1_unavailable",
+				session_id: sessionId,
+				evidence: "unknown tool: multi_agent_v1.spawn_agent",
+				observed_at: new Date().toISOString(),
+				cwd,
+			});
+
+			const dispatch = (command: string) =>
+				dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: "thread-conductor-3119-quote-deadlock",
+						tool_name: "Bash",
+						tool_input: { command },
+					},
+					{ cwd },
+				);
+
+			// Deadlock prevention (defect B): the Conductor must still terminalize its
+			// own workflow state even when delegation is genuinely unsupported, even
+			// when the JSON payload contains a `>` character.
+			const terminalBlockedWrite = await dispatch(
+				'omx state write --mode ultragoal --input \'{"active":true,"current_phase":"blocked","reason":"native delegation unavailable -> terminalized"}\' --json',
+			);
+			assert.notEqual(
+				(terminalBlockedWrite.outputJson as { decision?: string } | null)
+					?.decision,
+				"block",
+			);
+
+			// Defect C: quoted regex/source text with redirect metacharacters is not a
+			// write target, so issue creation is not falsely blocked.
+			const issueCreate = await dispatch(
+				"gh issue create --title x --body 'Guard misparsed regex /[^>]+>{1,2}/ as a redirect target'",
+			);
+			assert.notEqual(
+				(issueCreate.outputJson as { decision?: string } | null)?.decision,
+				"block",
+			);
+
+			// Fail-closed preserved: a REAL unquoted redirect to a non-metadata path is
+			// still blocked.
+			const realRedirect = await dispatch("printf pwn > src/runtime.ts");
+			assert.equal(
+				(realRedirect.outputJson as { decision?: string } | null)?.decision,
+				"block",
+			);
+			assert.match(
+				String(
+					(realRedirect.outputJson as { reason?: string } | null)?.reason ?? "",
+				),
+				/not workflow state\/ledger\/mailbox\/handoff metadata/,
+			);
+
+			// A real unquoted redirect to allowed workflow metadata still passes.
+			const metadataRedirect = await dispatch(
+				"printf blocked > .omx/state/conductor.log",
+			);
+			assert.notEqual(
+				(metadataRedirect.outputJson as { decision?: string } | null)?.decision,
+				"block",
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("fail-closed: escaped-quote and ANSI-C quoted redirects to source stay blocked while legit quoted data and nested shells behave (#3119)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-conductor-3119-escaped-quote-"),
+		);
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-conductor-3119-escaped-quote";
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ultragoal",
+				"planning",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ultragoal-state.json"),
+				{
+					active: true,
+					mode: "ultragoal",
+					current_phase: "planning",
+					session_id: sessionId,
+				},
+			);
+
+			const dispatch = (command: string) =>
+				dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: "thread-conductor-3119-escaped-quote",
+						tool_name: "Bash",
+						tool_input: { command },
+					},
+					{ cwd },
+				);
+
+			// A top-level escaped quote (\' \") is a LITERAL char in bash, not a quote
+			// opener, and $'...' is ANSI-C quoting. None of these may hide the real
+			// `>` redirect \u2014 all of these genuinely write src/runtime.ts and MUST block.
+			const mustBlock = [
+				"printf pwn > src/runtime.ts", // plain control
+				"printf pwn \\' > src/runtime.ts \\'", // escaped single quote
+				'printf pwn \\" > src/runtime.ts \\"', // escaped double quote
+				"printf pwn $'\\'' > src/runtime.ts $'\\''", // ANSI-C escaped quote
+				"bash -c 'printf pwn > src/runtime.ts'", // nested shell redirect
+			];
+			for (const command of mustBlock) {
+				const result = await dispatch(command);
+				assert.equal(
+					(result.outputJson as { decision?: string } | null)?.decision,
+					"block",
+					command,
+				);
+				assert.match(
+					String(
+						(result.outputJson as { reason?: string } | null)?.reason ?? "",
+					),
+					/not workflow state\/ledger\/mailbox\/handoff metadata/,
+					command,
+				);
+			}
+
+			// Legitimate quoted DATA metacharacters (single quotes, double quotes,
+			// ANSI-C) are not redirects and must not be falsely blocked.
+			const mustNotBlock = [
+				"gh issue create --title x --body 'a > b regex /[^>]+>{1,2}/'",
+				'echo "value > threshold"',
+				"printf $'a>b'",
+			];
+			for (const command of mustNotBlock) {
+				const result = await dispatch(command);
+				assert.notEqual(
+					(result.outputJson as { decision?: string } | null)?.decision,
+					"block",
+					command,
+				);
+			}
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("blocks Main-root ralplan writes even when payload has only a typed agent_role", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-ralplan-agent-role-main-"),
@@ -30251,6 +36898,369 @@ PY`,
 		}
 	});
 
+	it("blocks a corrupt kind:subagent leader that omits leader_thread_id via native session identity while still trusting a real non-leader child (#3117 P2)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3117-corrupt-leader-no-lead-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3117-corrupt-leader-no-lead";
+			const leaderThreadId = "thread-3117-corrupt-leader-no-lead-leader";
+			const childThreadId = "thread-3117-corrupt-leader-no-lead-child";
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			// native_session_id anchors the leader identity even though the tracker omits
+			// leader_thread_id and corruptly labels the leader kind:"subagent".
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+						},
+					},
+				},
+			});
+
+			// Untyped leader payload must stay blocked: leader identity is anchored to
+			// native_session_id, not the corrupt tracker kind.
+			const untypedLeader = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: leaderThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(untypedLeader.outputJson?.decision, "block");
+			assert.match(
+				String(untypedLeader.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+
+			// Control: a genuine non-leader child stays trusted (P1 preserved).
+			const untypedChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(untypedChild.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("fails closed for untyped provenance when no authoritative leader anchor exists (#3117 P2)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3117-no-leader-anchor-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3117-no-leader-anchor";
+			const leaderThreadId = "thread-3117-no-leader-anchor-leader";
+			const childThreadId = "thread-3117-no-leader-anchor-child";
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			// No native_session_id / owner ids and no tracker leader_thread_id: the leader is
+			// unidentifiable, so untyped provenance must not be inferred from kind:"subagent".
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+						},
+					},
+				},
+			});
+
+			for (const threadId of [leaderThreadId, childThreadId]) {
+				const result = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: threadId,
+						tool_name: "apply_patch",
+						tool_input: { file_path: "src/feature.ts" },
+					},
+					{ cwd },
+				);
+				assert.equal(result.outputJson?.decision, "block", threadId);
+				assert.match(
+					String(result.outputJson?.reason ?? ""),
+					/Main-root Conductor mode is active \(ralph phase: executing\)/,
+				);
+			}
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("does not borrow leader anchors from a foreign root session.json when evaluating another session (#3117 P3)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3117-cross-session-anchor-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const foreignSessionId = "sess-3117-p3-foreign-A";
+			const foreignLeaderThreadId = "thread-3117-p3-A-leader";
+			const sessionId = "sess-3117-p3-checked-B";
+			const leaderThreadId = "thread-3117-p3-B-leader";
+			const childThreadId = "thread-3117-p3-B-child";
+			const sessionPath = join(stateDir, "session.json");
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			// Evaluated session B has a corrupt tracker: no leader_thread_id, leader mislabeled kind:"subagent".
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+						},
+					},
+				},
+			});
+
+			const dispatchThread = async (threadId: string) =>
+				dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: threadId,
+						tool_name: "apply_patch",
+						tool_input: { file_path: "src/feature.ts" },
+					},
+					{ cwd },
+				);
+
+			// Root session.json owns a DIFFERENT session A: its native/owner ids must not
+			// anchor session B, so B's mislabeled leader stays blocked (fail closed).
+			await writeJson(sessionPath, {
+				session_id: foreignSessionId,
+				native_session_id: foreignLeaderThreadId,
+			});
+			const foreignLeader = await dispatchThread(leaderThreadId);
+			assert.equal(foreignLeader.outputJson?.decision, "block");
+			assert.match(
+				String(foreignLeader.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+			const foreignChild = await dispatchThread(childThreadId);
+			assert.equal(foreignChild.outputJson?.decision, "block");
+
+			// Control: when the root session.json owns the evaluated session B, its
+			// native_session_id anchors the leader (blocked) while a genuine child is trusted.
+			await writeJson(sessionPath, {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			const ownedLeader = await dispatchThread(leaderThreadId);
+			assert.equal(ownedLeader.outputJson?.decision, "block");
+			assert.match(
+				String(ownedLeader.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+			const ownedChild = await dispatchThread(childThreadId);
+			assert.equal(ownedChild.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("fails closed when session.json carries only owner session ids without a leader thread anchor (#3117 P4)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3117-owner-only-anchor-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3117-p4-owner-only";
+			const leaderThreadId = "thread-3117-p4-leader";
+			const childThreadId = "thread-3117-p4-child";
+			const untrackedThreadId = "thread-3117-p4-untracked";
+			const sessionPath = join(stateDir, "session.json");
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			// Corrupt tracker for the evaluated session: no leader_thread_id, leader mislabeled kind:"subagent".
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+							},
+						},
+					},
+				},
+			});
+
+			const dispatchThread = async (threadId: string) =>
+				dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						session_id: sessionId,
+						thread_id: threadId,
+						tool_name: "apply_patch",
+						tool_input: { file_path: "src/feature.ts" },
+					},
+					{ cwd },
+				);
+
+			// session.json maps to the evaluated session via owner ids but has NO
+			// native_session_id: owner session ids are not leader thread anchors, so trust
+			// must fail closed rather than treat their presence as an anchor (#3117 P4).
+			await writeJson(sessionPath, {
+				session_id: sessionId,
+				owner_omx_session_id: "owner-omx-3117-p4",
+				owner_codex_session_id: "owner-codex-3117-p4",
+			});
+			const ownerOnlyLeader = await dispatchThread(leaderThreadId);
+			assert.equal(ownerOnlyLeader.outputJson?.decision, "block");
+			assert.match(
+				String(ownerOnlyLeader.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+			// Control: an untracked thread also stays blocked under the same state.
+			const ownerOnlyUntracked = await dispatchThread(untrackedThreadId);
+			assert.equal(ownerOnlyUntracked.outputJson?.decision, "block");
+
+			// Control: once a genuine native_session_id leader thread anchor exists for this
+			// session, the leader is blocked via that anchor while a real child is trusted.
+			await writeJson(sessionPath, {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			const anchoredLeader = await dispatchThread(leaderThreadId);
+			assert.equal(anchoredLeader.outputJson?.decision, "block");
+			assert.match(
+				String(anchoredLeader.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+			const anchoredChild = await dispatchThread(childThreadId);
+			assert.equal(anchoredChild.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("blocks conductor writes when thread_spawn provenance is attached to the leader thread", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-native-hook-conductor-thread-spawn-leader-"),
@@ -30339,6 +37349,591 @@ PY`,
 			if (originalOmxTeamStateRoot === undefined)
 				delete process.env.OMX_TEAM_STATE_ROOT;
 			else process.env.OMX_TEAM_STATE_ROOT = originalOmxTeamStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("denies Main-root conductor apply_patch from the session leader thread during active Ralph (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-root-denial-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-root-denial";
+			const leaderThreadId = "thread-3116-root-denial-leader";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: leaderThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson?.decision, "block");
+			assert.match(
+				String(result.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows apply_patch from an untyped collaboration.spawn_agent child tracked as a subagent during active Ralph (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-trusted-child-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-trusted-child";
+			const leaderThreadId = "thread-3116-trusted-child-leader";
+			const childThreadId = "thread-3116-trusted-child-worker";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: leaderThreadId,
+							},
+						},
+					},
+				},
+			});
+
+			// Untyped role (not in the typed-agent catalog) must not defeat tracker-backed trust.
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					agent_role: "collaboration-child",
+					source: {
+						subagent: {
+							thread_spawn: {
+								parent_thread_id: leaderThreadId,
+								depth: 1,
+								agent_nickname: "Helper",
+							},
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("allows apply_patch from untyped collaboration descendants via tracked thread and tracked parent chain (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-descendant-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-descendant";
+			const leaderThreadId = "thread-3116-descendant-leader";
+			const childThreadId = "thread-3116-descendant-child";
+			const grandchildThreadId = "thread-3116-descendant-grandchild";
+			const greatGrandchildThreadId = "thread-3116-descendant-great-grandchild";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: leaderThreadId,
+							},
+							[grandchildThreadId]: {
+								thread_id: grandchildThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: childThreadId,
+							},
+						},
+					},
+				},
+			});
+
+			// (a) A descendant whose own thread is tracked as a subagent is trusted directly.
+			const trackedDescendant = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: grandchildThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(trackedDescendant.outputJson, null);
+
+			// (b) A not-yet-tracked descendant is trusted when its runtime spawn parent is a tracked thread.
+			const chainedDescendant = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: greatGrandchildThreadId,
+					agent_role: "collaboration-child",
+					source: {
+						subagent: {
+							thread_spawn: {
+								parent_thread_id: grandchildThreadId,
+								depth: 3,
+							},
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(chainedDescendant.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves the session-pinned Ralph state so collaboration children edit while the leader stays blocked (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-pinned-state-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-pinned-state";
+			const leaderThreadId = "thread-3116-pinned-state-leader";
+			const childThreadId = "thread-3116-pinned-state-child";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			// Native session id differs from the canonical session id: the guard must resolve it.
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			const ralphStatePath = join(
+				stateDir,
+				"sessions",
+				sessionId,
+				"ralph-state.json",
+			);
+			await writeJson(ralphStatePath, {
+				active: true,
+				mode: "ralph",
+				current_phase: "executing",
+				session_id: sessionId,
+			});
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+							[childThreadId]: {
+								thread_id: childThreadId,
+								kind: "subagent",
+								mode: "collaboration-child",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+								leader_thread_id: leaderThreadId,
+							},
+						},
+					},
+				},
+			});
+
+			// Payload carries the native session id, which must map to the canonical session.
+			const childEdit = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: leaderThreadId,
+					thread_id: childThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(childEdit.outputJson, null);
+
+			const leaderEdit = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: leaderThreadId,
+					thread_id: leaderThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(leaderEdit.outputJson?.decision, "block");
+			assert.match(
+				String(leaderEdit.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+
+			// The guard reads the session-pinned phase: flipping it to "starting" releases the leader too.
+			await writeJson(ralphStatePath, {
+				active: true,
+				mode: "ralph",
+				current_phase: "starting",
+				session_id: sessionId,
+			});
+			const leaderEditAfterStarting = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: leaderThreadId,
+					thread_id: leaderThreadId,
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(leaderEditAfterStarting.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("trusts the native collaboration.spawn_agent child surface via runtime spawn provenance during active Ralph (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-collab-surface-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-collab-surface";
+			const leaderThreadId = "thread-3116-collab-surface-leader";
+			const childThreadId = "thread-3116-collab-surface-child";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			// Child SessionStart has not been recorded yet: only the leader is tracked.
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			// No typed agent_role at all: a raw collaboration.spawn_agent child payload shape.
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: childThreadId,
+					source: {
+						subagent: {
+							thread_spawn: {
+								parent_thread_id: leaderThreadId,
+								depth: 1,
+								agent_nickname: "Implementer",
+							},
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+
+			assert.equal(result.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("denies spoofed or untrusted collaboration provenance while the main root stays protected during active Ralph (#3116)", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-native-hook-3116-spoof-denial-"),
+		);
+		process.env.OMX_ROOT = cwd;
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			const sessionId = "sess-3116-spoof-denial";
+			const leaderThreadId = "thread-3116-spoof-denial-leader";
+			const nowIso = new Date().toISOString();
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeJson(join(stateDir, "session.json"), {
+				session_id: sessionId,
+				native_session_id: leaderThreadId,
+			});
+			await writeSessionSkillActiveState(
+				stateDir,
+				sessionId,
+				"ralph",
+				"executing",
+			);
+			await writeJson(
+				join(stateDir, "sessions", sessionId, "ralph-state.json"),
+				{
+					active: true,
+					mode: "ralph",
+					current_phase: "executing",
+					session_id: sessionId,
+				},
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					[sessionId]: {
+						session_id: sessionId,
+						leader_thread_id: leaderThreadId,
+						updated_at: nowIso,
+						threads: {
+							[leaderThreadId]: {
+								thread_id: leaderThreadId,
+								kind: "leader",
+								first_seen_at: nowIso,
+								last_seen_at: nowIso,
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+
+			// (a) Untracked thread whose declared parent is neither the leader nor a tracked thread.
+			const orphanParent = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: "thread-3116-spoof-orphan",
+					agent_role: "collaboration-child",
+					source: {
+						subagent: {
+							thread_spawn: { parent_thread_id: "thread-3116-spoof-outsider" },
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(orphanParent.outputJson?.decision, "block");
+			assert.match(
+				String(orphanParent.outputJson?.reason ?? ""),
+				/Main-root Conductor mode is active \(ralph phase: executing\)/,
+			);
+
+			// (b) Untyped child with no provenance at all (no tracker thread, no spawn source).
+			const noProvenance = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: "thread-3116-spoof-bare",
+					agent_role: "collaboration-child",
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(noProvenance.outputJson?.decision, "block");
+
+			// (c) Spawn provenance attached to the leader thread cannot promote the main root.
+			const leaderSelfSpawn = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "PreToolUse",
+					cwd,
+					session_id: sessionId,
+					thread_id: leaderThreadId,
+					agent_role: "collaboration-child",
+					source: {
+						subagent: {
+							thread_spawn: { parent_thread_id: leaderThreadId },
+						},
+					},
+					tool_name: "apply_patch",
+					tool_input: { file_path: "src/feature.ts" },
+				},
+				{ cwd },
+			);
+			assert.equal(leaderSelfSpawn.outputJson?.decision, "block");
+		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});
@@ -31913,6 +39508,688 @@ PY`,
 	});
 });
 
+describe("#3118 native role contract", () => {
+	const unknownRoleReason =
+		"Native typed-subagent dispatch denied: supplied agent_type/agent_role is unknown or not installed.";
+
+	async function withIsolatedNativeRoleState<T>(
+		prefix: string,
+		run: (cwd: string, stateDir: string) => Promise<T>,
+	): Promise<T> {
+		const cwd = await mkdtemp(
+			join(tmpdir(), `omx-native-hook-3118-${prefix}-`),
+		);
+		const previousOmxRoot = process.env.OMX_ROOT;
+		const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+		const previousStateRoot = process.env.OMX_STATE_ROOT;
+		try {
+			process.env.OMX_ROOT = cwd;
+			delete process.env.OMX_TEAM_STATE_ROOT;
+			delete process.env.OMX_STATE_ROOT;
+			return await run(cwd, getBaseStateDir(cwd));
+		} finally {
+			if (previousOmxRoot === undefined) delete process.env.OMX_ROOT;
+			else process.env.OMX_ROOT = previousOmxRoot;
+			if (previousTeamStateRoot === undefined)
+				delete process.env.OMX_TEAM_STATE_ROOT;
+			else process.env.OMX_TEAM_STATE_ROOT = previousTeamStateRoot;
+			if (previousStateRoot === undefined) delete process.env.OMX_STATE_ROOT;
+			else process.env.OMX_STATE_ROOT = previousStateRoot;
+			await rm(cwd, { recursive: true, force: true });
+		}
+	}
+
+	type TaskNameCarrier = "thread_spawn" | "subagent" | "payload";
+
+	async function startUntypedNativeChild(
+		cwd: string,
+		input: {
+			childSessionId: string;
+			parentThreadId: string;
+			agentNickname?: string;
+			taskName?: string;
+			taskNameCarrier?: TaskNameCarrier;
+			taskNames?: Partial<Record<TaskNameCarrier, unknown>>;
+			camelTaskNames?: Partial<Record<TaskNameCarrier, unknown>>;
+		},
+	): Promise<void> {
+		const taskNameCarrier = input.taskNameCarrier ?? "payload";
+		const taskNameField = (
+			carrier: TaskNameCarrier,
+		): Record<string, unknown> => {
+			if (
+				input.taskNames &&
+				Object.prototype.hasOwnProperty.call(input.taskNames, carrier)
+			) {
+				return { task_name: input.taskNames[carrier] };
+			}
+			return input.taskName && taskNameCarrier === carrier
+				? { task_name: input.taskName }
+				: {};
+		};
+		const camelTaskNameField = (
+			carrier: TaskNameCarrier,
+		): Record<string, unknown> =>
+			input.camelTaskNames &&
+			Object.prototype.hasOwnProperty.call(input.camelTaskNames, carrier)
+				? { taskName: input.camelTaskNames[carrier] }
+				: {};
+		const transcriptPath = join(cwd, `${input.childSessionId}-rollout.jsonl`);
+		await writeFile(
+			transcriptPath,
+			`${JSON.stringify({
+				type: "session_meta",
+				payload: {
+					id: input.childSessionId,
+					...taskNameField("payload"),
+					...camelTaskNameField("payload"),
+					source: {
+						subagent: {
+							...taskNameField("subagent"),
+							...camelTaskNameField("subagent"),
+							thread_spawn: {
+								parent_thread_id: input.parentThreadId,
+								depth: 1,
+								...taskNameField("thread_spawn"),
+								...camelTaskNameField("thread_spawn"),
+								...(input.agentNickname
+									? { agent_nickname: input.agentNickname }
+									: {}),
+							},
+						},
+					},
+				},
+			})}\n`,
+		);
+		await dispatchCodexNativeHook(
+			{
+				hook_event_name: "SessionStart",
+				cwd,
+				session_id: input.childSessionId,
+				transcript_path: transcriptPath,
+			},
+			{ cwd, sessionOwnerPid: process.pid },
+		);
+	}
+
+	async function readNativeRoleChild(
+		stateDir: string,
+		canonicalSessionId: string,
+		childSessionId: string,
+	): Promise<
+		{ mode?: string; role?: string; provenance_kind?: string } | undefined
+	> {
+		const tracking = JSON.parse(
+			await readFile(join(stateDir, "subagent-tracking.json"), "utf-8"),
+		) as {
+			sessions?: Record<
+				string,
+				{
+					threads?: Record<
+						string,
+						{ mode?: string; role?: string; provenance_kind?: string }
+					>;
+				}
+			>;
+		};
+		return tracking.sessions?.[canonicalSessionId]?.threads?.[childSessionId];
+	}
+
+	it("denies an unknown agent_type on collaboration.spawn_agent before dispatch (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"collaboration-unknown-role",
+			async (cwd) => {
+				const result = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						tool_name: "collaboration.spawn_agent",
+						tool_input: { agent_type: "not-an-installed-role" },
+					},
+					{ cwd },
+				);
+
+				assert.equal(result.outputJson?.decision, "block");
+				assert.equal(result.outputJson?.reason, unknownRoleReason);
+			},
+		);
+	});
+
+	it("denies unknown roles on exact-name spawn_agent and task before dispatch (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"exact-name-unknown-role",
+			async (cwd) => {
+				for (const [toolName, toolInput] of [
+					["spawn_agent", { agent_type: "not-an-installed-role" }],
+					["task", { agent_role: "not-an-installed-role" }],
+				] as const) {
+					const result = await dispatchCodexNativeHook(
+						{
+							hook_event_name: "PreToolUse",
+							cwd,
+							tool_name: toolName,
+							tool_input: toolInput,
+						},
+						{ cwd },
+					);
+
+					assert.equal(result.outputJson?.decision, "block", toolName);
+					assert.equal(result.outputJson?.reason, unknownRoleReason, toolName);
+				}
+			},
+		);
+	});
+
+	it("does not deny an installed architect on collaboration.spawn_agent (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"collaboration-installed-role",
+			async (cwd) => {
+				const result = await dispatchCodexNativeHook(
+					{
+						hook_event_name: "PreToolUse",
+						cwd,
+						tool_name: "collaboration.spawn_agent",
+						tool_input: { agent_role: "architect" },
+					},
+					{ cwd },
+				);
+
+				assert.equal(result.outputJson, null);
+			},
+		);
+	});
+
+	it("binds a matching task_name marker from every App session-meta carrier (#3118)", async () => {
+		for (const taskNameCarrier of [
+			"thread_spawn",
+			"subagent",
+			"payload",
+		] as const) {
+			await withIsolatedNativeRoleState(
+				`adapted-bind-${taskNameCarrier}`,
+				async (cwd, stateDir) => {
+					const canonicalSessionId = `sess-3118-adapted-bind-${taskNameCarrier}`;
+					const parentThreadId = `thread-3118-adapted-parent-${taskNameCarrier}`;
+					const childSessionId = `thread-3118-adapted-child-${taskNameCarrier}`;
+					const correlationToken = "11111111111111111111111100003118";
+					await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+						recursive: true,
+					});
+					await writeSessionStart(cwd, canonicalSessionId, {
+						nativeSessionId: parentThreadId,
+					});
+					assert.equal(
+						recordPendingRoleIntent(cwd, {
+							role: "architect",
+							sessionId: canonicalSessionId,
+							parentThreadId,
+							correlationToken,
+						}).ok,
+						true,
+					);
+
+					await startUntypedNativeChild(cwd, {
+						childSessionId,
+						parentThreadId,
+						taskName: buildRoleIntentSpawnTaskName(correlationToken),
+						taskNameCarrier,
+					});
+
+					const child = await readNativeRoleChild(
+						stateDir,
+						canonicalSessionId,
+						childSessionId,
+					);
+					assert.equal(child?.mode, "architect", taskNameCarrier);
+					assert.equal(child?.role, "architect", taskNameCarrier);
+					assert.equal(child?.provenance_kind, "omx_adapted", taskNameCarrier);
+					assert.equal(
+						existsSync(
+							join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE),
+						),
+						true,
+						taskNameCarrier,
+					);
+					assert.ok(
+						readRoleRoutingMarker(stateDir, {
+							cwd,
+							sessionId: canonicalSessionId,
+							parentThreadId,
+						}),
+					);
+				},
+			);
+		}
+	});
+
+	it("uses the first structurally present task_name carrier without falling through invalid higher-priority values (#3118)", async () => {
+		const scenarios: Array<{
+			name: string;
+			taskNames: (
+				taskName: string,
+			) => Partial<Record<TaskNameCarrier, unknown>>;
+			binds: boolean;
+		}> = [
+			{
+				name: "empty-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: "", subagent: taskName }),
+				binds: false,
+			},
+			{
+				name: "null-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: null, subagent: taskName }),
+				binds: false,
+			},
+			{
+				name: "array-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: [taskName] }),
+				binds: false,
+			},
+			{
+				name: "object-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: { taskName } }),
+				binds: false,
+			},
+			{
+				name: "leading-whitespace-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: ` ${taskName}` }),
+				binds: false,
+			},
+			{
+				name: "trailing-whitespace-thread-spawn",
+				taskNames: (taskName) => ({ thread_spawn: `${taskName} ` }),
+				binds: false,
+			},
+			{
+				name: "number-thread-spawn",
+				taskNames: () => ({ thread_spawn: 3118 }),
+				binds: false,
+			},
+			{
+				name: "malformed-thread-spawn",
+				taskNames: (taskName) => ({
+					thread_spawn: "not_a_marker",
+					subagent: taskName,
+				}),
+				binds: false,
+			},
+			{
+				name: "subagent-after-absent-thread-spawn",
+				taskNames: (taskName) => ({ subagent: taskName }),
+				binds: true,
+			},
+			{
+				name: "valid-thread-spawn",
+				taskNames: (taskName) => ({
+					thread_spawn: taskName,
+					subagent: "not_a_marker",
+				}),
+				binds: true,
+			},
+		];
+
+		for (const scenario of scenarios) {
+			await withIsolatedNativeRoleState(
+				`task-name-precedence-${scenario.name}`,
+				async (cwd, stateDir) => {
+					const canonicalSessionId = `sess-3118-task-name-${scenario.name}`;
+					const parentThreadId = `thread-3118-task-name-${scenario.name}`;
+					const childSessionId = `child-3118-task-name-${scenario.name}`;
+					const correlationToken = "22222222222222222222222200003118";
+					await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+						recursive: true,
+					});
+					await writeSessionStart(cwd, canonicalSessionId, {
+						nativeSessionId: parentThreadId,
+					});
+					assert.equal(
+						recordPendingRoleIntent(cwd, {
+							role: "architect",
+							sessionId: canonicalSessionId,
+							parentThreadId,
+							correlationToken,
+						}).ok,
+						true,
+					);
+
+					await startUntypedNativeChild(cwd, {
+						childSessionId,
+						parentThreadId,
+						taskNames: scenario.taskNames(
+							buildRoleIntentSpawnTaskName(correlationToken),
+						),
+					});
+
+					const child = await readNativeRoleChild(
+						stateDir,
+						canonicalSessionId,
+						childSessionId,
+					);
+					assert.equal(
+						child?.role,
+						scenario.binds ? "architect" : undefined,
+						scenario.name,
+					);
+					assert.equal(
+						child?.provenance_kind,
+						scenario.binds ? "omx_adapted" : undefined,
+						scenario.name,
+					);
+					assert.equal(
+						(await readSubagentTrackingState(cwd)).pending_role_intents.length,
+						scenario.binds ? 0 : 1,
+						scenario.name,
+					);
+				},
+			);
+		}
+	});
+
+	it("binds an Architect then Critic through App-compatible task_name carriers (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"architect-critic-app-carriers",
+			async (cwd, stateDir) => {
+				const canonicalSessionId = "sess-3118-architect-critic-app-carriers";
+				const parentThreadId =
+					"thread-3118-architect-critic-app-carriers-parent";
+				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+					recursive: true,
+				});
+				await writeSessionStart(cwd, canonicalSessionId, {
+					nativeSessionId: parentThreadId,
+				});
+
+				const bindAdaptedRole = async (
+					role: "architect" | "critic",
+					correlationToken: string,
+					childSessionId: string,
+				): Promise<void> => {
+					const taskName = buildRoleIntentSpawnTaskName(correlationToken);
+					assert.match(taskName, /^[a-z0-9_]+$/);
+					assert.equal(
+						recordPendingRoleIntent(cwd, {
+							role,
+							sessionId: canonicalSessionId,
+							parentThreadId,
+							correlationToken,
+						}).ok,
+						true,
+					);
+					await startUntypedNativeChild(cwd, {
+						childSessionId,
+						parentThreadId,
+						taskName,
+					});
+
+					const child = await readNativeRoleChild(
+						stateDir,
+						canonicalSessionId,
+						childSessionId,
+					);
+					assert.equal(child?.mode, role);
+					assert.equal(child?.role, role);
+					assert.equal(child?.provenance_kind, "omx_adapted");
+					assert.ok(
+						readRoleRoutingMarker(stateDir, {
+							cwd,
+							sessionId: canonicalSessionId,
+							parentThreadId,
+						}),
+					);
+				};
+
+				await bindAdaptedRole(
+					"architect",
+					"33333333333333333333333300003118",
+					"thread-3118-app-architect-child",
+				);
+				await bindAdaptedRole(
+					"critic",
+					"44444444444444444444444400003118",
+					"thread-3118-app-critic-child",
+				);
+			},
+		);
+	});
+
+	it("fails closed on a present non-marker task_name without falling back to agent_nickname (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"unbound-task-name-mismatch",
+			async (cwd, stateDir) => {
+				const canonicalSessionId = "sess-3118-unbound-task-name-mismatch";
+				const parentThreadId = "thread-3118-unbound-task-name-mismatch-parent";
+				const childSessionId = "thread-3118-unbound-task-name-mismatch-child";
+				const correlationToken = "55555555555555555555555500003118";
+				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+					recursive: true,
+				});
+				await writeSessionStart(cwd, canonicalSessionId, {
+					nativeSessionId: parentThreadId,
+				});
+				assert.equal(
+					recordPendingRoleIntent(cwd, {
+						role: "architect",
+						sessionId: canonicalSessionId,
+						parentThreadId,
+						correlationToken,
+					}).ok,
+					true,
+				);
+
+				await startUntypedNativeChild(cwd, {
+					childSessionId,
+					parentThreadId,
+					taskName: "not_a_marker",
+					agentNickname: buildRoleIntentSpawnTaskName(correlationToken),
+				});
+
+				const child = await readNativeRoleChild(
+					stateDir,
+					canonicalSessionId,
+					childSessionId,
+				);
+				assert.equal(child?.mode, undefined);
+				assert.equal(child?.role, undefined);
+				assert.equal(child?.provenance_kind, undefined);
+				assert.equal(
+					existsSync(join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE)),
+					false,
+				);
+				assert.equal(
+					readRoleRoutingMarker(stateDir, {
+						cwd,
+						sessionId: canonicalSessionId,
+						parentThreadId,
+					}),
+					null,
+				);
+				assert.equal(
+					(await readSubagentTrackingState(cwd)).pending_role_intents[0]
+						?.correlation_token,
+					correlationToken,
+				);
+			},
+		);
+	});
+
+	it("leaves an unmarked App child untyped and unconsumed without first-arrival binding (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"unbound-no-app-marker",
+			async (cwd, stateDir) => {
+				const canonicalSessionId = "sess-3118-unbound-no-app-marker";
+				const parentThreadId = "thread-3118-unbound-no-app-marker-parent";
+				const childSessionId = "thread-3118-unbound-no-app-marker-child";
+				const correlationToken = "66666666666666666666666600003118";
+				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+					recursive: true,
+				});
+				await writeSessionStart(cwd, canonicalSessionId, {
+					nativeSessionId: parentThreadId,
+				});
+				assert.equal(
+					recordPendingRoleIntent(cwd, {
+						role: "architect",
+						sessionId: canonicalSessionId,
+						parentThreadId,
+						correlationToken,
+					}).ok,
+					true,
+				);
+
+				await startUntypedNativeChild(cwd, { childSessionId, parentThreadId });
+
+				const child = await readNativeRoleChild(
+					stateDir,
+					canonicalSessionId,
+					childSessionId,
+				);
+				assert.equal(child?.mode, undefined);
+				assert.equal(child?.role, undefined);
+				assert.equal(child?.provenance_kind, undefined);
+				assert.equal(
+					existsSync(join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE)),
+					false,
+				);
+				assert.equal(
+					readRoleRoutingMarker(stateDir, {
+						cwd,
+						sessionId: canonicalSessionId,
+						parentThreadId,
+					}),
+					null,
+				);
+				assert.equal(
+					(await readSubagentTrackingState(cwd)).pending_role_intents[0]
+						?.correlation_token,
+					correlationToken,
+				);
+			},
+		);
+	});
+
+	it("does not authenticate an agent_nickname role-intent marker without task_name (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"adapted-agent-nickname-fallback",
+			async (cwd, stateDir) => {
+				const canonicalSessionId = "sess-3118-adapted-agent-nickname-fallback";
+				const parentThreadId =
+					"thread-3118-adapted-agent-nickname-fallback-parent";
+				const childSessionId =
+					"thread-3118-adapted-agent-nickname-fallback-child";
+				const correlationToken = "77777777777777777777777700003118";
+				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+					recursive: true,
+				});
+				await writeSessionStart(cwd, canonicalSessionId, {
+					nativeSessionId: parentThreadId,
+				});
+				assert.equal(
+					recordPendingRoleIntent(cwd, {
+						role: "architect",
+						sessionId: canonicalSessionId,
+						parentThreadId,
+						correlationToken,
+					}).ok,
+					true,
+				);
+
+				await startUntypedNativeChild(cwd, {
+					childSessionId,
+					parentThreadId,
+					agentNickname: buildRoleIntentSpawnTaskName(correlationToken),
+				});
+
+				const child = await readNativeRoleChild(
+					stateDir,
+					canonicalSessionId,
+					childSessionId,
+				);
+				assert.equal(child?.mode, undefined);
+				assert.equal(child?.role, undefined);
+				assert.equal(child?.provenance_kind, undefined);
+				assert.equal(
+					existsSync(join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE)),
+					false,
+				);
+				assert.equal(
+					readRoleRoutingMarker(stateDir, {
+						cwd,
+						sessionId: canonicalSessionId,
+						parentThreadId,
+					}),
+					null,
+				);
+				assert.equal(
+					(await readSubagentTrackingState(cwd)).pending_role_intents[0]
+						?.correlation_token,
+					correlationToken,
+				);
+			},
+		);
+	});
+
+	it("does not authenticate a camelCase taskName role-intent marker without task_name (#3118)", async () => {
+		await withIsolatedNativeRoleState(
+			"adapted-camel-task-name",
+			async (cwd, stateDir) => {
+				const canonicalSessionId = "sess-3118-adapted-camel-task-name";
+				const parentThreadId = "thread-3118-adapted-camel-task-name-parent";
+				const childSessionId = "thread-3118-adapted-camel-task-name-child";
+				const correlationToken = "88888888888888888888888800003118";
+				await mkdir(join(stateDir, "sessions", canonicalSessionId), {
+					recursive: true,
+				});
+				await writeSessionStart(cwd, canonicalSessionId, {
+					nativeSessionId: parentThreadId,
+				});
+				assert.equal(
+					recordPendingRoleIntent(cwd, {
+						role: "architect",
+						sessionId: canonicalSessionId,
+						parentThreadId,
+						correlationToken,
+					}).ok,
+					true,
+				);
+
+				await startUntypedNativeChild(cwd, {
+					childSessionId,
+					parentThreadId,
+					camelTaskNames: {
+						thread_spawn: buildRoleIntentSpawnTaskName(correlationToken),
+					},
+				});
+
+				const child = await readNativeRoleChild(
+					stateDir,
+					canonicalSessionId,
+					childSessionId,
+				);
+				assert.equal(child?.mode, undefined);
+				assert.equal(child?.role, undefined);
+				assert.equal(child?.provenance_kind, undefined);
+				assert.equal(
+					existsSync(join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_MARKER_FILE)),
+					false,
+				);
+				assert.equal(
+					readRoleRoutingMarker(stateDir, {
+						cwd,
+						sessionId: canonicalSessionId,
+						parentThreadId,
+					}),
+					null,
+				);
+				assert.equal(
+					(await readSubagentTrackingState(cwd)).pending_role_intents[0]
+						?.correlation_token,
+					correlationToken,
+				);
+			},
+		);
+	});
+});
+
 // ---------------------------------------------------------------------------
 // Triage layer integration tests
 // ---------------------------------------------------------------------------
@@ -32125,6 +40402,103 @@ describe("codex native hook triage integration", () => {
 			assert.equal(existsSync(stateFile), false);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps marked workflow-like answers inert without treating them as a new triage request", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-triage-marked-answer-inert-"),
+		);
+		const codexHome = await mkdtemp(
+			join(tmpdir(), "omx-triage-marked-answer-home-"),
+		);
+		const previousCodexHome = process.env.CODEX_HOME;
+		try {
+			await writeJson(join(codexHome, ".omx-config.json"), {
+				promptRouting: { triage: { enabled: true } },
+			});
+			process.env.CODEX_HOME = codexHome;
+			resetTriageConfigCache();
+			await mkdir(join(cwd, ".omx", "state"), { recursive: true });
+
+			const result = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: "triage-marked-answer-inert",
+					thread_id: "thread-triage-marked-answer-inert",
+					prompt: "[omx question answered] explain this function?",
+				},
+				{ cwd },
+			);
+
+			const additionalContext = String(
+				(
+					result.outputJson as {
+						hookSpecificOutput?: { additionalContext?: string };
+					}
+				)?.hookSpecificOutput?.additionalContext ?? "",
+			);
+			assert.equal(result.skillState, null);
+			assert.equal(additionalContext, "");
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"state",
+						"sessions",
+						"triage-marked-answer-inert",
+						"autopilot-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"state",
+						"sessions",
+						"triage-marked-answer-inert",
+						"prompt-routing-state.json",
+					),
+				),
+				false,
+			);
+			const promptsResult = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					source: "codex-app",
+					session_id: "triage-prompts-inert",
+					thread_id: "thread-triage-prompts-inert",
+					prompt: "/prompts:architect explain this function?",
+				},
+				{ cwd },
+			);
+			assert.equal(promptsResult.skillState, null);
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"state",
+						"sessions",
+						"triage-prompts-inert",
+						"prompt-routing-state.json",
+					),
+				),
+				false,
+			);
+		} finally {
+			if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+			else process.env.CODEX_HOME = previousCodexHome;
+			resetTriageConfigCache();
+			await rm(cwd, { recursive: true, force: true });
+			await rm(codexHome, { recursive: true, force: true });
 		}
 	});
 
@@ -33823,21 +42197,22 @@ describe("codex native hook triage integration", () => {
 				{ cwd },
 			);
 
-			const additionalContext = String(
-				(
-					result.outputJson as {
-						hookSpecificOutput?: { additionalContext?: string };
-					}
-				)?.hookSpecificOutput?.additionalContext ?? "",
-			);
-			assert.match(
-				additionalContext,
-				/multi-step goal with no workflow keyword/,
-			);
+			assert.equal(result.outputJson, null);
 			assert.equal(
 				existsSync(join(cwd, ".omx", "state", "prompt-routing-state.json")),
 				false,
 			);
+			const log = await readFile(
+				join(
+					cwd,
+					".omx",
+					"logs",
+					`omx-${new Date().toISOString().slice(0, 10)}.jsonl`,
+				),
+				"utf-8",
+			);
+			assert.match(log, /prompt_session_provenance_rejected/);
+			assert.doesNotMatch(log, /bad\/session/);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -33911,6 +42286,166 @@ describe("native Stop autopilot deep-interview wait", () => {
 			);
 
 			assert.equal(result.outputJson, null);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("native UserPromptSubmit payload provenance", () => {
+	it("prefers an explicit payload session over a stale selected pointer and rejects a foreign tracked child without mutation", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "omx-native-prompt-provenance-"));
+		try {
+			const stateDir = join(cwd, ".omx", "state");
+			await writeSessionStart(cwd, "selected-root", {
+				nativeSessionId: "selected-native",
+				pid: process.pid,
+			});
+			await writeJson(
+				join(stateDir, "sessions", "selected-root", "sentinel.json"),
+				{ unchanged: true },
+			);
+			await writeJson(
+				join(stateDir, "sessions", "selected-root", "skill-active-state.json"),
+				{
+					version: 1,
+					active: true,
+					skill: "ralplan",
+					phase: "planning",
+					session_id: "selected-root",
+					owner_codex_session_id: "selected-native",
+				},
+			);
+
+			const payloadFirst = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: "payload-primary",
+					thread_id: "payload-primary-thread",
+					turn_id: "payload-primary-turn",
+					prompt: "$ralplan implement payload-first scope",
+				},
+				{ cwd },
+			);
+			assert.equal(payloadFirst.skillState?.session_id, "payload-primary");
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						"payload-primary",
+						"skill-active-state.json",
+					),
+				),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(stateDir, "sessions", "selected-root", "ralplan-state.json"),
+				),
+				false,
+			);
+
+			const alias = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: "selected-native",
+					thread_id: "selected-alias-thread",
+					turn_id: "selected-alias-turn",
+					prompt: "$ralplan activate through selected alias",
+				},
+				{ cwd },
+			);
+			assert.equal(alias.skillState?.session_id, "selected-root");
+
+			const fallback = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					thread_id: "selected-fallback-thread",
+					turn_id: "selected-fallback-turn",
+					prompt: "$ralplan continue",
+				},
+				{ cwd },
+			);
+			assert.equal(fallback.skillState?.session_id, "selected-root");
+
+			const malformedTargetDir = join(stateDir, "sessions", "malformed-target");
+			await mkdir(malformedTargetDir, { recursive: true });
+			const malformedTargetPath = join(malformedTargetDir, "ralph-state.json");
+			await writeFile(malformedTargetPath, "{ malformed");
+			const malformedTarget = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: "malformed-target",
+					thread_id: "malformed-target-thread",
+					turn_id: "malformed-target-turn",
+					prompt: "$ralph must not overwrite malformed ownership state",
+				},
+				{ cwd },
+			);
+			assert.equal(malformedTarget.skillState, null);
+			assert.equal(await readFile(malformedTargetPath, "utf8"), "{ malformed");
+			assert.equal(
+				existsSync(join(malformedTargetDir, "skill-active-state.json")),
+				false,
+			);
+
+			const sentinelBefore = await readFile(
+				join(stateDir, "sessions", "selected-root", "sentinel.json"),
+				"utf-8",
+			);
+			await writeJson(join(stateDir, "subagent-tracking.json"), {
+				schemaVersion: 1,
+				sessions: {
+					"foreign-root": {
+						session_id: "foreign-root",
+						updated_at: "2026-07-14T00:00:00.000Z",
+						threads: {
+							"foreign-child-thread": {
+								thread_id: "foreign-child-thread",
+								kind: "subagent",
+								first_seen_at: "2026-07-14T00:00:00.000Z",
+								last_seen_at: "2026-07-14T00:00:00.000Z",
+								turn_count: 1,
+							},
+						},
+					},
+				},
+			});
+			const foreignChild = await dispatchCodexNativeHook(
+				{
+					hook_event_name: "UserPromptSubmit",
+					cwd,
+					session_id: "foreign-child",
+					thread_id: "foreign-child-thread",
+					turn_id: "foreign-child-turn",
+					prompt: "$ralplan must not activate",
+				},
+				{ cwd },
+			);
+			assert.equal(foreignChild.skillState, null);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						"foreign-child",
+						"skill-active-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				await readFile(
+					join(stateDir, "sessions", "selected-root", "sentinel.json"),
+					"utf-8",
+				),
+				sentinelBefore,
+			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}

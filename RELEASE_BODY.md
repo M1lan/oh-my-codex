@@ -1,33 +1,38 @@
-# oh-my-codex 0.20.0
+# oh-my-codex 0.20.2
 
-`0.20.0` migrates the entire OMX model contract to OpenAI's GPT-5.6 generation (Sol/Terra/Luna) and rolls up the dev-branch fixes and features merged since `0.19.1`.
+`0.20.2` is a patch release for the reliability and workflow-safety work in the exact range `v0.20.1..f5e4753135ebc86342e7353300ac3ec5d9ae3d8d`.
 
 ## Highlights
 
-- Frontier lane `gpt-5.6-sol`, standard lane `gpt-5.6-terra`, spark lane `gpt-5.6-luna` across runtime, agents, Rust crates, docs, prompts, skills, and the plugin mirror.
-- Planner/architect exact `gpt-5.6-sol` pins (medium/xhigh); researcher exact `gpt-5.6-terra`; fast lanes on `gpt-5.6-luna`.
-- Exact-model composition seam retargeted to `gpt-5.6-terra` with final-resolved-model precedence.
-- Setup offers prompt-gated upgrades from legacy `gpt-5.3-codex` / `gpt-5.5` to `gpt-5.6-sol`.
-- Autopilot classifies canonical Terra/Luna as cheap planning lanes.
-- Doctor reports accurate Spark model sources including `models.team_low_complexity`.
-- New `omx capabilities lock`/`check` CLI providing a manual capabilities-lockfile preflight command (#3087).
-- Project setup defaults to plugin mode with plugin cache (#3085); plugin hooks gated to omx-launched sessions (#3086); resume plugin preflight opt-in (#3088).
-- Persisted subagents reopen on SessionStart (#3099); canonical worktree tool context (#3102).
+- Authenticated fresh App leaders can bootstrap Ralplan role intent in-turn through durable, fail-closed leader attestation and atomic recovery (#3184; issue #3181).
+- Native `spawn_agent` role routing is surface-aware; adapted-role tracker/marker binding is transactional, recoverable, and protected by cross-process lock cleanup (#3152, #3166; issue #3118). Native subagents can stop without a generic auto-nudge (#3180).
+- Prompt/session provenance is isolated across concurrent chats, fallback notifications are deduplicated across processes, and canonical Ralplan state rejects ambiguous session aliases (#3168, #3165, #3158).
+- Setup preserves explicit `AGENTS.md` merge policy, Team honors an explicit worker policy, and stale foreign state-transition mirrors are ignored (#3164, #3136, #3172).
 
-## Merged PRs since v0.19.1
+## Additional fixes
 
-#3079, #3080, #3082, #3085, #3086, #3087, #3088, #3091, #3092, #3094, #3097, #3099, #3100, #3102, #3104, plus direct migration commits `3e579633`, `0ac484e0`, `51ee0c28`.
+- Explicit prompt-leading workflow invocation prevents accidental activation from quoted, negated, documented, malformed, or other non-invocation mentions (#3140; issue #3133).
+- Authenticated deep-interview terminal state writes succeed (#3179); foreign Codex hook coordinates are preserved (#3151); BOM-prefixed state input is accepted (#3169); and detached panes retain tmux-owned terminal environment values (#3183; issue #3175).
+
+## Dependencies and release collateral
+
+- Updated `actions/setup-node` 6 → 7 (#3154), TypeScript 6.0.3 → 7.0.2 (#3155), `@types/node` 26.1.0 → 26.1.1 (#3156), and `@biomejs/biome` 2.5.2 → 2.5.3 (#3157).
+- #3129 reconciled 0.20.1 post-publish evidence; its direct branch commit and merge commit are release-collateral-only. `29bdeb5c5670c133d9f2feda7512ee01e80a63d5` is the version-development preparation commit.
+
+## Merged PRs since v0.20.1
+
+#3129, #3136, #3140, #3151, #3152, #3154, #3155, #3156, #3157, #3158, #3164, #3165, #3166, #3168, #3169, #3172, #3179, #3180, #3183, #3184. Issues #3118, #3133, #3162, #3163, #3175, #3177, and #3181 are associated issues, not additional PRs.
 
 ## Compatibility
 
-No breaking CLI or package-layout changes. Existing explicit model overrides keep their semantics as opaque strings. Project-scoped setup now defaults to plugin install mode (#3085) and plugin hooks activate only for omx-launched sessions (#3086).
+Patch release with no intentional breaking CLI or package-layout changes.
 
 ## Validation
 
-Green dev and main CI, full node + Rust suites, three architect review rounds ending CLEAR/APPROVE, adversarial QA/red-team artifacts; readiness evidence in `docs/qa/release-readiness-0.20.0.md`.
+Local build, lint, typecheck, full Node/Rust tests, packed-install smoke, independent review, `dev` and `main` candidate CI, all seven native builds, native-asset verification, GitHub release publication, npm provenance publication, and isolated public-registry install/CLI boot passed for the shipped candidate. The packed smoke used the exact Codex CLI 0.142.5 boundary. Full evidence is recorded in `docs/qa/release-readiness-0.20.2.md`.
 
 ## Contributors
 
-Thanks to the contributors who made this release possible.
+Thanks to Bellman (@Yeachan-Heo), @cristph, @terwox, and @dependabot[bot] for commits in this range.
 
-**Full Changelog**: [`v0.19.1...v0.20.0`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.19.1...v0.20.0)
+**Full Changelog**: [`v0.20.1...v0.20.2`](https://github.com/Yeachan-Heo/oh-my-codex/compare/v0.20.1...v0.20.2)

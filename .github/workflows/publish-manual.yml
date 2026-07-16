@@ -30,7 +30,7 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
@@ -46,7 +46,7 @@ jobs:
             exit 0
           fi
       - run: pnpm pack
-      - name: Configure registry auth
+      - name: Configure npm auth
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -55,7 +55,7 @@ jobs:
           test -n "${NODE_AUTH_TOKEN:-}"
           printf "//registry.npmjs.org/:_authToken=%s\nregistry=https://registry.npmjs.org/\nalways-auth=true\n" "$NODE_AUTH_TOKEN" > ~/.npmrc
           pnpm whoami
-      - name: Publish to registry
+      - name: Publish to npm
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -64,13 +64,13 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           if pnpm publish --access public --provenance --no-git-checks 2>&1 | tee publish.log; then
             echo "Published oh-my-codex@${VERSION} with provenance"
-          elif grep -Eiq 'TLOG_CREATE_ENTRY_ERROR|tlog|rekor|transparency log' publish.log && [ "${{ inputs.allow_without_provenance }}" = "true" ]; then
+          elif node --input-type=module -e "import { readFileSync } from 'node:fs'; process.exit(/TLOG_CREATE_ENTRY_ERROR|tlog|rekor|transparency log/i.test(readFileSync('publish.log', 'utf8')) ? 0 : 1);" && [ "${{ inputs.allow_without_provenance }}" = "true" ]; then
             echo "::warning::Provenance publish failed due to Sigstore/Rekor tlog outage; retrying without provenance"
             pnpm publish --access public --no-git-checks
           else
             exit 1
           fi
-      - name: Verify publication
+      - name: Verify npm publication
         shell: bash
         run: |
           set -euo pipefail
