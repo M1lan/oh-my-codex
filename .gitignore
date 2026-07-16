@@ -51,3 +51,4 @@ snapshot.json
 .forks/
 .codegraph
 
+.grepai/

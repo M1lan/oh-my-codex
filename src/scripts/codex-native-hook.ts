@@ -2359,12 +2359,7 @@ async function maybeInjectInteropCavemanActivation(options: {
 	if (!activation) return;
 	const sessionId = safeString(options.sessionId).trim();
 	const markerPath = sessionId
-		? join(
-				options.stateDir,
-				"sessions",
-				sessionId,
-				"interop-caveman-injected",
-			)
+		? join(options.stateDir, "sessions", sessionId, "interop-caveman-injected")
 		: join(options.stateDir, "interop-caveman-injected");
 	if (existsSync(markerPath)) return;
 	const result = await performInteropCavemanInjection(activation);
