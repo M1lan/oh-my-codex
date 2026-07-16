@@ -1,8 +1,8 @@
 import { spawnSync, execFile } from 'child_process';
 import { promisify } from 'util';
-import { closeSync, chmodSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { closeSync, chmodSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, isAbsolute, join, resolve } from 'path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import {
   CODEX_BYPASS_FLAG,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
@@ -48,6 +48,19 @@ import { findHudWatchPaneIds, hudPaneMatchesOwner, OMX_TMUX_HUD_LEADER_PANE_ENV 
 const OMX_INSTANCE_OPTION = '@omx_instance_id';
 const OMX_PANE_INSTANCE_OPTION = '@omx_pane_instance_id';
 const OMX_TEAM_PANE_OWNER_OPTION = '@omx_team_pane_owner_id';
+
+
+type ProcessLiveness = 'alive' | 'gone' | 'unknown';
+
+/** `kill(pid, 0)` establishes absence only on ESRCH. */
+function probeProcessLiveness(pid: number): ProcessLiveness {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'gone' : 'unknown';
+  }
+}
 
 export interface TeamSession {
   name: string; // tmux target in "session:window" form
@@ -239,9 +252,34 @@ type RestoredHudCleanupDebt = {
 };
 
 function restoredHudCleanupDebtPath(cwd: string, stateRoot?: string | null): string {
-  const root = typeof stateRoot === 'string' && stateRoot.trim()
-    ? resolve(stateRoot)
-    : resolveCanonicalTeamStateRoot(resolve(cwd));
+  const canonicalStateRoot = resolveCanonicalTeamStateRoot(resolve(cwd));
+  if (typeof stateRoot !== 'string' || !stateRoot.trim()) {
+    return join(canonicalStateRoot, '.restored-hud-cleanup-debt.json');
+  }
+
+  const canonicalTeamsRoot = join(canonicalStateRoot, 'team');
+  const root = resolve(stateRoot);
+  const relativeRoot = relative(canonicalTeamsRoot, root);
+  if (!isAbsolute(stateRoot.trim())
+    || !relativeRoot
+    || relativeRoot === '..'
+    || relativeRoot.startsWith(`..${sep}`)
+    || isAbsolute(relativeRoot)
+    || relativeRoot.split(sep).length !== 1) {
+    throw new Error('restored_hud_cleanup_debt_state_root_invalid');
+  }
+
+  for (let candidate = root; ; candidate = dirname(candidate)) {
+    try {
+      const metadata = lstatSync(candidate);
+      if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+        throw new Error('restored_hud_cleanup_debt_state_root_invalid');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (candidate === canonicalTeamsRoot) break;
+  }
   return join(root, '.restored-hud-cleanup-debt.json');
 }
 
@@ -252,13 +290,12 @@ function syncRestoredHudDebtParentSync(path: string): void {
     fsyncSync(descriptor);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EISDIR' && !(code === 'EPERM' && process.platform === 'win32')) {
-      throw error;
-    }
+    if (!(code === 'EPERM' && process.platform === 'win32')) throw error;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
+
 
 function persistRestoredHudCleanupDebtSync(
   cwd: string,
@@ -267,6 +304,9 @@ function persistRestoredHudCleanupDebtSync(
 ): void {
   const debtPath = restoredHudCleanupDebtPath(cwd, stateRoot);
   mkdirSync(dirname(debtPath), { recursive: true });
+  // Recheck after mkdir: an untrusted Team root must still be canonical and
+  // non-symlinked immediately before the durable file mutation.
+  restoredHudCleanupDebtPath(cwd, stateRoot);
   const temporaryPath = `${debtPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
   writeFileSync(temporaryPath, `${JSON.stringify(debt)}\n`, { mode: 0o600 });
   const temporaryDescriptor = openSync(temporaryPath, 'r');
@@ -923,7 +963,7 @@ async function isWorkerAliveAsync(
   expectedTeamOwnerId?: string,
   hudPaneId?: string,
   resolveTarget?: AsyncPaneTargetResolver,
-): Promise<boolean> {
+): Promise<ProcessLiveness> {
   if (hasExplicitWorkerPaneId(workerPaneId)) {
     const resolver = resolveTarget ?? createPinnedWorkerPaneTargetResolver(
       sessionName,
@@ -935,13 +975,8 @@ async function isWorkerAliveAsync(
     );
     const target = await resolver();
     const pid = resolver.lastResolvedPid?.() ?? expectedPanePid;
-    if (!target || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    if (!target || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return 'unknown';
+    return probeProcessLiveness(pid);
   }
 
   const result = await runTmuxAsync([
@@ -950,27 +985,22 @@ async function isWorkerAliveAsync(
     '-F',
     '#{pane_dead} #{pane_pid}',
   ]);
-  if (!result.ok) return false;
+  if (!result.ok) return 'unknown';
 
   const line = result.stdout.split('\n')[0]?.trim();
-  if (!line) return false;
+  if (!line) return 'unknown';
 
   const parts = line.split(/\s+/);
-  if (parts.length < 2) return false;
+  if (parts.length < 2) return 'unknown';
 
   const paneDead = parts[0];
   const pid = Number.parseInt(parts[1], 10);
 
-  if (paneDead === '1') return false;
-  if (!Number.isFinite(pid)) return false;
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  if (paneDead === '1') return 'gone';
+  if (!Number.isFinite(pid)) return 'unknown';
+  return probeProcessLiveness(pid);
 }
+
 
 function shellQuoteSingle(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -2555,6 +2585,9 @@ export function restoreStandaloneHudPane(
 ): string | null {
   const normalizedLeaderPaneId = normalizePaneTarget(leaderPaneId);
   if (!normalizedLeaderPaneId) return null;
+  // The split is irreversible without a durable cleanup obligation. Validate
+  // its canonical Team-root location before authorizing any pane effect.
+  restoredHudCleanupDebtPath(cwd, options.stateRoot);
 
   const omxEntry = resolveOmxCliEntryPath();
   if (!omxEntry || omxEntry.trim() === '') return null;
@@ -3426,14 +3459,8 @@ export function isWorkerAlive(
       hudPaneId,
     )();
     if (!target || typeof expectedPanePid !== 'number') return false;
-    try {
-      process.kill(expectedPanePid, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    return probeProcessLiveness(expectedPanePid) !== 'gone';
   }
-
 
   const result = runTmux([
     'list-panes',
@@ -3454,14 +3481,11 @@ export function isWorkerAlive(
 
   if (paneDead === '1') return false;
   if (!Number.isFinite(pid)) return false;
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  // Unknown is conservatively live so callers cannot classify a permission or
+  // transient failure as stale cleanup authority.
+  return probeProcessLiveness(pid) !== 'gone';
 }
+
 
 export function isWorkerPaneOpen(
   sessionName: string,
@@ -3511,10 +3535,11 @@ export async function killWorker(
   const resolveTarget = createPinnedWorkerPaneTargetResolver(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId);
   const initialTarget = await resolveTarget();
   if (!initialTarget) return;
+  if (await isWorkerAliveAsync(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId, resolveTarget) !== 'alive') return;
   await runTmuxAsync(['send-keys', '-t', initialTarget, 'C-c']);
   await sleep(1000);
 
-  if (await isWorkerAliveAsync(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId, resolveTarget)) {
+  if (await isWorkerAliveAsync(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId, resolveTarget) === 'alive') {
     const exitTarget = await resolveTarget();
     if (exitTarget) {
       await runTmuxAsync(['send-keys', '-t', exitTarget, 'C-d']);
@@ -3522,7 +3547,7 @@ export async function killWorker(
     }
   }
 
-  if (await isWorkerAliveAsync(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId, resolveTarget)) {
+  if (await isWorkerAliveAsync(sessionName, workerIndex, workerPaneId, expectedPanePid, expectedTeamOwnerId, hudPaneId, resolveTarget) === 'alive') {
     const killTarget = await resolveTarget();
     if (!killTarget) return;
     const killed = await runTmuxAsync(['kill-pane', '-t', killTarget]);
@@ -3532,6 +3557,7 @@ export async function killWorker(
     if (absence.status !== 'gone') throw new Error(`tmux pane remains live after kill: ${killTarget}`);
   }
 }
+
 
 // Explicit pane targets require frozen PID, canonical Team owner, and HUD
 // exclusion. A successful kill is only accepted after a fresh absence proof.
@@ -4058,13 +4084,15 @@ export async function killWorkerPanes(
 // session-list proof that the exact base session is absent.
 export function destroyTeamSession(sessionName: string): boolean {
   const result = runTmux(['kill-session', '-t', sessionName]);
-  return result.ok && !listTeamSessions().includes(baseSessionName(sessionName));
+  const sessions = listTeamSessions();
+  return result.ok && sessions !== null && !sessions.includes(baseSessionName(sessionName));
 }
 
-// List all tmux sessions matching omx-team-* pattern
-export function listTeamSessions(): string[] {
+// A failed query is not a successful empty session list. Destructive callers
+// must require the latter before treating a detached session as absent.
+export function listTeamSessions(): string[] | null {
   const result = runTmux(['list-sessions', '-F', '#{session_name}']);
-  if (!result.ok) return [];
+  if (!result.ok) return null;
 
   return result.stdout
     .split('\n')

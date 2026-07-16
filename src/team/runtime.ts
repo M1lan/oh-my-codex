@@ -1,3 +1,5 @@
+import { spawnPlatformCommandSync } from '../utils/platform-command.js';
+
 import { join, resolve, dirname } from 'path';
 import { existsSync, appendFileSync, mkdirSync } from 'fs';
 import { mkdir, readdir, readFile, writeFile, rm } from 'fs/promises';
@@ -535,6 +537,42 @@ export function shouldPrekillInteractiveShutdownProcessTrees(sessionName: string
   return true;
 }
 
+function hasAuthoritativeDetachedSessionLeaderBinding(params: {
+  sessionName: string;
+  leaderPaneId: string;
+  leaderPanePid: number;
+}): boolean {
+  const { sessionName, leaderPaneId, leaderPanePid } = params;
+  const { result } = spawnPlatformCommandSync('tmux', [
+    'list-panes', '-a', '-F', '#{pane_id}\t#{pane_dead}\t#{pane_pid}\t#{session_name}',
+  ], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error || result.status !== 0 || typeof result.stdout !== 'string') return false;
+
+  const lines = result.stdout.replace(/\r\n/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  const paneIds = new Set<string>();
+  let matched = false;
+  for (const line of lines) {
+    const fields = line.split('\t');
+    if (fields.length !== 4) return false;
+    const [paneId, paneDead, panePid, paneSessionName] = fields;
+    if (!/^%[0-9]+$/.test(paneId) || paneIds.has(paneId) || (paneDead !== '0' && paneDead !== '1')) return false;
+    paneIds.add(paneId);
+    if (panePid !== '' && (!/^[0-9]+$/.test(panePid) || !Number.isSafeInteger(Number(panePid)) || Number(panePid) <= 0)) {
+      return false;
+    }
+    if (paneId !== leaderPaneId) continue;
+    if (paneDead !== '0' || panePid === '' || Number(panePid) !== leaderPanePid || paneSessionName !== sessionName) {
+      return false;
+    }
+    matched = true;
+  }
+  return matched;
+}
+
 function destroyConfiguredDetachedTeamSession(config: TeamConfig): void {
   const sessionName = config.tmux_session;
   const ownerId = typeof config.tmux_pane_owner_id === 'string' ? config.tmux_pane_owner_id.trim() : '';
@@ -557,6 +595,13 @@ function destroyConfiguredDetachedTeamSession(config: TeamConfig): void {
   }
   const finalProof = readExactPaneProofSync(proof.paneId);
   if (finalProof.status !== 'live' || finalProof.pid !== leaderPanePid) {
+    throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
+  }
+  if (!hasAuthoritativeDetachedSessionLeaderBinding({
+    sessionName,
+    leaderPaneId: finalProof.paneId,
+    leaderPanePid,
+  })) {
     throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
   }
   if (!destroyTeamSession(sessionName)) {
@@ -4961,11 +5006,12 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       const unregistered = unregisterResizeHook(config.resize_hook_target, resizeHookName);
       if (!unregistered && isTmuxAvailable()) {
         const baseSession = sessionName.split(':')[0];
-        const sessionStillActive = listTeamSessions().includes(baseSession);
-        if (sessionStillActive) {
+        const teamSessions = listTeamSessions();
+        if (teamSessions === null || teamSessions.includes(baseSession)) {
           resizeHookWarning = `failed to unregister resize hook ${resizeHookName}`;
         }
       }
+
     }
     if (resizeHookWarning) {
       console.warn(`[team shutdown] ${sanitized}: ${resizeHookWarning}; continuing teardown`);
@@ -5202,7 +5248,10 @@ export async function resumeTeam(teamName: string, cwd: string): Promise<TeamRun
 async function findActiveTeams(cwd: string, leaderSessionId: string): Promise<string[]> {
   const root = teamRuntimeTeamsRoot(cwd);
   if (!existsSync(root)) return [];
-  const sessions = new Set(listTeamSessions());
+  const listedSessions = listTeamSessions();
+  if (listedSessions === null) throw new Error('tmux_session_query_unavailable');
+  const sessions = new Set(listedSessions);
+
   const entries = await readdir(root, { withFileTypes: true });
   const active: string[] = [];
   for (const e of entries) {
@@ -5240,7 +5289,9 @@ async function detectAndCleanStaleTeam(
   const stateDir = teamRuntimeTeamRoot(teamName, leaderCwd);
   if (!existsSync(stateDir)) return;
 
-  const sessions = new Set(listTeamSessions());
+  const listedSessions = listTeamSessions();
+  if (listedSessions === null) return;
+  const sessions = new Set(listedSessions);
   if (sessions.has(`omx-team-${teamName}`)) return;
 
   const repoRootResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {

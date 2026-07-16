@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { PassThrough } from 'node:stream';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -44,6 +44,8 @@ import {
   killWorkerByPaneIdAsync,
   teardownWorkerPanes,
   listTeamSessions,
+  destroyTeamSession,
+
   resolveTeamWorkerCli,
   resolveTeamWorkerLaunchMode,
   resolveWorkerCliForSend,
@@ -72,6 +74,7 @@ import { readExactPaneProof, readExactPaneProofSync } from '../exact-pane.js';
 
 const fsMutable = fs as typeof fs & {
   existsSync: typeof fs.existsSync;
+  fsyncSync: typeof fs.fsyncSync;
   statSync: typeof fs.statSync;
 };
 
@@ -106,6 +109,18 @@ function withMockedStatSync<T>(mock: typeof fs.statSync, fn: () => T): T {
     return fn();
   } finally {
     fsMutable.statSync = original;
+    syncBuiltinESMExports();
+  }
+}
+
+function withMockedFsyncSync<T>(mock: typeof fs.fsyncSync, fn: () => T): T {
+  const original = fsMutable.fsyncSync;
+  fsMutable.fsyncSync = mock;
+  syncBuiltinESMExports();
+  try {
+    return fn();
+  } finally {
+    fsMutable.fsyncSync = original;
     syncBuiltinESMExports();
   }
 }
@@ -3592,10 +3607,39 @@ describe('tmux-dependent functions when tmux is unavailable', () => {
     });
   });
 
-  it('listTeamSessions returns empty', () => {
+  it('distinguishes a failed session query from a successful empty result', async () => {
     withEmptyPath(() => {
-      assert.deepEqual(listTeamSessions(), []);
+      assert.equal(listTeamSessions(), null);
     });
+
+    await withMockTmuxFixture(
+      'omx-empty-team-sessions-',
+      () => `#!/bin/sh
+case "$1" in
+  list-sessions) exit 0 ;;
+  *) exit 1 ;;
+esac
+`,
+      async () => {
+        assert.deepEqual(listTeamSessions(), []);
+      },
+    );
+  });
+
+  it('does not accept a session kill when the absence query fails', async () => {
+    await withMockTmuxFixture(
+      'omx-destroy-team-session-query-failure-',
+      () => `#!/bin/sh
+case "$1" in
+  kill-session) exit 0 ;;
+  list-sessions) exit 1 ;;
+  *) exit 1 ;;
+esac
+`,
+      async () => {
+        assert.equal(destroyTeamSession('omx-team-query-failure'), false);
+      },
+    );
   });
 
   it('waitForWorkerReady uses visible capture-pane argv without tail flags', async () => {
@@ -6160,6 +6204,78 @@ esac
     }
   });
 
+  it('rejects restored HUD debt roots outside the canonical direct Team root before splitting', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-restored-hud-debt-root-'));
+    const canonicalTeamsRoot = join(cwd, '.omx', 'state', 'team');
+    const externalRoot = await mkdtemp(join(tmpdir(), 'omx-restored-hud-debt-external-'));
+    const symlinkRoot = join(canonicalTeamsRoot, 'linked-team');
+    try {
+      await mkdir(canonicalTeamsRoot, { recursive: true });
+      await symlink(externalRoot, symlinkRoot);
+      const invalidRoots = [
+        join(cwd, '.omx', 'state', 'foreign'),
+        join(canonicalTeamsRoot, 'alpha', '..', '..', 'foreign'),
+        join(canonicalTeamsRoot, 'alpha', 'nested'),
+        symlinkRoot,
+      ];
+      for (const stateRoot of invalidRoots) {
+        assert.throws(
+          () => restoreStandaloneHudPane('%11', cwd, { stateRoot }),
+          /restored_hud_cleanup_debt_state_root_invalid/,
+        );
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not suppress a non-Windows parent-directory fsync failure for restored HUD debt', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-restored-hud-debt-fsync-'));
+    const originalFsyncSync = fs.fsyncSync;
+    try {
+      await withMockTmuxFixture(
+        'omx-restored-hud-debt-fsync-',
+        (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  list-panes)
+    if [ "$2" = "-a" ]; then
+      printf '%%11\\t0\\t2000000011\\n%%44\\t0\\t2000000044\\n'
+    else
+      printf '%%11\\tzsh\\tzsh\\n'
+    fi
+    ;;
+  split-window) printf '%%44\\n' ;;
+  *) exit 0 ;;
+esac
+`,
+        async ({ logPath }) => {
+          let fsyncCalls = 0;
+          assert.throws(
+            () => withMockedFsyncSync((descriptor) => {
+              fsyncCalls += 1;
+              if (fsyncCalls === 2) {
+                const error = new Error('parent fsync unavailable') as NodeJS.ErrnoException;
+                error.code = 'EINVAL';
+                throw error;
+              }
+              originalFsyncSync(descriptor);
+            }, () => restoreStandaloneHudPane('%11', cwd)),
+            /parent fsync unavailable/,
+          );
+          assert.equal(fsyncCalls, 2);
+          const commands = await readFile(logPath, 'utf-8');
+          assert.match(commands, /split-window/);
+          assert.doesNotMatch(commands, /resize-pane|select-pane/);
+        },
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('reuses an existing standalone HUD pane across repeated restore calls', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-standalone-reuse-hud-'));
 
@@ -6919,6 +7035,79 @@ exit 1
     );
   });
 
+  it('treats EPERM liveness probes as unknown and emits no async kill controls', async () => {
+    await withMockTmuxFixture(
+      'omx-worker-liveness-eperm-',
+      (logPath) => `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${logPath}"
+case "$1" in
+  list-panes)
+    if [ "$2" = "-a" ]; then printf '%%77\t0\t%s\n' "$PPID"; exit 0; fi
+    if [ "$2" = "-t" ]; then printf '0 %s\n' "$PPID"; exit 0; fi
+    exit 1
+    ;;
+  show-option) printf 'team:liveness\n'; exit 0 ;;
+  *) exit 1 ;;
+esac
+`,
+      async ({ logPath }) => {
+        const originalProcessKill = process.kill;
+        process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+          if (pid === process.pid && signal === 0) {
+            const error = new Error('permission denied') as NodeJS.ErrnoException;
+            error.code = 'EPERM';
+            throw error;
+          }
+          return originalProcessKill(pid, signal as NodeJS.Signals);
+        }) as typeof process.kill;
+        try {
+          assert.equal(isWorkerAlive('compat-session', 1), true);
+          assert.equal(isWorkerAlive('ignored-session', 1, '%77', process.pid, 'team:liveness'), true);
+          await killWorker('ignored-session', 1, '%77', undefined, process.pid, 'team:liveness');
+        } finally {
+          process.kill = originalProcessKill;
+        }
+        const log = await readFile(logPath, 'utf-8');
+        assert.doesNotMatch(log, /send-keys -t %77|kill-pane -t %77/);
+      },
+    );
+  });
+
+  it('treats only ESRCH as a gone process', async () => {
+    await withMockTmuxFixture(
+      'omx-worker-liveness-esrch-',
+      () => `#!/bin/sh
+case "$1" in
+  list-panes)
+    if [ "$2" = "-a" ]; then printf '%%77\t0\t%s\n' "$PPID"; exit 0; fi
+    if [ "$2" = "-t" ]; then printf '0 %s\n' "$PPID"; exit 0; fi
+    exit 1
+    ;;
+  show-option) printf 'team:liveness\n'; exit 0 ;;
+  *) exit 1 ;;
+esac
+`,
+      async () => {
+        const originalProcessKill = process.kill;
+        process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+          if (pid === process.pid && signal === 0) {
+            const error = new Error('no such process') as NodeJS.ErrnoException;
+            error.code = 'ESRCH';
+            throw error;
+          }
+          return originalProcessKill(pid, signal as NodeJS.Signals);
+        }) as typeof process.kill;
+        try {
+          assert.equal(isWorkerAlive('compat-session', 1), false);
+          assert.equal(isWorkerAlive('ignored-session', 1, '%77', process.pid, 'team:liveness'), false);
+        } finally {
+          process.kill = originalProcessKill;
+        }
+      },
+    );
+  });
+
   it('uses the exact global row for explicit pane liveness and fails closed for dead rows', async () => {
     await withMockTmuxFixture(
       'omx-pane-id-liveness-',
@@ -7353,7 +7542,7 @@ case "$1" in
     printf '%s' "$count" > "$count_file"
     if [ -f "$state_dir/killed" ]; then
       :
-    elif [ "$count" -le 10 ]; then
+    elif [ "$count" -le 12 ]; then
       printf '%%9\t0\t%s\n' "$PPID"
     else
       printf '%%9\t0\t999999999\n'
@@ -7372,7 +7561,7 @@ esac
         assert.match(commands, /send-keys -t %9 C-d/);
         assert.equal(
           (commands.match(/list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}/g) || []).length,
-          11,
+          13,
           `liveness and effects must each use the pinned proof around owner authorization:\n${commands}`,
         );
       },

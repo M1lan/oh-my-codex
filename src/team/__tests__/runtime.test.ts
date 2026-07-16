@@ -7711,6 +7711,65 @@ esac
     }
   });
 
+  it('shutdownTeam rejects a recycled detached session before kill-session', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-detached-session-recycled-'));
+    try {
+      await withMockTmuxFixture(
+        {
+          dirPrefix: 'omx-runtime-detached-session-recycled-bin-',
+          tmuxScript: (tmuxLogPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  -V)
+    echo "tmux 3.4"
+    ;;
+  list-panes)
+    case "$*" in
+      *'#{session_name}'*) printf '%%1\\t0\\t4242\\trecycled-session\\n' ;;
+      *'-a -F #{pane_id}'*) printf '%%1\\t0\\t4242\\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  show-option|show-options)
+    echo 'team:team-detached-session-recycled'
+    ;;
+  kill-session)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+        },
+        async ({ tmuxLogPath }) => {
+          const teamName = 'team-detached-session-recycled';
+          await initTeamState(teamName, 'reject recycled detached session', 'executor', 1, cwd);
+          const config = await readTeamConfig(teamName, cwd);
+          assert.ok(config);
+          if (!config) return;
+          config.tmux_session = 'omx-team-team-detached-session-recycled';
+          config.leader_pane_id = '%1';
+          config.leader_pane_pid = 4242;
+          config.tmux_pane_owner_id = 'team:team-detached-session-recycled';
+          await saveTeamConfig(config, cwd);
+
+          await assert.rejects(
+            () => shutdownTeam(teamName, cwd, { force: true }),
+            /detached_session_destroy_authorization_unavailable:omx-team-team-detached-session-recycled/,
+          );
+
+          const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+          assert.match(tmuxLog, /list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}\t#\{session_name\}/);
+          assert.doesNotMatch(tmuxLog, /kill-session -t omx-team-team-detached-session-recycled/);
+        },
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('shutdownTeam stops before any OS signal when proof is lost after pane PID authorization', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-malformed-pane-proof-'));
     const proofStatePath = join(cwd, 'shutdown-proof-authorized-once');
