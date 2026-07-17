@@ -223,6 +223,10 @@ ci: fmt-check lint check-unused check-pnpm test md-lint
 [group('check')]
 verify-rust: rust-fmt-check rust-lint rust-test
 
+# Full pre-push gate: TS CI + Rust CI + bash-helper lint
+[group('check')]
+verify: ci verify-rust shellcheck
+
 # Secret scan (full history)
 [group('check')]
 secrets:
@@ -234,7 +238,7 @@ secrets:
 [group('util')]
 [no-exit-message]
 search-fzf query='':
-    @'{{helpers}}/search.bash' {{query}}
+    @'{{helpers}}/search.bash' '{{query}}'
 
 # Fuzzy-pick a TS/Rust source file (bat preview) -> open in $EDITOR
 [group('util')]
@@ -247,38 +251,17 @@ pick:
 # Uninstall all global omx installations (pnpm global remove)
 [group('omx')]
 omx-uninstall:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source ~/.config/sh/fnm-init.sh 2>/dev/null || true
-    echo "── omx-uninstall: removing global oh-my-codex ──"
-    if {{pnpm_cmd}} list -g --depth=0 2>/dev/null | rg -q 'oh-my-codex'; then
-        {{pnpm_cmd}} remove -g oh-my-codex
-        echo "omx-uninstall: removed ✓"
-    else
-        echo "omx-uninstall: nothing to remove (not installed globally)"
-    fi
-    if type -af omx 2>/dev/null | rg -q 'omx'; then
-        echo "WARNING: omx still found after uninstall:" >&2
-        type -af omx >&2
-    else
-        echo "omx-uninstall: verified not in PATH ✓"
-    fi
+    @'{{helpers}}/omx-install.bash' uninstall
 
 # Install omx from this local checkout (pnpm add -g <abs-path>)
 [group('omx')]
 omx-install:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source ~/.config/sh/fnm-init.sh 2>/dev/null || true
-    REPO_DIR="{{justfile_directory()}}"
-    echo "── omx-install: installing from $REPO_DIR ──"
-    {{pnpm_cmd}} add -g "$REPO_DIR"
-    echo "omx-install: installed ✓"
-    echo "  $(type -af omx 2>/dev/null | head -1)"
+    @'{{helpers}}/omx-install.bash' install
 
 # Uninstall then reinstall omx from this local checkout (full cycle)
 [group('omx')]
-omx-reinstall: omx-uninstall omx-install
+omx-reinstall:
+    @'{{helpers}}/omx-install.bash' reinstall
 
 # ── Clean ──
 
