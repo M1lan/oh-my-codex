@@ -40,3 +40,6 @@ snapshot.json
 .codex/skills/.system/**
 !.codex/prompts/
 !.codex/prompts/**
+
+# bv (beads viewer) local config and caches
+.bv/
