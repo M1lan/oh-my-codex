@@ -1,6 +1,15 @@
 import { createHash } from "crypto";
 import { constants } from "fs";
-import { copyFile, link, open, lstat, mkdir, readFile, rm, type FileHandle } from "fs/promises";
+import {
+	copyFile,
+	link,
+	open,
+	lstat,
+	mkdir,
+	readFile,
+	rm,
+	type FileHandle,
+} from "fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "path";
 import {
 	syncRegularFile,
@@ -9,7 +18,9 @@ import {
 
 export interface NativeHookClaimJournalDurability {
 	platform: NodeJS.Platform;
-	syncRegularFile(handle: Pick<FileHandle, "sync">): Promise<RegularFileSyncOutcome>;
+	syncRegularFile(
+		handle: Pick<FileHandle, "sync">,
+	): Promise<RegularFileSyncOutcome>;
 	syncDirectory(path: string): Promise<void>;
 }
 
@@ -27,14 +38,25 @@ function digest(bytes: Buffer): string {
 }
 
 function isMissing(error: unknown): boolean {
-	return typeof error === "object" && error !== null && "code" in error &&
-		(error as { code?: unknown }).code === "ENOENT";
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "ENOENT"
+	);
 }
 
 function assertControlledPath(root: string, path: string): void {
 	const rel = relative(root, path);
-	if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`) || rel === "") {
-		throw new Error(`Native hook claim journal path is outside controlled root: ${path}`);
+	if (
+		isAbsolute(rel) ||
+		rel === ".." ||
+		rel.startsWith(`..${sep}`) ||
+		rel === ""
+	) {
+		throw new Error(
+			`Native hook claim journal path is outside controlled root: ${path}`,
+		);
 	}
 }
 
@@ -43,8 +65,12 @@ function processIsAlive(pid: number): boolean {
 		process.kill(pid, 0);
 		return true;
 	} catch (error) {
-		return typeof error === "object" && error !== null && "code" in error &&
-			(error as { code?: unknown }).code === "EPERM";
+		return (
+			typeof error === "object" &&
+			error !== null &&
+			"code" in error &&
+			(error as { code?: unknown }).code === "EPERM"
+		);
 	}
 }
 
@@ -80,8 +106,14 @@ export async function restoreNativeHookClaimNoClobber(
 	durability: NativeHookClaimJournalDurability,
 ): Promise<RegularFileSyncOutcome> {
 	const claimStat = await lstat(claimPath);
-	if (claimStat.isSymbolicLink() || !claimStat.isFile() || claimStat.nlink !== 1) {
-		throw new Error(`Native hook claim restore refuses unsafe claim ${claimPath}.`);
+	if (
+		claimStat.isSymbolicLink() ||
+		!claimStat.isFile() ||
+		claimStat.nlink !== 1
+	) {
+		throw new Error(
+			`Native hook claim restore refuses unsafe claim ${claimPath}.`,
+		);
 	}
 	const claimBytes = await readFile(claimPath);
 	let linked = false;
@@ -89,10 +121,16 @@ export async function restoreNativeHookClaimNoClobber(
 		await link(claimPath, destinationPath);
 		linked = true;
 	} catch (error) {
-		const code = typeof error === "object" && error !== null && "code" in error
-			? (error as { code?: unknown }).code
-			: undefined;
-		if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EXDEV") {
+		const code =
+			typeof error === "object" && error !== null && "code" in error
+				? (error as { code?: unknown }).code
+				: undefined;
+		if (
+			code !== "EPERM" &&
+			code !== "ENOTSUP" &&
+			code !== "EOPNOTSUPP" &&
+			code !== "EXDEV"
+		) {
 			throw error;
 		}
 		await copyFile(claimPath, destinationPath, constants.COPYFILE_EXCL);
@@ -105,7 +143,12 @@ export async function restoreNativeHookClaimNoClobber(
 		await destinationHandle.close();
 	}
 	await durability.syncDirectory(dirname(destinationPath));
-	const [currentClaimStat, currentClaimBytes, destinationBytes, destinationStat] = await Promise.all([
+	const [
+		currentClaimStat,
+		currentClaimBytes,
+		destinationBytes,
+		destinationStat,
+	] = await Promise.all([
 		lstat(claimPath),
 		readFile(claimPath),
 		readFile(destinationPath),
@@ -116,7 +159,9 @@ export async function restoreNativeHookClaimNoClobber(
 		currentClaimStat.ino !== claimStat.ino ||
 		!currentClaimBytes.equals(claimBytes) ||
 		!destinationBytes.equals(claimBytes) ||
-		(linked && (currentClaimStat.dev !== destinationStat.dev || currentClaimStat.ino !== destinationStat.ino))
+		(linked &&
+			(currentClaimStat.dev !== destinationStat.dev ||
+				currentClaimStat.ino !== destinationStat.ino))
 	) {
 		throw new Error(`Native hook claim changed during restore: ${claimPath}.`);
 	}
@@ -129,7 +174,9 @@ async function readRegularBytes(path: string): Promise<Buffer | null> {
 	try {
 		const stat = await lstat(path);
 		if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
-			throw new Error(`Native hook claim journal refuses unsafe artifact ${path}.`);
+			throw new Error(
+				`Native hook claim journal refuses unsafe artifact ${path}.`,
+			);
 		}
 		return await readFile(path);
 	} catch (error) {
@@ -144,7 +191,10 @@ function journalPath(root: string): string {
 
 export async function persistNativeHookClaimJournal(
 	root: string,
-	entry: Omit<ClaimJournalEntry, "version" | "ownerPid" | "beforeHash" | "afterHash"> & {
+	entry: Omit<
+		ClaimJournalEntry,
+		"version" | "ownerPid" | "beforeHash" | "afterHash"
+	> & {
 		before: Buffer;
 		after: Buffer | null;
 	},
@@ -163,7 +213,9 @@ export async function persistNativeHookClaimJournal(
 	await mkdir(directory, { recursive: true });
 	const directoryStat = await lstat(directory);
 	if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
-		throw new Error(`Native hook claim journal directory is unsafe: ${directory}`);
+		throw new Error(
+			`Native hook claim journal directory is unsafe: ${directory}`,
+		);
 	}
 	if (directoryCreated) await durability.syncDirectory(dirname(directory));
 	const path = journalPath(root);
@@ -232,7 +284,9 @@ export async function recoverNativeHookClaimJournal(
 	assertControlledPath(root, parsed.canonicalPath);
 	assertControlledPath(root, parsed.claimPath);
 	if (processIsAlive(parsed.ownerPid)) {
-		throw new Error("Native hook claim journal belongs to a live mutation; recovery refused to mutate it.");
+		throw new Error(
+			"Native hook claim journal belongs to a live mutation; recovery refused to mutate it.",
+		);
 	}
 	let outcome: RegularFileSyncOutcome = "synced";
 	try {
@@ -241,13 +295,20 @@ export async function recoverNativeHookClaimJournal(
 			lstat(parsed.claimPath),
 		]);
 		if (
-			!canonicalStat.isSymbolicLink() && canonicalStat.isFile() && canonicalStat.nlink === 2 &&
-			!claimStat.isSymbolicLink() && claimStat.isFile() && claimStat.nlink === 2 &&
-			canonicalStat.dev === claimStat.dev && canonicalStat.ino === claimStat.ino
+			!canonicalStat.isSymbolicLink() &&
+			canonicalStat.isFile() &&
+			canonicalStat.nlink === 2 &&
+			!claimStat.isSymbolicLink() &&
+			claimStat.isFile() &&
+			claimStat.nlink === 2 &&
+			canonicalStat.dev === claimStat.dev &&
+			canonicalStat.ino === claimStat.ino
 		) {
 			const bytes = await readFile(parsed.canonicalPath);
 			if (digest(bytes) !== parsed.beforeHash) {
-				throw new Error("Native hook claim journal cannot finalize a linked restore with changed bytes.");
+				throw new Error(
+					"Native hook claim journal cannot finalize a linked restore with changed bytes.",
+				);
 			}
 			await rm(parsed.claimPath);
 			await durability.syncDirectory(dirname(parsed.claimPath));
@@ -266,7 +327,11 @@ export async function recoverNativeHookClaimJournal(
 			await clearNativeHookClaimJournal(root, durability);
 			return { recovered: true, outcome };
 		}
-		if (canonical !== null && parsed.afterHash !== null && digest(canonical) === parsed.afterHash) {
+		if (
+			canonical !== null &&
+			parsed.afterHash !== null &&
+			digest(canonical) === parsed.afterHash
+		) {
 			await clearNativeHookClaimJournal(root, durability);
 			return { recovered: true, outcome };
 		}
@@ -274,13 +339,21 @@ export async function recoverNativeHookClaimJournal(
 			await clearNativeHookClaimJournal(root, durability);
 			return { recovered: true, outcome };
 		}
-		throw new Error("Native hook claim journal cannot recover: claim is missing and canonical bytes are not the recorded original.");
+		throw new Error(
+			"Native hook claim journal cannot recover: claim is missing and canonical bytes are not the recorded original.",
+		);
 	}
 	if (digest(claim) !== parsed.beforeHash) {
-		throw new Error("Native hook claim journal cannot recover: claim bytes do not match recorded ownership.");
+		throw new Error(
+			"Native hook claim journal cannot recover: claim bytes do not match recorded ownership.",
+		);
 	}
 	if (canonical === null) {
-		outcome = await restoreNativeHookClaimNoClobber(parsed.claimPath, parsed.canonicalPath, durability);
+		outcome = await restoreNativeHookClaimNoClobber(
+			parsed.claimPath,
+			parsed.canonicalPath,
+			durability,
+		);
 		await clearNativeHookClaimJournal(root, durability);
 		return { recovered: true, outcome };
 	}
@@ -290,5 +363,7 @@ export async function recoverNativeHookClaimJournal(
 		await clearNativeHookClaimJournal(root, durability);
 		return { recovered: true, outcome };
 	}
-	throw new Error("Native hook claim journal cannot recover without overwriting unrecognized canonical content.");
+	throw new Error(
+		"Native hook claim journal cannot recover without overwriting unrecognized canonical content.",
+	);
 }

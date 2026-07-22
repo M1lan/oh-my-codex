@@ -47,7 +47,8 @@ export function resolvePersistedSetupMergeAgents(
 	preferences: PartialPersistedSetupScope | undefined,
 	scope: SetupScope,
 ): boolean | undefined {
-	return preferences?.scope === scope && typeof preferences.mergeAgents === "boolean"
+	return preferences?.scope === scope &&
+		typeof preferences.mergeAgents === "boolean"
 		? preferences.mergeAgents
 		: undefined;
 }

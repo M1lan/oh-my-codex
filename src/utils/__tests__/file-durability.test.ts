@@ -13,25 +13,55 @@ function errno(code: unknown): Error & { code: unknown } {
 
 test("regular-file sync returns the Windows EPERM durability outcome", async () => {
 	const outcome = await syncRegularFile(
-		{ sync: async () => { throw errno("EPERM"); } },
+		{
+			sync: async () => {
+				throw errno("EPERM");
+			},
+		},
 		"win32",
 	);
 	assert.equal(outcome, "unsupported-windows-eperm");
 });
 
 test("regular-file sync returns synced after a successful sync", async () => {
-	assert.equal(await syncRegularFile({ sync: async () => {} }, "win32"), "synced");
+	assert.equal(
+		await syncRegularFile({ sync: async () => {} }, "win32"),
+		"synced",
+	);
 });
 
 for (const { description, platform, failure } of [
-	{ description: "Linux string EPERM", platform: "linux", failure: errno("EPERM") },
-	{ description: "Windows EACCES", platform: "win32", failure: errno("EACCES") },
-	{ description: "Windows non-string code", platform: "win32", failure: errno(1) },
-	{ description: "Windows message-only EPERM", platform: "win32", failure: new Error("EPERM") },
+	{
+		description: "Linux string EPERM",
+		platform: "linux",
+		failure: errno("EPERM"),
+	},
+	{
+		description: "Windows EACCES",
+		platform: "win32",
+		failure: errno("EACCES"),
+	},
+	{
+		description: "Windows non-string code",
+		platform: "win32",
+		failure: errno(1),
+	},
+	{
+		description: "Windows message-only EPERM",
+		platform: "win32",
+		failure: new Error("EPERM"),
+	},
 ] as const) {
 	test(`regular-file sync preserves fatal error identity for ${description}`, async () => {
 		await assert.rejects(
-			syncRegularFile({ sync: async () => { throw failure; } }, platform),
+			syncRegularFile(
+				{
+					sync: async () => {
+						throw failure;
+					},
+				},
+				platform,
+			),
 			(error: unknown) => error === failure,
 		);
 	});
@@ -62,9 +92,13 @@ test("a throwing stderr sink cannot fail an already successful transaction", () 
 	const originalWrite = process.stderr.write;
 	const tracker: RegularFileDurabilityTracker = { degraded: false };
 	recordRegularFileSyncOutcome(tracker, "unsupported-windows-eperm");
-	process.stderr.write = (() => { throw new Error("stderr unavailable"); }) as typeof process.stderr.write;
+	process.stderr.write = (() => {
+		throw new Error("stderr unavailable");
+	}) as typeof process.stderr.write;
 	try {
-		assert.doesNotThrow(() => emitDegradedDurabilityWarning("session pointer end", tracker));
+		assert.doesNotThrow(() =>
+			emitDegradedDurabilityWarning("session pointer end", tracker),
+		);
 	} finally {
 		process.stderr.write = originalWrite;
 	}

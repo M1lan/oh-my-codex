@@ -18,7 +18,15 @@ import {
 	chmod,
 } from "fs/promises";
 
-import { join, dirname, relative, basename, isAbsolute, sep, win32 } from "path";
+import {
+	join,
+	dirname,
+	relative,
+	basename,
+	isAbsolute,
+	sep,
+	win32,
+} from "path";
 
 import { constants, existsSync } from "fs";
 import { spawnSync } from "child_process";
@@ -107,10 +115,7 @@ import { readSessionState, isSessionStale } from "../hooks/session.js";
 import { getCatalogHeadlineCounts } from "./catalog-contract.js";
 import { tryReadCatalogManifest } from "../catalog/reader.js";
 import { DEFAULT_FRONTIER_MODEL } from "../config/models.js";
-import {
-	teamModeEnabled,
-	type SetupTeamMode,
-} from "../config/team-mode.js";
+import { teamModeEnabled, type SetupTeamMode } from "../config/team-mode.js";
 import {
 	addGeneratedAgentsMarker,
 	hasOmxAgentsContract,
@@ -320,7 +325,7 @@ function applyPluginModeWordingToAgentsTemplate(
 	return scopedContent.replace(
 		/Role prompts under `prompts\/\*\.md` are narrower execution surfaces\. They must follow this file, not override it\.\nWhen OMX is installed, load the installed prompt\/skill\/agent surfaces from [^\n]+active\)\./,
 		`Registered Codex plugin marketplace surfaces supply OMX workflows and plugin-scoped companion resources when the plugin is installed. Native agent roles are installed as setup-owned Codex agent TOML files in plugin mode so agent_type routing works. They must follow this file, not override it.\nUser-installed skills may still live under ${userSkillPath}.`,
-		);
+	);
 }
 
 function stripNamedXmlSection(content: string, sectionName: string): string {
@@ -330,11 +335,18 @@ function stripNamedXmlSection(content: string, sectionName: string): string {
 	);
 }
 
-function applyTeamModeToAgentsTemplate(content: string, teamMode: SetupTeamMode): string {
+function applyTeamModeToAgentsTemplate(
+	content: string,
+	teamMode: SetupTeamMode,
+): string {
 	if (teamModeEnabled(teamMode)) return content;
 
 	let next = content;
-	for (const section of ["team_compositions", "team_pipeline", "team_model_resolution"]) {
+	for (const section of [
+		"team_compositions",
+		"team_pipeline",
+		"team_model_resolution",
+	]) {
 		next = stripNamedXmlSection(next, section);
 	}
 
@@ -457,7 +469,11 @@ function logManagedCodexHooksPlanDiagnostics(
 	}
 }
 
-type NativeHookTransactionArtifactKind = "shim" | "hooks" | "config" | "metadata";
+type NativeHookTransactionArtifactKind =
+	| "shim"
+	| "hooks"
+	| "config"
+	| "metadata";
 type NativeHookTransactionFailureStage =
 	| "before_precondition"
 	| "before_backup"
@@ -475,7 +491,6 @@ type NativeHookTransactionFailureStage =
 	| "before_rollback_remove"
 	| "before_staged_cleanup"
 	| "after_staged_cleanup";
-
 
 type NativeHookTransactionTopology =
 	| { kind: "absent" }
@@ -506,7 +521,6 @@ interface NativeHookTransactionPrecondition {
 	before: NativeHookTransactionArtifactSnapshot;
 }
 
-
 type NativeHookTransactionAncestorTopology =
 	| { kind: "absent" }
 	| { kind: "directory"; device: number; inode: number };
@@ -528,17 +542,13 @@ interface AppliedNativeHookTransactionArtifact {
 	stagedDeletionPath?: string;
 	stagedDeletionSnapshot?: NativeHookTransactionArtifactSnapshot;
 	stagedDeletionCleaned?: boolean;
-
 }
-
-
-
 
 let nativeHookTransactionFailureInjector:
 	| ((
-		stage: NativeHookTransactionFailureStage,
-		target: NativeHookTransactionArtifact | NativeHookTransactionPrecondition,
-	) => void)
+			stage: NativeHookTransactionFailureStage,
+			target: NativeHookTransactionArtifact | NativeHookTransactionPrecondition,
+	  ) => void)
 	| undefined;
 let nativeHookTransactionSequence = 0;
 let nativeHookTransactionPlatformOverride: NodeJS.Platform | undefined;
@@ -549,17 +559,19 @@ let setupLatePhaseFailureInjector: (() => void) | undefined;
 let nativeHookTransactionRegularFileSyncOverride:
 	| ((platform: NodeJS.Platform) => Promise<void>)
 	| undefined;
-let nativeHookClaimJournalDurabilityOverride: NativeHookClaimJournalDurability | undefined;
-
-
+let nativeHookClaimJournalDurabilityOverride:
+	| NativeHookClaimJournalDurability
+	| undefined;
 
 /** @internal Test seam for deterministic atomic-write and rollback coverage. */
 export function setNativeHookTransactionFailureInjectorForTest(
 	injector:
 		| ((
-			stage: NativeHookTransactionFailureStage,
-			target: NativeHookTransactionArtifact | NativeHookTransactionPrecondition,
-		) => void)
+				stage: NativeHookTransactionFailureStage,
+				target:
+					| NativeHookTransactionArtifact
+					| NativeHookTransactionPrecondition,
+		  ) => void)
 		| undefined,
 ): () => void {
 	const previous = nativeHookTransactionFailureInjector;
@@ -593,11 +605,7 @@ export function setNativeHookTransactionPlatformForTest(
 
 /** @internal Test seam for deterministic native transaction temporary-path coverage. */
 export function setNativeHookTransactionTemporaryPathForTest(
-	resolver:
-		| ((path: string, purpose: "write" | "delete") => string)
-		| undefined,
-
-
+	resolver: ((path: string, purpose: "write" | "delete") => string) | undefined,
 ): () => void {
 	const previous = nativeHookTransactionTemporaryPathOverride;
 	nativeHookTransactionTemporaryPathOverride = resolver;
@@ -632,21 +640,29 @@ function nativeHookPlatform(): NodeJS.Platform {
 	return nativeHookTransactionPlatformOverride ?? process.platform;
 }
 
-
 function nativeHookClaimJournalDurability() {
-	return nativeHookClaimJournalDurabilityOverride
-		?? createNativeHookClaimJournalDurability(nativeHookPlatform());
+	return (
+		nativeHookClaimJournalDurabilityOverride ??
+		createNativeHookClaimJournalDurability(nativeHookPlatform())
+	);
 }
 
 async function clearNativeHookClaimJournal(root: string): Promise<void> {
-	return clearNativeHookClaimJournalWithDurability(root, nativeHookClaimJournalDurability());
+	return clearNativeHookClaimJournalWithDurability(
+		root,
+		nativeHookClaimJournalDurability(),
+	);
 }
 
 async function persistNativeHookClaimJournal(
 	root: string,
 	entry: Parameters<typeof persistNativeHookClaimJournalWithDurability>[1],
 ): Promise<RegularFileSyncOutcome> {
-	return persistNativeHookClaimJournalWithDurability(root, entry, nativeHookClaimJournalDurability());
+	return persistNativeHookClaimJournalWithDurability(
+		root,
+		entry,
+		nativeHookClaimJournalDurability(),
+	);
 }
 
 async function restoreNativeHookClaimNoClobber(
@@ -661,7 +677,10 @@ async function restoreNativeHookClaimNoClobber(
 }
 
 async function syncNativeHookClaimParent(path: string): Promise<void> {
-	return syncNativeHookClaimParentWithDurability(path, nativeHookClaimJournalDurability());
+	return syncNativeHookClaimParentWithDurability(
+		path,
+		nativeHookClaimJournalDurability(),
+	);
 }
 async function syncNativeHookRegularFile(
 	handle: Awaited<ReturnType<typeof open>>,
@@ -700,7 +719,6 @@ function isMissingPathError(error: unknown): boolean {
 		(error as { code?: unknown }).code === "ENOENT"
 	);
 }
-
 
 function nativeHookTransactionArtifactAncestorPaths(
 	controlledRoot: string,
@@ -781,7 +799,8 @@ async function captureNativeHookTransactionAncestorPrecondition(
 	return {
 		controlledRoot,
 		ancestorPaths,
-		snapshots: await captureNativeHookTransactionAncestorSnapshots(ancestorPaths),
+		snapshots:
+			await captureNativeHookTransactionAncestorSnapshots(ancestorPaths),
 	};
 }
 
@@ -794,7 +813,12 @@ async function assertNativeHookTransactionAncestorPrecondition(
 	for (let index = 0; index < precondition.snapshots.length; index += 1) {
 		const expected = precondition.snapshots[index]!;
 		const current = actual[index]!;
-		if (!nativeHookTransactionAncestorTopologyEqual(current.topology, expected.topology)) {
+		if (
+			!nativeHookTransactionAncestorTopologyEqual(
+				current.topology,
+				expected.topology,
+			)
+		) {
 			throw new Error(
 				`Native hook transaction precondition changed for ancestor ${expected.path}; refusing to mutate a stale topology.`,
 			);
@@ -807,7 +831,9 @@ async function refreshNativeHookTransactionAncestorPrecondition(
 	artifactPath: string,
 ): Promise<void> {
 	const allowedCreatedPaths = new Set(
-		nativeHookTransactionArtifactAncestorPaths(precondition.controlledRoot, [artifactPath]),
+		nativeHookTransactionArtifactAncestorPaths(precondition.controlledRoot, [
+			artifactPath,
+		]),
 	);
 	const actual = await captureNativeHookTransactionAncestorSnapshots(
 		precondition.ancestorPaths,
@@ -815,7 +841,12 @@ async function refreshNativeHookTransactionAncestorPrecondition(
 	for (let index = 0; index < precondition.snapshots.length; index += 1) {
 		const expected = precondition.snapshots[index]!;
 		const current = actual[index]!;
-		if (nativeHookTransactionAncestorTopologyEqual(current.topology, expected.topology)) {
+		if (
+			nativeHookTransactionAncestorTopologyEqual(
+				current.topology,
+				expected.topology,
+			)
+		) {
 			continue;
 		}
 		if (
@@ -930,7 +961,8 @@ function nativeHookTransactionOutputTopology(
 	if (after === null) return { kind: "absent" };
 	return {
 		kind: "regular_file",
-		mode: before.topology.kind === "regular_file" ? before.topology.mode : 0o600,
+		mode:
+			before.topology.kind === "regular_file" ? before.topology.mode : 0o600,
 	};
 }
 
@@ -945,14 +977,14 @@ function nativeHookTransactionArtifact(
 	return hookTransactionBytesEqual(before.bytes, after)
 		? null
 		: {
-			kind,
-			path,
-			label,
-			before,
-			after,
-			afterTopology: nativeHookTransactionOutputTopology(before, after),
-			hookPlatform,
-		};
+				kind,
+				path,
+				label,
+				before,
+				after,
+				afterTopology: nativeHookTransactionOutputTopology(before, after),
+				hookPlatform,
+			};
 }
 
 function nativeHookTransactionPrecondition(
@@ -1000,8 +1032,12 @@ function normalizeWindowsShimReferencePath(path: string): string | null {
 	) {
 		return null;
 	}
-	const isDriveAbsolute = /^[A-Za-z]:\\(?:[^\\:]+(?:\\[^\\:]+)*)?$/.test(windowsPath);
-	const isUncAbsolute = /^\\\\[^\\:]+\\[^\\:]+(?:\\[^\\:]+)*$/.test(windowsPath);
+	const isDriveAbsolute = /^[A-Za-z]:\\(?:[^\\:]+(?:\\[^\\:]+)*)?$/.test(
+		windowsPath,
+	);
+	const isUncAbsolute = /^\\\\[^\\:]+\\[^\\:]+(?:\\[^\\:]+)*$/.test(
+		windowsPath,
+	);
 	if (!isDriveAbsolute && !isUncAbsolute) return null;
 	return win32.normalize(windowsPath).toLowerCase();
 }
@@ -1039,13 +1075,15 @@ function decodeWindowsShimReferencePath(command: string): string | null {
 
 function hasPotentialWindowsPathAlias(path: string): boolean {
 	const windowsPath = path.replace(/\//g, "\\");
-	return windowsPath.split("\\").some(
-		(component) =>
-			component === "." ||
-			component === ".." ||
-			/[. ]$/.test(component) ||
-			/~\d+(?:\.[^\\]*)?$/i.test(component),
-	);
+	return windowsPath
+		.split("\\")
+		.some(
+			(component) =>
+				component === "." ||
+				component === ".." ||
+				/[. ]$/.test(component) ||
+				/~\d+(?:\.[^\\]*)?$/i.test(component),
+		);
 }
 
 function windowsShimCommandReferenceDecision(
@@ -1055,7 +1093,8 @@ function windowsShimCommandReferenceDecision(
 	const decodedShimPath = decodeWindowsShimReferencePath(command);
 	if (decodedShimPath === null) return "ambiguous";
 
-	const normalizedDecodedPath = normalizeWindowsShimReferencePath(decodedShimPath);
+	const normalizedDecodedPath =
+		normalizeWindowsShimReferencePath(decodedShimPath);
 	const normalizedShimPath = normalizeWindowsShimReferencePath(shimPath);
 	if (normalizedDecodedPath === null || normalizedShimPath === null) {
 		return "ambiguous";
@@ -1092,11 +1131,7 @@ export function decideWindowsNativeHookShimReference(
 	for (const eventGroups of Object.values(hooks)) {
 		if (!Array.isArray(eventGroups)) continue;
 		for (const group of eventGroups) {
-
-			if (
-				!isWindowsShimReferenceRecord(group) ||
-				!Array.isArray(group.hooks)
-			) {
+			if (!isWindowsShimReferenceRecord(group) || !Array.isArray(group.hooks)) {
 				continue;
 			}
 
@@ -1113,7 +1148,10 @@ export function decideWindowsNativeHookShimReference(
 					handler.command,
 				]) {
 					if (typeof command !== "string") continue;
-					const decision = windowsShimCommandReferenceDecision(command, shimPath);
+					const decision = windowsShimCommandReferenceDecision(
+						command,
+						shimPath,
+					);
 					if (decision === "referenced") return decision;
 					if (decision === "ambiguous") ambiguous = true;
 				}
@@ -1174,7 +1212,6 @@ async function restoreNativeHookClaim(
 	);
 }
 
-
 async function atomicWriteNativeHookTransactionArtifact(
 	artifact: NativeHookTransactionArtifact,
 	content: Buffer,
@@ -1185,9 +1222,11 @@ async function atomicWriteNativeHookTransactionArtifact(
 	onWriteApplied?: (snapshot: NativeHookTransactionArtifactSnapshot) => void,
 	onWriteStabilized?: (snapshot: NativeHookTransactionArtifactSnapshot) => void,
 	assertApplied?: () => Promise<void>,
-
 ): Promise<void> {
-	const temporaryPath = nativeHookTransactionTemporaryPath(artifact.path, "write");
+	const temporaryPath = nativeHookTransactionTemporaryPath(
+		artifact.path,
+		"write",
+	);
 	let temporaryCreated = false;
 	let temporarySnapshot: NativeHookTransactionArtifactSnapshot | undefined;
 	let claimPath: string | undefined;
@@ -1226,7 +1265,10 @@ async function atomicWriteNativeHookTransactionArtifact(
 		temporaryCreated = true;
 		try {
 			await handle.writeFile(content);
-			recordRegularFileSyncOutcome(tracker, await syncNativeHookRegularFile(handle));
+			recordRegularFileSyncOutcome(
+				tracker,
+				await syncNativeHookRegularFile(handle),
+			);
 		} finally {
 			await handle.close();
 		}
@@ -1268,7 +1310,10 @@ async function atomicWriteNativeHookTransactionArtifact(
 			artifact,
 		);
 		claimPath = nativeHookTransactionClaimPath(artifact.path);
-		const claimRelativePath = relative(ancestorPrecondition.controlledRoot, artifact.path);
+		const claimRelativePath = relative(
+			ancestorPrecondition.controlledRoot,
+			artifact.path,
+		);
 		const canJournalClaim =
 			!isAbsolute(claimRelativePath) &&
 			claimRelativePath !== ".." &&
@@ -1277,16 +1322,23 @@ async function atomicWriteNativeHookTransactionArtifact(
 			if (canJournalClaim) {
 				recordRegularFileSyncOutcome(
 					tracker,
-					await persistNativeHookClaimJournal(ancestorPrecondition.controlledRoot, {
-						canonicalPath: artifact.path,
-						claimPath,
-						before: expectedCurrent.bytes,
-						after: content,
-					}),
+					await persistNativeHookClaimJournal(
+						ancestorPrecondition.controlledRoot,
+						{
+							canonicalPath: artifact.path,
+							claimPath,
+							before: expectedCurrent.bytes,
+							after: content,
+						},
+					),
 				);
 				await refreshNativeHookTransactionAncestorPrecondition(
 					ancestorPrecondition,
-					join(ancestorPrecondition.controlledRoot, ".omx", "native-hook-claim-journal.json"),
+					join(
+						ancestorPrecondition.controlledRoot,
+						".omx",
+						"native-hook-claim-journal.json",
+					),
 				);
 				journaledClaim = true;
 			}
@@ -1306,7 +1358,10 @@ async function atomicWriteNativeHookTransactionArtifact(
 		}
 		const installedHandle = await open(artifact.path, "r");
 		try {
-			recordRegularFileSyncOutcome(tracker, await syncNativeHookRegularFile(installedHandle));
+			recordRegularFileSyncOutcome(
+				tracker,
+				await syncNativeHookRegularFile(installedHandle),
+			);
 		} finally {
 			await installedHandle.close();
 		}
@@ -1347,7 +1402,9 @@ async function atomicWriteNativeHookTransactionArtifact(
 				await syncNativeHookClaimParent(artifact.path);
 				claimCreated = false;
 				if (journaledClaim) {
-					await clearNativeHookClaimJournal(ancestorPrecondition.controlledRoot);
+					await clearNativeHookClaimJournal(
+						ancestorPrecondition.controlledRoot,
+					);
 					journaledClaim = false;
 				}
 			} catch (recoveryError) {
@@ -1359,7 +1416,9 @@ async function atomicWriteNativeHookTransactionArtifact(
 		if (temporaryCreated) {
 			try {
 				if (!temporarySnapshot) {
-					throw new Error("temporary path was not fully captured after writing");
+					throw new Error(
+						"temporary path was not fully captured after writing",
+					);
 				}
 				await assertNativeHookTransactionArtifactSnapshot(
 					temporaryPath,
@@ -1367,7 +1426,9 @@ async function atomicWriteNativeHookTransactionArtifact(
 					temporarySnapshot,
 					"read-back",
 				);
-				await assertNativeHookTransactionAncestorPrecondition(ancestorPrecondition);
+				await assertNativeHookTransactionAncestorPrecondition(
+					ancestorPrecondition,
+				);
 				await rm(temporaryPath);
 			} catch (cleanupError) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -1379,7 +1440,6 @@ async function atomicWriteNativeHookTransactionArtifact(
 		throw error;
 	}
 }
-
 
 async function assertNativeHookTransactionArtifactState(
 	path: string,
@@ -1482,7 +1542,6 @@ async function assertNativeHookTransactionRollbackState(
 	await assertAppliedNativeHookTransactionSnapshots(applied);
 }
 
-
 async function applyNativeHookTransactionArtifact(
 	artifact: NativeHookTransactionArtifact,
 	ancestorPrecondition: NativeHookTransactionAncestorPrecondition,
@@ -1512,19 +1571,26 @@ async function applyNativeHookTransactionArtifact(
 			},
 			(stabilizedSnapshot) => {
 				if (!entry) {
-					throw new Error("native hook transaction write was not registered as applied");
+					throw new Error(
+						"native hook transaction write was not registered as applied",
+					);
 				}
 				entry.appliedSnapshot = stabilizedSnapshot;
 			},
 			() => assertAppliedNativeHookTransactionSnapshots(applied),
 		);
 		if (!entry) {
-			throw new Error("native hook transaction write was not registered as applied");
+			throw new Error(
+				"native hook transaction write was not registered as applied",
+			);
 		}
 		return entry;
 	}
 
-	const stagedDeletionPath = nativeHookTransactionTemporaryPath(artifact.path, "delete");
+	const stagedDeletionPath = nativeHookTransactionTemporaryPath(
+		artifact.path,
+		"delete",
+	);
 	let stagedDeletionCreated = false;
 	let originalRemoved = false;
 	let stagedDeletionSnapshot: NativeHookTransactionArtifactSnapshot | undefined;
@@ -1549,7 +1615,10 @@ async function applyNativeHookTransactionArtifact(
 		stagedDeletionCreated = true;
 		try {
 			await handle.writeFile(artifact.before.bytes!);
-			recordRegularFileSyncOutcome(tracker, await syncNativeHookRegularFile(handle));
+			recordRegularFileSyncOutcome(
+				tracker,
+				await syncNativeHookRegularFile(handle),
+			);
 		} finally {
 			await handle.close();
 		}
@@ -1577,7 +1646,10 @@ async function applyNativeHookTransactionArtifact(
 			"read-back",
 		);
 		await assertAppliedNativeHookTransactionSnapshots(applied);
-		injectNativeHookTransactionFailure("after_final_remove_validation", artifact);
+		injectNativeHookTransactionFailure(
+			"after_final_remove_validation",
+			artifact,
+		);
 		await assertNativeHookTransactionArtifactSnapshot(
 			stagedDeletionPath,
 			`${artifact.label} staged deletion`,
@@ -1586,8 +1658,10 @@ async function applyNativeHookTransactionArtifact(
 		);
 		const claimPath = nativeHookTransactionClaimPath(artifact.path);
 
-
-		const claimRelativePath = relative(ancestorPrecondition.controlledRoot, artifact.path);
+		const claimRelativePath = relative(
+			ancestorPrecondition.controlledRoot,
+			artifact.path,
+		);
 		const journaledClaim =
 			!isAbsolute(claimRelativePath) &&
 			claimRelativePath !== ".." &&
@@ -1595,12 +1669,15 @@ async function applyNativeHookTransactionArtifact(
 		if (journaledClaim) {
 			recordRegularFileSyncOutcome(
 				tracker,
-				await persistNativeHookClaimJournal(ancestorPrecondition.controlledRoot, {
-					canonicalPath: artifact.path,
-					claimPath,
-					before: artifact.before.bytes!,
-					after: null,
-				}),
+				await persistNativeHookClaimJournal(
+					ancestorPrecondition.controlledRoot,
+					{
+						canonicalPath: artifact.path,
+						claimPath,
+						before: artifact.before.bytes!,
+						after: null,
+					},
+				),
 			);
 		}
 		await rename(artifact.path, claimPath);
@@ -1613,9 +1690,9 @@ async function applyNativeHookTransactionArtifact(
 		};
 		applied.push(entry);
 		try {
-
-
-			await assertNativeHookTransactionAncestorPrecondition(ancestorPrecondition);
+			await assertNativeHookTransactionAncestorPrecondition(
+				ancestorPrecondition,
+			);
 
 			await assertNativeHookTransactionArtifactSnapshot(
 				claimPath,
@@ -1624,7 +1701,6 @@ async function applyNativeHookTransactionArtifact(
 				"precondition",
 			);
 		} catch (error) {
-
 			try {
 				const claimed = await captureNativeHookTransactionArtifact(
 					claimPath,
@@ -1633,7 +1709,9 @@ async function applyNativeHookTransactionArtifact(
 				await restoreNativeHookClaim(claimPath, artifact.path, tracker);
 				if (journaledClaim) await syncNativeHookClaimParent(artifact.path);
 				if (journaledClaim) {
-					await clearNativeHookClaimJournal(ancestorPrecondition.controlledRoot);
+					await clearNativeHookClaimJournal(
+						ancestorPrecondition.controlledRoot,
+					);
 				}
 				await assertNativeHookTransactionArtifactSnapshot(
 					artifact.path,
@@ -1649,7 +1727,6 @@ async function applyNativeHookTransactionArtifact(
 				);
 			}
 			throw error;
-
 		}
 		await rm(claimPath);
 		if (journaledClaim) await syncNativeHookClaimParent(claimPath);
@@ -1663,7 +1740,9 @@ async function applyNativeHookTransactionArtifact(
 		if (stagedDeletionCreated && !originalRemoved) {
 			try {
 				if (!stagedDeletionSnapshot) {
-					throw new Error("staged deletion path was not fully captured after writing");
+					throw new Error(
+						"staged deletion path was not fully captured after writing",
+					);
 				}
 				await assertNativeHookTransactionArtifactSnapshot(
 					stagedDeletionPath,
@@ -1671,7 +1750,9 @@ async function applyNativeHookTransactionArtifact(
 					stagedDeletionSnapshot,
 					"read-back",
 				);
-				await assertNativeHookTransactionAncestorPrecondition(ancestorPrecondition);
+				await assertNativeHookTransactionAncestorPrecondition(
+					ancestorPrecondition,
+				);
 				const claimPath = nativeHookTransactionClaimPath(artifact.path);
 
 				await rename(stagedDeletionPath, claimPath);
@@ -1684,7 +1765,11 @@ async function applyNativeHookTransactionArtifact(
 					);
 				} catch (claimError) {
 					try {
-						await restoreNativeHookClaim(claimPath, stagedDeletionPath, tracker);
+						await restoreNativeHookClaim(
+							claimPath,
+							stagedDeletionPath,
+							tracker,
+						);
 					} catch (recoveryError) {
 						throw new Error(
 							`Native hook transaction staged deletion cleanup claim failed (${claimError instanceof Error ? claimError.message : String(claimError)}) and preserved ${claimPath} for manual recovery: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
@@ -1709,14 +1794,20 @@ async function verifyNativeHookTransactionArtifact(
 ): Promise<void> {
 	const { artifact } = applied;
 	injectNativeHookTransactionFailure("before_readback", artifact);
-	const actual = await captureNativeHookTransactionArtifact(artifact.path, artifact.label);
+	const actual = await captureNativeHookTransactionArtifact(
+		artifact.path,
+		artifact.label,
+	);
 	if (!nativeHookTransactionSnapshotsEqual(actual, applied.appliedSnapshot)) {
 		throw new Error(
 			`Native hook transaction read-back changed for ${artifact.label}; refusing to overwrite concurrent content.`,
 		);
 	}
 	if (artifact.after === null) return;
-	const content = decodeNativeHookTransactionUtf8(actual.bytes!, artifact.label);
+	const content = decodeNativeHookTransactionUtf8(
+		actual.bytes!,
+		artifact.label,
+	);
 	if (artifact.kind === "hooks") {
 		const validation = validateCodexHooksConfigStrict(content, {
 			platform: artifact.hookPlatform,
@@ -1737,7 +1828,10 @@ async function restoreNativeHookTransactionArtifact(
 	assertRollbackState: () => Promise<void>,
 ): Promise<void> {
 	const { artifact } = applied;
-	const current = await captureNativeHookTransactionArtifact(artifact.path, artifact.label);
+	const current = await captureNativeHookTransactionArtifact(
+		artifact.path,
+		artifact.label,
+	);
 	if (!nativeHookTransactionSnapshotsEqual(current, applied.appliedSnapshot)) {
 		throw new Error(
 			`Native hook transaction rollback preserved ${artifact.path} for manual recovery because ${artifact.label} no longer matches the transaction-owned version.`,
@@ -1754,14 +1848,15 @@ async function restoreNativeHookTransactionArtifact(
 		);
 		await assertNativeHookTransactionAncestorPrecondition(ancestorPrecondition);
 		await assertRollbackState();
-		injectNativeHookTransactionFailure("after_final_restore_validation", artifact);
+		injectNativeHookTransactionFailure(
+			"after_final_restore_validation",
+			artifact,
+		);
 		const claimPath = nativeHookTransactionClaimPath(artifact.path);
 
 		await rename(artifact.path, claimPath);
 		applied.appliedSnapshot = { bytes: null, topology: { kind: "absent" } };
 		try {
-
-
 			await assertNativeHookTransactionArtifactSnapshot(
 				claimPath,
 				`${artifact.label} rollback removal claim`,
@@ -1912,15 +2007,23 @@ async function ensureSnapshotBackup(
 ): Promise<boolean> {
 	const bytes = artifact.before.bytes;
 	if (bytes === null) return false;
-	const backupPath = nativeHookTransactionBackupPath(artifact.path, backupContext);
+	const backupPath = nativeHookTransactionBackupPath(
+		artifact.path,
+		backupContext,
+	);
 	if (!options.dryRun) {
-		const relativeParent = relative(backupContext.baseRoot, dirname(backupPath));
+		const relativeParent = relative(
+			backupContext.baseRoot,
+			dirname(backupPath),
+		);
 		if (
 			isAbsolute(relativeParent) ||
 			relativeParent === ".." ||
 			relativeParent.startsWith(`..${sep}`)
 		) {
-			throw new Error(`Refusing to back up ${artifact.path} outside controlled backup root.`);
+			throw new Error(
+				`Refusing to back up ${artifact.path} outside controlled backup root.`,
+			);
 		}
 		let currentPath = backupContext.baseRoot;
 		for (const component of relativeParent.split(sep).filter(Boolean)) {
@@ -1928,31 +2031,46 @@ async function ensureSnapshotBackup(
 			try {
 				const currentStat = await lstat(currentPath);
 				if (currentStat.isSymbolicLink() || !currentStat.isDirectory()) {
-					throw new Error(`Refusing to use unsafe backup ancestor ${currentPath}.`);
+					throw new Error(
+						`Refusing to use unsafe backup ancestor ${currentPath}.`,
+					);
 				}
 			} catch (error) {
 				if (!isMissingPathError(error)) throw error;
 				await mkdir(currentPath);
 				const createdStat = await lstat(currentPath);
 				if (createdStat.isSymbolicLink() || !createdStat.isDirectory()) {
-					throw new Error(`Refusing to use unsafe created backup ancestor ${currentPath}.`);
+					throw new Error(
+						`Refusing to use unsafe created backup ancestor ${currentPath}.`,
+					);
 				}
 			}
 		}
 		const handle = await open(backupPath, "wx", 0o600);
 		try {
 			await handle.writeFile(bytes);
-			recordRegularFileSyncOutcome(tracker, await syncNativeHookRegularFile(handle));
+			recordRegularFileSyncOutcome(
+				tracker,
+				await syncNativeHookRegularFile(handle),
+			);
 		} finally {
 			await handle.close();
 		}
 		const backupStat = await lstat(backupPath);
-		if (backupStat.isSymbolicLink() || !backupStat.isFile() || backupStat.nlink !== 1) {
-			throw new Error(`Refusing unsafe native hook transaction backup ${backupPath}.`);
+		if (
+			backupStat.isSymbolicLink() ||
+			!backupStat.isFile() ||
+			backupStat.nlink !== 1
+		) {
+			throw new Error(
+				`Refusing unsafe native hook transaction backup ${backupPath}.`,
+			);
 		}
 		const writtenBytes = await readFile(backupPath);
 		if (!writtenBytes.equals(bytes)) {
-			throw new Error(`Native hook transaction backup verification failed for ${backupPath}.`);
+			throw new Error(
+				`Native hook transaction backup verification failed for ${backupPath}.`,
+			);
 		}
 	}
 	if (options.verbose) {
@@ -2011,7 +2129,10 @@ async function commitNativeHookTransaction(
 			);
 			await assertAppliedNativeHookTransactionSnapshots(applied);
 		}
-		await assertUnmutatedNativeHookTransactionPreconditions(preconditions, applied);
+		await assertUnmutatedNativeHookTransactionPreconditions(
+			preconditions,
+			applied,
+		);
 		await assertAppliedNativeHookTransactionSnapshots(applied);
 		stagedCleanupStarted = true;
 		await cleanupNativeHookTransactionStagedDeletions(
@@ -2024,7 +2145,10 @@ async function commitNativeHookTransaction(
 			"after_staged_cleanup",
 			artifacts[artifacts.length - 1],
 		);
-		await assertUnmutatedNativeHookTransactionPreconditions(preconditions, applied);
+		await assertUnmutatedNativeHookTransactionPreconditions(
+			preconditions,
+			applied,
+		);
 		await assertNativeHookTransactionAncestorPrecondition(ancestorPrecondition);
 		await assertAppliedNativeHookTransactionSnapshots(applied);
 	} catch (error) {
@@ -2087,10 +2211,11 @@ async function commitNativeHookTransaction(
 				`Native hook transaction failed (${message}) and rollback failed; manual recovery is required (${rollbackFailures.join("; ")}).`,
 			);
 		}
-		throw new Error(`Native hook transaction failed and was rolled back: ${message}`);
+		throw new Error(
+			`Native hook transaction failed and was rolled back: ${message}`,
+		);
 	}
 }
-
 
 async function ensureBackup(
 	destinationPath: string,
@@ -2429,9 +2554,9 @@ function hasPersistedSetupPreferences(
 ): preferences is Partial<PersistedSetupScope> {
 	return Boolean(
 		preferences?.scope ||
-		preferences?.installMode ||
-		preferences?.teamMode ||
-		typeof preferences?.mergeAgents === "boolean",
+			preferences?.installMode ||
+			preferences?.teamMode ||
+			typeof preferences?.mergeAgents === "boolean",
 	);
 }
 
@@ -2583,7 +2708,8 @@ function classifyPluginDeveloperInstructions(
 		return "historical";
 	}
 	if (
-		normalized === normalizeDeveloperInstructionsText(OMX_DEVELOPER_INSTRUCTIONS)
+		normalized ===
+		normalizeDeveloperInstructionsText(OMX_DEVELOPER_INSTRUCTIONS)
 	) {
 		return "historical";
 	}
@@ -2688,19 +2814,19 @@ async function resolvePluginDeveloperInstructionsDecision(
 					await options.pluginDeveloperInstructionsPrompt(configPath),
 					state,
 				)
-			: await askYesNoDefaultYes(
-					`Plugin mode: update OMX developer_instructions bootstrap at "${configPath}"? [Y/n]: `,
-				)
-				? {
+			: (await askYesNoDefaultYes(
+						`Plugin mode: update OMX developer_instructions bootstrap at "${configPath}"? [Y/n]: `,
+					))
+				? ({
 						action: "update",
 						state,
 						reason: "recognized historical OMX developer_instructions",
-					} satisfies PluginDeveloperInstructionsDecision
-				: {
+					} satisfies PluginDeveloperInstructionsDecision)
+				: ({
 						action: "preserve",
 						state,
 						reason: "historical OMX developer_instructions preserved",
-					} satisfies PluginDeveloperInstructionsDecision;
+					} satisfies PluginDeveloperInstructionsDecision);
 		const update = updateDecision.action === "update";
 		return update
 			? {
@@ -2879,8 +3005,8 @@ async function refreshOmxPluginDiscoveryCache(
 	}
 
 	const [pkg, expectedSkillNames, cachedDirs] = await Promise.all([
-		readFile(join(pkgRoot, "package.json"), "utf-8").then((raw) =>
-			JSON.parse(raw) as { version?: unknown },
+		readFile(join(pkgRoot, "package.json"), "utf-8").then(
+			(raw) => JSON.parse(raw) as { version?: unknown },
 		),
 		listChildDirectoryNames(join(packagedMarketplace.pluginRoot, "skills")),
 		discoverOmxPluginCacheDirs(join(codexHomeDir, "plugins", "cache")),
@@ -2894,16 +3020,20 @@ async function refreshOmxPluginDiscoveryCache(
 		);
 		if (manifest?.name !== "oh-my-codex") continue;
 
-		const cachedSkillNames = await listChildDirectoryNames(join(cacheDir, "skills"));
+		const cachedSkillNames = await listChildDirectoryNames(
+			join(cacheDir, "skills"),
+		);
 		const versionChanged =
 			expectedVersion !== null && manifest.version !== expectedVersion;
 		const skillsPointerChanged = manifest.skills !== "./skills/";
 		const hooksPointerChanged = manifest.hooks !== "./hooks/hooks.json";
-		const hookFilesMissing = !existsSync(join(cacheDir, "hooks", "hooks.json"))
-			|| !existsSync(join(cacheDir, "hooks", "codex-native-hook.mjs"))
-			|| !existsSync(join(cacheDir, "hooks", "omx-command.json"));
-		const hookFilesChanged = !hookFilesMissing
-			&& !(await pluginHookCacheMatchesPackaged(cacheDir, packagedMarketplace));
+		const hookFilesMissing =
+			!existsSync(join(cacheDir, "hooks", "hooks.json")) ||
+			!existsSync(join(cacheDir, "hooks", "codex-native-hook.mjs")) ||
+			!existsSync(join(cacheDir, "hooks", "omx-command.json"));
+		const hookFilesChanged =
+			!hookFilesMissing &&
+			!(await pluginHookCacheMatchesPackaged(cacheDir, packagedMarketplace));
 		const skillListChanged =
 			expectedSkillNames !== null &&
 			cachedSkillNames !== null &&
@@ -2916,9 +3046,8 @@ async function refreshOmxPluginDiscoveryCache(
 			!hookFilesMissing &&
 			!hookFilesChanged &&
 			!skillListChanged
-		) continue;
-
-
+		)
+			continue;
 
 		staleDirs.push(cacheDir);
 		if (!options.dryRun) {
@@ -2950,7 +3079,6 @@ async function refreshOmxPluginDiscoveryCache(
 		staleDirs,
 	};
 }
-
 
 function resolveSetupMcpMode(
 	scope: SetupScope,
@@ -3311,7 +3439,10 @@ function findRootTomlKeyRange(
 			}
 			continue;
 		}
-		if (tablePattern.test(trimmedLine) || nextRootKeyPattern.test(trimmedLine)) {
+		if (
+			tablePattern.test(trimmedLine) ||
+			nextRootKeyPattern.test(trimmedLine)
+		) {
 			found.end = lineStart;
 			return found;
 		}
@@ -3331,7 +3462,6 @@ function insertRootTomlKey(config: string, line: string): string {
 	const after = lines.slice(firstTableIndex);
 	return [...before, line, "", ...after].join("\n") + "\n";
 }
-
 
 interface PluginModeHooksConfigPlan {
 	finalConfig: string;
@@ -3363,16 +3493,16 @@ function buildPluginModeHooksConfigPlan(
 		? existingHooksContent === null
 			? null
 			: planManagedCodexHooksRemoval(
+					existingHooksContent,
+					hooksPath,
+					managedHookOptions,
+				)
+		: planManagedCodexHooksMerge(
 				existingHooksContent,
+				pkgRoot,
 				hooksPath,
 				managedHookOptions,
-			)
-		: planManagedCodexHooksMerge(
-			existingHooksContent,
-			pkgRoot,
-			hooksPath,
-			managedHookOptions,
-		);
+			);
 	if (managedHooksPlan && !managedHooksPlan.ok) throw managedHooksPlan.error;
 
 	const managedHookTrustState = managedHooksPlan?.finalTrustState ?? {};
@@ -3383,14 +3513,11 @@ function buildPluginModeHooksConfigPlan(
 		priorManagedHookTrustState,
 		managedHookTrustState,
 	);
-	const configAfterLegacyCleanup = buildPluginModeLegacyConfig(
-		existingConfig,
-		{
-			...options,
-			managedHookTrustState,
-			priorManagedHookTrustState,
-		},
-	);
+	const configAfterLegacyCleanup = buildPluginModeLegacyConfig(existingConfig, {
+		...options,
+		managedHookTrustState,
+		priorManagedHookTrustState,
+	});
 
 	const configWithRuntimeFeatures = upsertPluginModeRuntimeFeatureFlags(
 		configAfterLegacyCleanup,
@@ -3413,8 +3540,10 @@ function buildPluginModeHooksConfigPlan(
 				legacyHookTrustState,
 			},
 		),
-		hooksFinalContent: managedHooksPlan ? managedHooksPlan.finalContent : existingHooksContent,
-	hooksRemovedCount: managedHooksPlan?.removedCount ?? 0,
+		hooksFinalContent: managedHooksPlan
+			? managedHooksPlan.finalContent
+			: existingHooksContent,
+		hooksRemovedCount: managedHooksPlan?.removedCount ?? 0,
 		cleanedLegacyConfig: configAfterLegacyCleanup !== existingConfig,
 		diagnostics: managedHooksPlan?.diagnostics ?? [],
 	};
@@ -3536,25 +3665,28 @@ async function planNativeHookSetupTransaction(
 	);
 	const existingConfig = existingConfigSnapshot.bytes
 		? decodeNativeHookTransactionUtf8(
-			existingConfigSnapshot.bytes,
-			`config ${options.configPath}`,
-		)
+				existingConfigSnapshot.bytes,
+				`config ${options.configPath}`,
+			)
 		: "";
 	const existingHooksContent = existingHooksSnapshot.bytes
 		? decodeNativeHookTransactionUtf8(
-			existingHooksSnapshot.bytes,
-			`native hooks ${options.hooksPath}`,
-		)
+				existingHooksSnapshot.bytes,
+				`native hooks ${options.hooksPath}`,
+			)
 		: null;
 	let finalConfig = existingConfig;
 	let finalHooksContent = existingHooksContent;
 	let hooksRemovedCount = 0;
 	let cleanedLegacyConfig = false;
-	let pluginMarketplaceResult: NativeHookSetupTransactionPlan["pluginMarketplaceResult"] = "unchanged";
-	let pluginDeveloperInstructionsResult: NativeHookSetupTransactionPlan["pluginDeveloperInstructionsResult"] = "skipped";
+	let pluginMarketplaceResult: NativeHookSetupTransactionPlan["pluginMarketplaceResult"] =
+		"unchanged";
+	let pluginDeveloperInstructionsResult: NativeHookSetupTransactionPlan["pluginDeveloperInstructionsResult"] =
+		"skipped";
 	let diagnostics: readonly { message: string }[] = [];
 	let notifyMetadataArtifact: NativeHookTransactionArtifact | null = null;
-	let notifyMetadataPrecondition: NativeHookTransactionPrecondition | null = null;
+	let notifyMetadataPrecondition: NativeHookTransactionPrecondition | null =
+		null;
 	let modelUpgrade: NativeHookSetupTransactionPlan["modelUpgrade"];
 	let repairedLegacyTeamRunTable = false;
 
@@ -3595,10 +3727,11 @@ async function planNativeHookSetupTransaction(
 		} else {
 			pluginMarketplaceResult = "unavailable";
 		}
-		const developerInstructionsPlan = buildPluginDeveloperInstructionsConfigPlan(
-			finalConfig,
-			options.pluginDeveloperInstructionsDecision,
-		);
+		const developerInstructionsPlan =
+			buildPluginDeveloperInstructionsConfigPlan(
+				finalConfig,
+				options.pluginDeveloperInstructionsDecision,
+			);
 		finalConfig = developerInstructionsPlan.finalConfig;
 		pluginDeveloperInstructionsResult = developerInstructionsPlan.result;
 	} else {
@@ -3613,7 +3746,9 @@ async function planNativeHookSetupTransaction(
 		);
 		if (!managedHooksPlan.ok) throw managedHooksPlan.error;
 		if (managedHooksPlan.finalContent === null) {
-			throw new Error("Native hook merge unexpectedly produced no hooks.json content.");
+			throw new Error(
+				"Native hook merge unexpectedly produced no hooks.json content.",
+			);
 		}
 		finalHooksContent = managedHooksPlan.finalContent;
 		hooksRemovedCount = managedHooksPlan.removedCount;
@@ -3673,7 +3808,10 @@ async function planNativeHookSetupTransaction(
 				notifyPlan.metadataPath,
 				`notification metadata ${notifyPlan.metadataPath}`,
 				metadataBefore,
-				Buffer.from(JSON.stringify(notifyPlan.metadata, null, 2) + "\n", "utf-8"),
+				Buffer.from(
+					JSON.stringify(notifyPlan.metadata, null, 2) + "\n",
+					"utf-8",
+				),
 			);
 			if (!notifyMetadataPrecondition) {
 				notifyMetadataPrecondition = nativeHookTransactionPrecondition(
@@ -3686,7 +3824,10 @@ async function planNativeHookSetupTransaction(
 		}
 	}
 
-	if (options.isPluginInstallMode && options.sharedMcpRegistry.servers.length > 0) {
+	if (
+		options.isPluginInstallMode &&
+		options.sharedMcpRegistry.servers.length > 0
+	) {
 		finalConfig = mergeSharedMcpRegistryBlock(
 			finalConfig,
 			options.sharedMcpRegistry.servers,
@@ -3720,7 +3861,9 @@ async function planNativeHookSetupTransaction(
 	let shimArtifact: NativeHookTransactionArtifact | null = null;
 	let shimPrecondition: NativeHookTransactionPrecondition | null = null;
 	if (options.platform === "win32") {
-		const shimPath = buildManagedCodexNativeHookWindowsShimPath(options.codexHomeDir);
+		const shimPath = buildManagedCodexNativeHookWindowsShimPath(
+			options.codexHomeDir,
+		);
 		const shimSnapshot = await captureNativeHookTransactionArtifact(
 			shimPath,
 			`native hook Windows shim ${shimPath}`,
@@ -3729,7 +3872,11 @@ async function planNativeHookSetupTransaction(
 			buildManagedCodexNativeHookWindowsShimContent(options.pkgRoot),
 			"utf-8",
 		);
-		assertWindowsNativeHookShimOwnership(shimPath, shimSnapshot.bytes, shimAfter);
+		assertWindowsNativeHookShimOwnership(
+			shimPath,
+			shimSnapshot.bytes,
+			shimAfter,
+		);
 		const shimReference = decideWindowsNativeHookShimReference(
 			finalHooksContent,
 			shimPath,
@@ -3739,8 +3886,9 @@ async function planNativeHookSetupTransaction(
 			shimPath,
 			`native hook Windows shim ${shimPath}`,
 			shimSnapshot,
-			options.isPluginInstallMode && options.pluginScopedHooks &&
-			shimReference === "not_referenced"
+			options.isPluginInstallMode &&
+				options.pluginScopedHooks &&
+				shimReference === "not_referenced"
 				? null
 				: shimAfter,
 		);
@@ -3756,21 +3904,22 @@ async function planNativeHookSetupTransaction(
 		shimArtifact && shimArtifact.after !== null ? shimArtifact : null;
 	const windowsShimDeletionArtifact =
 		shimArtifact && shimArtifact.after === null ? shimArtifact : null;
-	const artifacts = options.platform === "win32"
-		? windowsShimDeletionArtifact
-			? [
-				hookArtifact,
-				windowsShimDeletionArtifact,
-				notifyMetadataArtifact,
-				configArtifact,
-			]
-			: [
-				windowsShimCreateOrUpdateArtifact,
-				hookArtifact,
-				notifyMetadataArtifact,
-				configArtifact,
-			]
-		: [hookArtifact, notifyMetadataArtifact, configArtifact];
+	const artifacts =
+		options.platform === "win32"
+			? windowsShimDeletionArtifact
+				? [
+						hookArtifact,
+						windowsShimDeletionArtifact,
+						notifyMetadataArtifact,
+						configArtifact,
+					]
+				: [
+						windowsShimCreateOrUpdateArtifact,
+						hookArtifact,
+						notifyMetadataArtifact,
+						configArtifact,
+					]
+			: [hookArtifact, notifyMetadataArtifact, configArtifact];
 	const preconditions = [
 		shimPrecondition,
 		nativeHookTransactionPrecondition(
@@ -3789,10 +3938,12 @@ async function planNativeHookSetupTransaction(
 	];
 	return {
 		artifacts: artifacts.filter(
-			(artifact): artifact is NativeHookTransactionArtifact => artifact !== null,
+			(artifact): artifact is NativeHookTransactionArtifact =>
+				artifact !== null,
 		),
 		preconditions: preconditions.filter(
-			(precondition): precondition is NativeHookTransactionPrecondition => precondition !== null,
+			(precondition): precondition is NativeHookTransactionPrecondition =>
+				precondition !== null,
 		),
 		finalConfig,
 		hooksRemovedCount,
@@ -3890,9 +4041,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		persistedReviewDecision === "reset"
 			? undefined
 			: resolvePersistedSetupMergeAgents(
-				persistedPreferences,
-				resolvedScope.scope,
-			);
+					persistedPreferences,
+					resolvedScope.scope,
+				);
 	const effectiveMergeAgents =
 		requestedMergeAgentsPolicy?.kind === "set"
 			? requestedMergeAgentsPolicy.value
@@ -3914,14 +4065,13 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		persistedPreferences,
 	);
 	const resolvedTeamMode: SetupTeamMode =
-		requestedTeamMode
-		?? (
-			persistedReviewDecision !== "reset" &&
-			(!persistedPreferences?.scope || persistedPreferences.scope === resolvedScope.scope)
-				? persistedPreferences?.teamMode
-				: undefined
-		)
-		?? "enabled";
+		requestedTeamMode ??
+		(persistedReviewDecision !== "reset" &&
+		(!persistedPreferences?.scope ||
+			persistedPreferences.scope === resolvedScope.scope)
+			? persistedPreferences?.teamMode
+			: undefined) ??
+		"enabled";
 	const isTeamModeEnabled = teamModeEnabled(resolvedTeamMode);
 	const skipNativeAgentRefresh =
 		requestedSkipNativeAgentRefresh ||
@@ -3935,7 +4085,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		);
 		recordRegularFileSyncOutcome(recoveryTracker, recovery.outcome);
 		if (recovery.recovered) {
-			emitDegradedDurabilityWarning("native-hook claim-journal recovery", recoveryTracker);
+			emitDegradedDurabilityWarning(
+				"native-hook claim-journal recovery",
+				recoveryTracker,
+			);
 		}
 	}
 	const nativeHookTransactionPlatform = nativeHookPlatform();
@@ -3947,11 +4100,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				scopeDirs.codexHooksFile,
 				getNotifyMetadataPath(scopeDirs.codexHomeDir),
 				...(nativeHookTransactionPlatform === "win32"
-					? [
-							buildManagedCodexNativeHookWindowsShimPath(
-								scopeDirs.codexHomeDir,
-							),
-						]
+					? [buildManagedCodexNativeHookWindowsShimPath(scopeDirs.codexHomeDir)]
 					: []),
 			],
 		);
@@ -3961,21 +4110,22 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			scopeDirs.codexConfigFile,
 			`config ${scopeDirs.codexConfigFile}`,
 		);
-	const existingConfigForMcpMigration = existingConfigForMcpMigrationSnapshot.bytes
-		? decodeNativeHookTransactionUtf8(
-			existingConfigForMcpMigrationSnapshot.bytes,
-			`config ${scopeDirs.codexConfigFile}`,
-		)
-		: "";
+	const existingConfigForMcpMigration =
+		existingConfigForMcpMigrationSnapshot.bytes
+			? decodeNativeHookTransactionUtf8(
+					existingConfigForMcpMigrationSnapshot.bytes,
+					`config ${scopeDirs.codexConfigFile}`,
+				)
+			: "";
 	const notifyMetadataSnapshot = configRequiresNotificationMetadataSnapshot(
 		existingConfigForMcpMigration,
 		pkgRoot,
 		resolvedScope.scope,
 	)
 		? await captureNativeHookTransactionArtifact(
-			getNotifyMetadataPath(scopeDirs.codexHomeDir),
-			`notification metadata ${getNotifyMetadataPath(scopeDirs.codexHomeDir)}`,
-		)
+				getNotifyMetadataPath(scopeDirs.codexHomeDir),
+				`notification metadata ${getNotifyMetadataPath(scopeDirs.codexHomeDir)}`,
+			)
 		: undefined;
 	const firstPartyMcpRegistrationKinds = [
 		hasFirstPartyOmxMcpRegistrations(existingConfigForMcpMigration)
@@ -4016,15 +4166,15 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	const pluginDeveloperInstructionsDecision: PluginDeveloperInstructionsDecision =
 		isPluginInstallMode
 			? await resolvePluginDeveloperInstructionsDecision(
-				existingConfigForMcpMigration,
-				scopeDirs.codexConfigFile,
-				{ pluginDeveloperInstructionsPrompt },
-			)
+					existingConfigForMcpMigration,
+					scopeDirs.codexConfigFile,
+					{ pluginDeveloperInstructionsPrompt },
+				)
 			: {
-				action: "preserve",
-				state: "custom",
-				reason: "non-plugin setup mode",
-			};
+					action: "preserve",
+					state: "custom",
+					reason: "non-plugin setup mode",
+				};
 	let pluginAgentsMdPathExists = false;
 	let pluginAgentsMdIsSymlink = false;
 	try {
@@ -4053,11 +4203,13 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	const shouldSyncSharedMcpRegistry = resolvedMcpMode.mcpMode === "compat";
 	const registryCandidates = getUnifiedMcpRegistryCandidates();
 	const defaultRegistryCandidates = registryCandidates.slice(0, 1);
-	const sharedMcpRegistry: UnifiedMcpRegistryLoadResult = shouldSyncSharedMcpRegistry
-		? await loadUnifiedMcpRegistry({
-				candidates: options.mcpRegistryCandidates ?? defaultRegistryCandidates,
-			})
-		: { servers: [], warnings: [] };
+	const sharedMcpRegistry: UnifiedMcpRegistryLoadResult =
+		shouldSyncSharedMcpRegistry
+			? await loadUnifiedMcpRegistry({
+					candidates:
+						options.mcpRegistryCandidates ?? defaultRegistryCandidates,
+				})
+			: { servers: [], warnings: [] };
 	const legacyRegistryCandidate = getLegacyUnifiedMcpRegistryCandidate();
 	const preflightMarketplace = isPluginInstallMode
 		? await resolvePackagedOmxMarketplace(pkgRoot)
@@ -4160,7 +4312,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 	const setupPreferencesToPersist: PersistedSetupScope = {
 		scope: resolvedScope.scope,
 		mcpMode: resolvedMcpMode.mcpMode,
-		...(requestedTeamMode || persistedPreferences?.teamMode || resolvedTeamMode === "disabled"
+		...(requestedTeamMode ||
+		persistedPreferences?.teamMode ||
+		resolvedTeamMode === "disabled"
 			? { teamMode: resolvedTeamMode }
 			: {}),
 		...(resolvedInstallMode &&
@@ -4168,7 +4322,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			resolvedInstallMode.installMode === "plugin")
 			? { installMode: resolvedInstallMode.installMode }
 			: {}),
-		...(effectiveMergeAgents !== undefined ? { mergeAgents: effectiveMergeAgents } : {}),
+		...(effectiveMergeAgents !== undefined
+			? { mergeAgents: effectiveMergeAgents }
+			: {}),
 	};
 	console.log("  Done.\n");
 
@@ -4388,7 +4544,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		} else {
 			summary.config.updated += 1;
 		}
-	} else if (!isPluginInstallMode || !nativeHookSetupTransaction.pluginScopedHooks) {
+	} else if (
+		!isPluginInstallMode ||
+		!nativeHookSetupTransaction.pluginScopedHooks
+	) {
 		summary.config.unchanged += 1;
 	}
 	if (changedShimArtifact) summary.config.updated += 1;
@@ -4407,13 +4566,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				`  ${dryRun ? "Would clean" : "Cleaned"} legacy OMX config entries for plugin mode.\n`,
 			);
 		} else {
-			console.log("  Config refresh skipped; no legacy OMX config entries found.\n");
+			console.log(
+				"  Config refresh skipped; no legacy OMX config entries found.\n",
+			);
 		}
 		if (nativeHookSetupTransaction.pluginMarketplaceResult === "unavailable") {
 			console.log(
 				`  warning: packaged ${OMX_LOCAL_MARKETPLACE_NAME} Codex plugin marketplace metadata not found; /skills plugin discovery was not registered.`,
 			);
-		} else if (nativeHookSetupTransaction.pluginMarketplaceResult === "updated") {
+		} else if (
+			nativeHookSetupTransaction.pluginMarketplaceResult === "updated"
+		) {
 			console.log(
 				`  ${dryRun ? "Would register" : "Registered"} local Codex plugin marketplace ${OMX_LOCAL_MARKETPLACE_NAME} (${pkgRoot}).`,
 			);
@@ -4437,7 +4600,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				);
 			}
 		} else if (pluginCacheRefresh.status === "unchanged") {
-			console.log("  Codex plugin discovery cache already matches packaged plugin metadata.");
+			console.log(
+				"  Codex plugin discovery cache already matches packaged plugin metadata.",
+			);
 		}
 		const pluginCacheMaterialize = await materializePackagedOmxPluginCache(
 			scopeDirs.codexHomeDir,
@@ -4449,13 +4614,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				`  ${dryRun ? "Would install" : "Installed"} local Codex plugin cache for ${OMX_LOCAL_MARKETPLACE_NAME}/${OMX_PLUGIN_NAME} at ${pluginCacheMaterialize.cacheDir}.`,
 			);
 		} else if (pluginCacheMaterialize.status === "unchanged") {
-			console.log("  Local Codex plugin cache already exposes packaged OMX skills.");
+			console.log(
+				"  Local Codex plugin cache already exposes packaged OMX skills.",
+			);
 		}
 		if (
 			pluginCacheMaterialize.status === "materialized" ||
 			pluginCacheMaterialize.status === "unchanged"
 		) {
-			console.log("  Start a new Codex session if /skills still shows stale OMX plugin skill metadata; the current session may keep its in-memory plugin registry until restart.");
+			console.log(
+				"  Start a new Codex session if /skills still shows stale OMX plugin skill metadata; the current session may keep its in-memory plugin registry until restart.",
+			);
 		}
 		if (shouldSyncSharedMcpRegistry && resolvedScope.scope === "user") {
 			await syncClaudeCodeMcpSettings(
@@ -4471,7 +4640,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				: `  Native Codex hooks fallback and runtime feature flags refresh complete (${scopeDirs.codexHooksFile}; hooks, goals).\n`,
 		);
 		if (pluginDeveloperInstructionsDecision.action !== "preserve") {
-			if (nativeHookSetupTransaction.pluginDeveloperInstructionsResult === "updated") {
+			if (
+				nativeHookSetupTransaction.pluginDeveloperInstructionsResult ===
+				"updated"
+			) {
 				console.log(
 					`  ${dryRun ? "Would add" : "Added"} plugin-mode developer_instructions default (${scopeDirs.codexConfigFile}).\n`,
 				);
@@ -4532,12 +4704,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		const pluginAgentsMdExists = pluginAgentsMdPathExists;
 		if (existsSync(agentsMdSrc)) {
 			const content = await readFile(agentsMdSrc, "utf-8");
-			const modelTableContext = resolveAgentsModelTableContext(
-				resolvedConfig,
-				{
-					codexHomeOverride: scopeDirs.codexHomeDir,
-				},
-			);
+			const modelTableContext = resolveAgentsModelTableContext(resolvedConfig, {
+				codexHomeOverride: scopeDirs.codexHomeDir,
+			});
 			const modelTableDefinitions =
 				getAgentsModelTableDefinitionsForTeamMode(resolvedTeamMode);
 			const rewritten = upsertAgentsModelTable(
@@ -4562,7 +4731,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 					);
 				} else {
 					const existing = await readFile(pluginAgentsMdDst, "utf-8");
-					const mergedAgentsContent = upsertManagedAgentsBlock(existing, rewritten);
+					const mergedAgentsContent = upsertManagedAgentsBlock(
+						existing,
+						rewritten,
+					);
 					const canApplyManagedAgentsMerge = mergedAgentsContent !== existing;
 					if (
 						resolvedScope.scope === "project" &&
@@ -4641,17 +4813,17 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 						},
 					);
 					if (result === "updated") {
-					console.log(
-						resolvedScope.scope === "project"
-							? "  Generated plugin-mode AGENTS.md defaults in project root."
-							: `  Generated plugin-mode AGENTS.md defaults in ${scopeDirs.codexHomeDir}.`,
-					);
-				} else if (result === "unchanged") {
-					console.log(
-						resolvedScope.scope === "project"
-							? "  Plugin-mode AGENTS.md defaults already up to date in project root."
-							: `  Plugin-mode AGENTS.md defaults already up to date in ${scopeDirs.codexHomeDir}.`,
-					);
+						console.log(
+							resolvedScope.scope === "project"
+								? "  Generated plugin-mode AGENTS.md defaults in project root."
+								: `  Generated plugin-mode AGENTS.md defaults in ${scopeDirs.codexHomeDir}.`,
+						);
+					} else if (result === "unchanged") {
+						console.log(
+							resolvedScope.scope === "project"
+								? "  Plugin-mode AGENTS.md defaults already up to date in project root."
+								: `  Plugin-mode AGENTS.md defaults already up to date in ${scopeDirs.codexHomeDir}.`,
+						);
 					} else {
 						console.log(
 							`  Skipped plugin-mode AGENTS.md defaults for ${pluginAgentsMdDst}.`,
@@ -4689,7 +4861,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			const rewritten = upsertAgentsModelTable(
 				addGeneratedAgentsMarker(
 					applyTeamModeToAgentsTemplate(
-						applyScopePathRewritesToAgentsTemplate(content, resolvedScope.scope),
+						applyScopePathRewritesToAgentsTemplate(
+							content,
+							resolvedScope.scope,
+						),
 						resolvedTeamMode,
 					),
 				),
@@ -4708,7 +4883,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				changed = existing !== rewritten;
 				if (!hasOmxAgentsContract(existing)) {
 					const scopeFlag =
-						resolvedScope.scope === "project" ? "--scope project" : "--scope user";
+						resolvedScope.scope === "project"
+							? "--scope project"
+							: "--scope user";
 					console.log(
 						`  WARNING: Existing AGENTS.md at ${agentsMdDst} lacks OMX contract markers; it may have been overwritten by another tool.`,
 					);
@@ -4721,14 +4898,15 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 					canApplyManagedAgentsMerge = mergedAgentsContent !== existing;
 				} else {
 					if (hasOmxManagedAgentsSections(existing)) {
-						const existingIsGeneratedAgentsMd = isOmxGeneratedAgentsMd(existing);
+						const existingIsGeneratedAgentsMd =
+							isOmxGeneratedAgentsMd(existing);
 						managedRefreshContent = teamModeEnabled(resolvedTeamMode)
 							? upsertAgentsModelTable(
-								existing,
-								modelTableContext,
-								modelTableDefinitions,
-								{ codexHomeOverride: scopeDirs.codexHomeDir },
-							)
+									existing,
+									modelTableContext,
+									modelTableDefinitions,
+									{ codexHomeOverride: scopeDirs.codexHomeDir },
+								)
 							: existingIsGeneratedAgentsMd
 								? rewritten
 								: upsertManagedAgentsBlock(existing, rewritten);
@@ -4745,7 +4923,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 				resolvedScope.scope === "project" &&
 				sessionIsActive &&
 				agentsMdExists &&
-				(changed || canApplyManagedAgentsMerge || canApplyManagedModelRefresh) &&
+				(changed ||
+					canApplyManagedAgentsMerge ||
+					canApplyManagedModelRefresh) &&
 				!canApplyManagedRefreshDuringActiveSession
 			) {
 				summary.agentsMd.skipped += 1;
@@ -4839,7 +5019,6 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		console.log();
 	}
 
-
 	// Step 7: Set up notify hook
 	console.log("[7/8] Configuring notification hook...");
 	if (isPluginInstallMode) {
@@ -4901,7 +5080,9 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			scopeDirs.codexHomeDir,
 			nativeHookSetupTransaction.artifacts.map((artifact) => artifact.path),
 		);
-	const nativeHookSetupDurabilityTracker: RegularFileDurabilityTracker = { degraded: false };
+	const nativeHookSetupDurabilityTracker: RegularFileDurabilityTracker = {
+		degraded: false,
+	};
 	await commitNativeHookTransaction(
 		nativeHookSetupTransaction.artifacts,
 		nativeHookSetupTransaction.preconditions,
@@ -4911,7 +5092,10 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 		summary.config,
 		{ dryRun, verbose },
 	);
-	emitDegradedDurabilityWarning("native-hook setup", nativeHookSetupDurabilityTracker);
+	emitDegradedDurabilityWarning(
+		"native-hook setup",
+		nativeHookSetupDurabilityTracker,
+	);
 
 	console.log('Setup complete! Run "omx doctor" to verify installation.');
 	console.log("\nNext steps:");
@@ -5215,7 +5399,6 @@ async function syncNativeAgentToml(
 	}
 }
 
-
 async function syncManagedAgentsContent(
 	content: string,
 	dstPath: string,
@@ -5312,7 +5495,10 @@ async function installPrompts(
 	for (const file of files) {
 		if (!file.endsWith(".md")) continue;
 		const promptName = file.slice(0, -3);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_PROMPT_NAMES.has(promptName)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_PROMPT_NAMES.has(promptName)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped ${file} (Team mode disabled)`);
@@ -5350,8 +5536,11 @@ async function installPrompts(
 			if (!file.endsWith(".md")) continue;
 			const promptName = file.slice(0, -3);
 			const status = agentStatusByName?.get(promptName);
-			const disabledTeamPrompt = !teamModeEnabled(options.teamMode) && TEAM_MODE_PROMPT_NAMES.has(promptName);
-			if (isSetupPromptAssetName(promptName, manifest) && !disabledTeamPrompt) continue;
+			const disabledTeamPrompt =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_PROMPT_NAMES.has(promptName);
+			if (isSetupPromptAssetName(promptName, manifest) && !disabledTeamPrompt)
+				continue;
 			if (!options.force && !disabledTeamPrompt) continue;
 
 			const stalePromptPath = join(dstDir, file);
@@ -5474,7 +5663,10 @@ async function refreshNativeAgentConfigs(
 
 	for (const name of nativeAgentNames) {
 		staleCandidateNativeAgentNames.add(name);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_NATIVE_AGENT_NAMES.has(name)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_NATIVE_AGENT_NAMES.has(name)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped native agent ${name}.toml (Team mode disabled)`);
@@ -5534,8 +5726,11 @@ async function refreshNativeAgentConfigs(
 			if (!file.endsWith(".toml")) continue;
 			const agentName = file.slice(0, -5);
 			const agentStatus = agentStatusByName?.get(agentName);
-			const disabledTeamAgent = !teamModeEnabled(options.teamMode) && TEAM_MODE_NATIVE_AGENT_NAMES.has(agentName);
-			if (isNativeAgentInstallableStatus(agentStatus) && !disabledTeamAgent) continue;
+			const disabledTeamAgent =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_NATIVE_AGENT_NAMES.has(agentName);
+			if (isNativeAgentInstallableStatus(agentStatus) && !disabledTeamAgent)
+				continue;
 			if (!options.force && !disabledTeamAgent) continue;
 			if (
 				!staleCandidateNativeAgentNames.has(agentName) &&
@@ -5658,7 +5853,10 @@ export async function installSkills(
 	for (const entry of entries) {
 		if (!entry.isDirectory()) continue;
 		staleCandidateSkillNames.add(entry.name);
-		if (!teamModeEnabled(options.teamMode) && TEAM_MODE_SKILL_NAMES.has(entry.name)) {
+		if (
+			!teamModeEnabled(options.teamMode) &&
+			TEAM_MODE_SKILL_NAMES.has(entry.name)
+		) {
 			summary.skipped += 1;
 			if (options.verbose) {
 				console.log(`  skipped ${entry.name}/ (Team mode disabled)`);
@@ -5734,8 +5932,11 @@ export async function installSkills(
 	if (manifest && existsSync(dstDir)) {
 		for (const staleSkill of staleCandidateSkillNames) {
 			const status = skillStatusByName?.get(staleSkill);
-			const disabledTeamSkill = !teamModeEnabled(options.teamMode) && TEAM_MODE_SKILL_NAMES.has(staleSkill);
-			if (isSetupInstallableSkill(staleSkill, status) && !disabledTeamSkill) continue;
+			const disabledTeamSkill =
+				!teamModeEnabled(options.teamMode) &&
+				TEAM_MODE_SKILL_NAMES.has(staleSkill);
+			if (isSetupInstallableSkill(staleSkill, status) && !disabledTeamSkill)
+				continue;
 			const hardDeprecated = HARD_DEPRECATED_SKILL_NAMES.has(staleSkill);
 			if (!options.force && !hardDeprecated && !disabledTeamSkill) continue;
 
@@ -5753,7 +5954,9 @@ export async function installSkills(
 				const label = status ?? "unlisted";
 				const reason = disabledTeamSkill
 					? ", Team mode disabled"
-					: hardDeprecated ? ", hard-deprecated" : "";
+					: hardDeprecated
+						? ", hard-deprecated"
+						: "";
 				console.log(`  ${prefix} ${staleSkill}/ (status: ${label}${reason})`);
 			}
 		}
@@ -5923,7 +6126,10 @@ async function buildNotifyMergePlan(
 		return { notifyCommand: false };
 	}
 
-	const omxNotify = ["node", join(pkgRoot, "dist", "scripts", "notify-hook.js")];
+	const omxNotify = [
+		"node",
+		join(pkgRoot, "dist", "scripts", "notify-hook.js"),
+	];
 	const metadataPath = getNotifyMetadataPath(codexHomeDir);
 	const dispatcherNotify = [
 		"node",
@@ -6076,8 +6282,6 @@ async function planManagedConfig(
 			hadLegacyTeamRunTable && !hasLegacyOmxTeamRunTable(finalConfig),
 	};
 }
-
-
 
 function getClaudeCodeSettingsPath(homeDir = homedir()): string {
 	return join(homeDir, ".claude", "settings.json");

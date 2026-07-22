@@ -13,7 +13,16 @@ import {
 	type RegularFileDurabilityTracker,
 } from "../utils/file-durability.js";
 import { constants, existsSync, readFileSync, type Stats } from "fs";
-import { access, chown, lstat, mkdtemp, readdir, readFile, rmdir, rm } from "fs/promises";
+import {
+	access,
+	chown,
+	lstat,
+	mkdtemp,
+	readdir,
+	readFile,
+	rmdir,
+	rm,
+} from "fs/promises";
 import { spawnSync } from "child_process";
 import { basename, dirname, join, relative } from "path";
 import { tmpdir } from "os";
@@ -101,7 +110,9 @@ import { AGENT_DEFINITIONS } from "../agents/definitions.js";
 import { getInstallableNativeAgentNames } from "../agents/policy.js";
 import { readCatalogManifest } from "../catalog/reader.js";
 
-let doctorClaimJournalDurabilityOverride: NativeHookClaimJournalDurability | undefined;
+let doctorClaimJournalDurabilityOverride:
+	| NativeHookClaimJournalDurability
+	| undefined;
 
 /** @internal Test seam for deterministic claim-journal durability coverage. */
 export function setDoctorClaimJournalDurabilityForTest(
@@ -157,7 +168,6 @@ interface RepoArtifactRepairOptions extends RepoArtifactScanOptions {
 
 const REPO_ARTIFACT_DIRS = [".omx", ".beads"] as const;
 
-
 interface NativeHookDistSmokeOptions {
 	packageRoot?: string;
 	nodePath?: string;
@@ -186,7 +196,10 @@ interface DoctorPaths {
 async function resolveDoctorScope(cwd: string): Promise<DoctorScopeResolution> {
 	const persisted = await readPersistedSetupPreferences(cwd);
 	if (persisted?.scope) {
-		const inferred = await inferPluginInstallModeFromConfigForScope(cwd, persisted.scope);
+		const inferred = await inferPluginInstallModeFromConfigForScope(
+			cwd,
+			persisted.scope,
+		);
 		return {
 			scope: persisted.scope,
 			source: "persisted",
@@ -195,10 +208,16 @@ async function resolveDoctorScope(cwd: string): Promise<DoctorScopeResolution> {
 		};
 	}
 
-	const inferredUser = await inferPluginInstallModeFromConfigForScope(cwd, "user");
+	const inferredUser = await inferPluginInstallModeFromConfigForScope(
+		cwd,
+		"user",
+	);
 	if (inferredUser) return inferredUser;
 
-	const inferredProject = await inferPluginInstallModeFromConfigForScope(cwd, "project");
+	const inferredProject = await inferPluginInstallModeFromConfigForScope(
+		cwd,
+		"project",
+	);
 	if (inferredProject) return inferredProject;
 
 	return { scope: "user", source: "default" };
@@ -209,16 +228,20 @@ async function inferPluginInstallModeFromConfigForScope(
 	scope: DoctorSetupScope,
 ): Promise<DoctorScopeResolution | null> {
 	const configPath =
-		scope === "project" ? join(cwd, ".codex", "config.toml") : codexConfigPath();
+		scope === "project"
+			? join(cwd, ".codex", "config.toml")
+			: codexConfigPath();
 	if (!existsSync(configPath)) return null;
 
 	try {
 		const configContent = await readFile(configPath, "utf-8");
 		if (!configEnablesPluginScopedHooks(configContent)) return null;
 
-		const { marketplace, plugin } = getParsedPluginMarketplaceConfig(configContent);
+		const { marketplace, plugin } =
+			getParsedPluginMarketplaceConfig(configContent);
 		if (!marketplace || marketplace.source_type !== "local") return null;
-		if (!(await isTrustedOmxPluginMarketplaceSource(marketplace.source))) return null;
+		if (!(await isTrustedOmxPluginMarketplaceSource(marketplace.source)))
+			return null;
 		if (plugin?.enabled !== true) return null;
 
 		return {
@@ -232,7 +255,9 @@ async function inferPluginInstallModeFromConfigForScope(
 	}
 }
 
-async function isTrustedOmxPluginMarketplaceSource(source: unknown): Promise<boolean> {
+async function isTrustedOmxPluginMarketplaceSource(
+	source: unknown,
+): Promise<boolean> {
 	if (source === getPackageRoot()) return true;
 	if (typeof source !== "string" || source.length === 0) return false;
 	try {
@@ -291,16 +316,20 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 	const recoveryTracker: RegularFileDurabilityTracker = { degraded: false };
 	const recovery = await recoverNativeHookClaimJournal(
 		paths.codexHomeDir,
-		doctorClaimJournalDurabilityOverride ?? createNativeHookClaimJournalDurability(),
+		doctorClaimJournalDurabilityOverride ??
+			createNativeHookClaimJournalDurability(),
 	);
 	recordRegularFileSyncOutcome(recoveryTracker, recovery.outcome);
-	emitDegradedDurabilityWarning("native-hook claim-journal recovery", recoveryTracker);
+	emitDegradedDurabilityWarning(
+		"native-hook claim-journal recovery",
+		recoveryTracker,
+	);
 	const scopeSourceMessage =
 		scopeResolution.source === "persisted"
 			? " (from .omx/setup-scope.json)"
 			: scopeResolution.source === "config"
 				? " (inferred from Codex plugin config)"
-			: "";
+				: "";
 	if (options.force) {
 		if (options.dryRun) {
 			const check = await checkRepoArtifactOwnership(cwd);
@@ -349,7 +378,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 	checks.push(checkNodeVersion());
 
 	// Check 2.5: Explore harness readiness
-	const exploreRoutingState = await resolveExploreRoutingState(paths.configPath);
+	const exploreRoutingState = await resolveExploreRoutingState(
+		paths.configPath,
+	);
 	checks.push(
 		checkExploreHarness(process.platform, process.env, {
 			exploreRoutingEnabled: exploreRoutingState.enabled,
@@ -377,10 +408,14 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 	}
 
 	// Check 4.25: Native hooks coverage
-	const nativeHooksCheck = await checkNativeHooks(paths.hooksPath, paths.configPath, {
-		codexHomeDir: paths.codexHomeDir,
-		installMode: scopeResolution.installMode,
-	});
+	const nativeHooksCheck = await checkNativeHooks(
+		paths.hooksPath,
+		paths.configPath,
+		{
+			codexHomeDir: paths.codexHomeDir,
+			installMode: scopeResolution.installMode,
+		},
+	);
 	checks.push(nativeHooksCheck);
 	checks.push(await checkNativeHookDistSmoke());
 	if (options.verbose) {
@@ -392,7 +427,10 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 		);
 		if (postCompactRuntimeCheck) checks.push(postCompactRuntimeCheck);
 	}
-	const runtimeMirrorCheck = await checkNativeHookRuntimeMirrors(cwd, paths.hooksPath);
+	const runtimeMirrorCheck = await checkNativeHookRuntimeMirrors(
+		cwd,
+		paths.hooksPath,
+	);
 	if (runtimeMirrorCheck) checks.push(runtimeMirrorCheck);
 
 	// Check 4.5: Explore routing default
@@ -479,8 +517,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<void> {
 	);
 
 	if (failCount > 0) {
-		console.log('\nReview failed checks above. Follow the check-specific recovery guidance; inspect invalid or ambiguous hook documents manually because doctor will not modify them.');
-
+		console.log(
+			"\nReview failed checks above. Follow the check-specific recovery guidance; inspect invalid or ambiguous hook documents manually because doctor will not modify them.",
+		);
 	} else if (warnCount > 0) {
 		console.log(
 			'\nReview warnings above. Follow the check-specific recovery guidance; for AGENTS.md preservation prefer "omx setup --merge-agents".',
@@ -757,14 +796,14 @@ async function collectTeamDoctorIssues(
 }
 
 function isPidAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    return false;
-  }
+	if (!Number.isFinite(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ESRCH") return false;
+		return false;
+	}
 }
 
 function dedupeIssues(issues: TeamDoctorIssue[]): TeamDoctorIssue[] {
@@ -885,7 +924,8 @@ export function checkExploreHarness(
 	options: { exploreRoutingEnabled?: boolean } = {},
 ): Check {
 	const override = env[EXPLORE_BIN_ENV]?.trim();
-	const exploreRoutingEnabled = options.exploreRoutingEnabled ?? isExploreCommandRoutingEnabled(env);
+	const exploreRoutingEnabled =
+		options.exploreRoutingEnabled ?? isExploreCommandRoutingEnabled(env);
 	if (!override && !exploreRoutingEnabled) {
 		return {
 			name: "Explore Harness",
@@ -1003,7 +1043,10 @@ function formatArtifactPath(repoRoot: string, path: string): string {
 	return rel === "" ? "." : rel;
 }
 
-function formatArtifactIssue(repoRoot: string, issue: RepoArtifactIssue): string {
+function formatArtifactIssue(
+	repoRoot: string,
+	issue: RepoArtifactIssue,
+): string {
 	const owner =
 		typeof issue.uid === "number" && typeof issue.gid === "number"
 			? ` uid=${issue.uid} gid=${issue.gid}`
@@ -1053,7 +1096,8 @@ async function collectRepoArtifactOwnershipIssues(
 		let reason: RepoArtifactIssue["reason"] | null = null;
 		if (uid === 0) {
 			if (currentUid !== 0) reason = "root-owned";
-		} else if (shouldReportOwnerMismatch(uid, currentUid)) reason = "owner-mismatch";
+		} else if (shouldReportOwnerMismatch(uid, currentUid))
+			reason = "owner-mismatch";
 		else {
 			try {
 				await accessPath(path, constants.W_OK);
@@ -1102,7 +1146,8 @@ export async function checkRepoArtifactOwnership(
 		return {
 			name: "Repo artifact ownership",
 			status: "pass",
-			message: "repo-local .omx/.beads artifacts are writable by the current user",
+			message:
+				"repo-local .omx/.beads artifacts are writable by the current user",
 		};
 	}
 
@@ -1131,7 +1176,10 @@ export async function repairRepoArtifactOwnership(
 	const statPath = options.statPath ?? lstat;
 	const repoInfo = await statPath(repoRoot);
 	if (repoInfo.uid !== currentUid) {
-		return { repaired: 0, skipped: ["repo root is not owned by the current user"] };
+		return {
+			repaired: 0,
+			skipped: ["repo root is not owned by the current user"],
+		};
 	}
 	const issues = await collectRepoArtifactOwnershipIssues(repoRoot, {
 		...options,
@@ -1146,7 +1194,9 @@ export async function repairRepoArtifactOwnership(
 	let repaired = 0;
 	const skipped: string[] = [];
 	for (const issue of writabilityIssues) {
-		skipped.push(`${formatArtifactPath(repoRoot, issue.path)}: not writable by current user`);
+		skipped.push(
+			`${formatArtifactPath(repoRoot, issue.path)}: not writable by current user`,
+		);
 	}
 	for (const issue of ownershipIssues) {
 		try {
@@ -1182,16 +1232,13 @@ export async function checkLegacyMultiAgentCompatibility(
 		const content = await readFile(configPath, "utf-8");
 		if (validateToml(content)) return null;
 
-		const affected = Object.values(analyzeLegacyMultiAgentConfig(content).assessments).filter(
-			(assessment) => assessment.state !== "absent",
-		);
+		const affected = Object.values(
+			analyzeLegacyMultiAgentConfig(content).assessments,
+		).filter((assessment) => assessment.state !== "absent");
 		if (affected.length === 0) return null;
 
 		const details = affected
-			.map(
-				({ key, state, reasonCode }) =>
-					`${key} (${state}; ${reasonCode})`,
-			)
+			.map(({ key, state, reasonCode }) => `${key} (${state}; ${reasonCode})`)
 			.join(", ");
 		return {
 			name: "GPT-5.6 multi-agent compatibility",
@@ -1277,7 +1324,7 @@ async function checkSeededContextDefaults(
 			name: "Legacy OMX context defaults",
 			status: "warn",
 			message:
-				"config.toml contains unchanged OMX-seeded context defaults; rerun \"omx setup\" to migrate them. Doctor did not rewrite config.",
+				'config.toml contains unchanged OMX-seeded context defaults; rerun "omx setup" to migrate them. Doctor did not rewrite config.',
 		};
 	} catch {
 		return null;
@@ -1409,7 +1456,8 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 		return {
 			name: "Lore commit guard",
 			status: "pass",
-			message: "disabled by environment/default opt-out; enable with OMX_LORE_COMMIT_GUARD=1",
+			message:
+				"disabled by environment/default opt-out; enable with OMX_LORE_COMMIT_GUARD=1",
 		};
 	}
 
@@ -1432,9 +1480,11 @@ async function checkLoreCommitGuard(configPath: string): Promise<Check> {
 			parsed?.env?.[OMX_LORE_COMMIT_GUARD_ENV];
 
 		if (typeof configuredValue === "string") {
-			if (isLoreCommitGuardEnabled({
-				[OMX_LORE_COMMIT_GUARD_ENV]: configuredValue,
-			})) {
+			if (
+				isLoreCommitGuardEnabled({
+					[OMX_LORE_COMMIT_GUARD_ENV]: configuredValue,
+				})
+			) {
 				return {
 					name: "Lore commit guard",
 					status: "pass",
@@ -1617,13 +1667,18 @@ export interface NativeHookCheckContext {
 	platform?: NodeJS.Platform;
 }
 
-
 function isEnabledTomlValue(value: unknown): boolean {
-	return value === true || (typeof value === "string" && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase()));
+	return (
+		value === true ||
+		(typeof value === "string" &&
+			["1", "true", "yes", "on"].includes(value.trim().toLowerCase()))
+	);
 }
 
 function configHasOmxEntries(configContent: string): boolean {
-	return configContent.includes("omx_") || configContent.includes("oh-my-codex");
+	return (
+		configContent.includes("omx_") || configContent.includes("oh-my-codex")
+	);
 }
 
 function configEnablesPluginScopedHooks(configContent: string): boolean {
@@ -1632,9 +1687,14 @@ function configEnablesPluginScopedHooks(configContent: string): boolean {
 			plugin_hooks?: unknown;
 			features?: Record<string, unknown>;
 		};
-		return isEnabledTomlValue(parsed.plugin_hooks) || isEnabledTomlValue(parsed.features?.plugin_hooks);
+		return (
+			isEnabledTomlValue(parsed.plugin_hooks) ||
+			isEnabledTomlValue(parsed.features?.plugin_hooks)
+		);
 	} catch {
-		return /^\s*plugin_hooks\s*=\s*(?:true|1|"true"|"1"|"yes"|"on")\s*$/m.test(configContent);
+		return /^\s*plugin_hooks\s*=\s*(?:true|1|"true"|"1"|"yes"|"on")\s*$/m.test(
+			configContent,
+		);
 	}
 }
 
@@ -1679,11 +1739,14 @@ const WINDOWS_SHIM_SCAN_EVENTS = [
 	"Stop",
 ] as const;
 
-function effectiveWindowsHookCommand(handler: Record<string, unknown>): string | null {
+function effectiveWindowsHookCommand(
+	handler: Record<string, unknown>,
+): string | null {
 	const commandWindows = handler.commandWindows;
 	if (typeof commandWindows === "string") return commandWindows;
 	const commandWindowsSnakeCase = handler.command_windows;
-	if (typeof commandWindowsSnakeCase === "string") return commandWindowsSnakeCase;
+	if (typeof commandWindowsSnakeCase === "string")
+		return commandWindowsSnakeCase;
 	return typeof handler.command === "string" ? handler.command : null;
 }
 
@@ -1706,27 +1769,43 @@ function referencedWindowsNativeHookShimPaths(
 	);
 	const skippedHandlers = new Set(
 		diagnostics
-			.filter((diagnostic) => diagnostic.code === "async_command" || diagnostic.code === "empty_command")
-			.map((diagnostic) => `${diagnostic.eventName}:${diagnostic.groupIndex}:${diagnostic.handlerIndex}`),
+			.filter(
+				(diagnostic) =>
+					diagnostic.code === "async_command" ||
+					diagnostic.code === "empty_command",
+			)
+			.map(
+				(diagnostic) =>
+					`${diagnostic.eventName}:${diagnostic.groupIndex}:${diagnostic.handlerIndex}`,
+			),
 	);
 	const shimPaths = new Set<string>();
 	for (const eventName of WINDOWS_SHIM_SCAN_EVENTS) {
 		const eventGroups = root.hooks[eventName];
 		if (!Array.isArray(eventGroups)) continue;
 		for (const [groupIndex, group] of eventGroups.entries()) {
-			if (skippedGroups.has(`${eventName}:${groupIndex}`) || !isJsonRecord(group) || !Array.isArray(group.hooks)) continue;
+			if (
+				skippedGroups.has(`${eventName}:${groupIndex}`) ||
+				!isJsonRecord(group) ||
+				!Array.isArray(group.hooks)
+			)
+				continue;
 			for (const [handlerIndex, handler] of group.hooks.entries()) {
 				if (
 					skippedHandlers.has(`${eventName}:${groupIndex}:${handlerIndex}`) ||
 					!isJsonRecord(handler) ||
 					handler.type !== "command"
-				) continue;
+				)
+					continue;
 				const command = effectiveWindowsHookCommand(handler);
 				if (!command) continue;
-				const shimPath = parseManagedCodexNativeHookWindowsShimCommand(command, {
-					platform: "win32",
-					codexHomeDir,
-				});
+				const shimPath = parseManagedCodexNativeHookWindowsShimCommand(
+					command,
+					{
+						platform: "win32",
+						codexHomeDir,
+					},
+				);
 				if (shimPath) shimPaths.add(shimPath);
 			}
 		}
@@ -1779,7 +1858,11 @@ async function checkWindowsNativeHookShims(
 		buildManagedCodexNativeHookWindowsShimContent(getPackageRoot()),
 		"utf-8",
 	);
-	for (const shimPath of referencedWindowsNativeHookShimPaths(root, diagnostics, codexHomeDir)) {
+	for (const shimPath of referencedWindowsNativeHookShimPaths(
+		root,
+		diagnostics,
+		codexHomeDir,
+	)) {
 		let shimContent: Buffer;
 		try {
 			const shimStat = await lstat(shimPath);
@@ -1804,18 +1887,23 @@ async function checkWindowsNativeHookShims(
 			);
 			if (topologyCheck) return topologyCheck;
 		} catch (error) {
-			const code = typeof error === "object" && error !== null && "code" in error
-				? String(error.code)
-				: undefined;
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? String(error.code)
+					: undefined;
 			return {
 				name: "Native hooks",
 				status: "fail",
-				message: code === "ENOENT"
-					? `referenced Windows native hook shim is missing at ${shimPath}; manually reinstall the matching oh-my-codex version because doctor will not create or modify shims`
-					: `cannot read referenced Windows native hook shim at ${shimPath}; inspect it and manually reinstall the matching oh-my-codex version because doctor will not modify shims`,
+				message:
+					code === "ENOENT"
+						? `referenced Windows native hook shim is missing at ${shimPath}; manually reinstall the matching oh-my-codex version because doctor will not create or modify shims`
+						: `cannot read referenced Windows native hook shim at ${shimPath}; inspect it and manually reinstall the matching oh-my-codex version because doctor will not modify shims`,
 			};
 		}
-		const ownership = classifyManagedCodexNativeHookWindowsShimOwnership(shimContent, expected);
+		const ownership = classifyManagedCodexNativeHookWindowsShimOwnership(
+			shimContent,
+			expected,
+		);
 		if (ownership === "modified") {
 			return {
 				name: "Native hooks",
@@ -1853,14 +1941,21 @@ function getMissingManagedHookEventsFromPlan(
 	return MANAGED_HOOK_EVENTS.filter((eventName) => {
 		const label = MANAGED_HOOK_TRUST_KEY_LABELS[eventName];
 		const keyPattern = new RegExp(`:${label}:\\d+:\\d+$`);
-		return !Object.keys(plan.priorTrustState).some((key) => keyPattern.test(key));
+		return !Object.keys(plan.priorTrustState).some((key) =>
+			keyPattern.test(key),
+		);
 	});
 }
 
 function pluginHooksJsonHasNativeCoverage(content: string): boolean | null {
 	try {
 		const parsed = JSON.parse(content) as { hooks?: Record<string, unknown> };
-		if (!parsed || typeof parsed !== "object" || typeof parsed.hooks !== "object" || parsed.hooks === null) {
+		if (
+			!parsed ||
+			typeof parsed !== "object" ||
+			typeof parsed.hooks !== "object" ||
+			parsed.hooks === null
+		) {
 			return false;
 		}
 		return MANAGED_HOOK_EVENTS.every((eventName) => {
@@ -1873,7 +1968,10 @@ function pluginHooksJsonHasNativeCoverage(content: string): boolean | null {
 				return hooks.some((hook) => {
 					if (!hook || typeof hook !== "object") return false;
 					const command = (hook as { command?: unknown }).command;
-					return typeof command === "string" && command.includes("codex-native-hook.mjs");
+					return (
+						typeof command === "string" &&
+						command.includes("codex-native-hook.mjs")
+					);
 				});
 			});
 		});
@@ -1889,31 +1987,53 @@ async function checkPluginScopedNativeHooks(
 	const setupHooksPathDescription = existsSync(setupHooksPath)
 		? `existing hooks.json at ${setupHooksPath} is retained read-only and validated separately because plugin-scoped hooks are enabled`
 		: `setup-owned hooks.json is intentionally absent at ${setupHooksPath}`;
-	const packagedMarketplace = await resolvePackagedOmxMarketplace(getPackageRoot());
+	const packagedMarketplace = await resolvePackagedOmxMarketplace(
+		getPackageRoot(),
+	);
 	if (!packagedMarketplace) {
 		return {
 			name: "Native hooks",
 			status: "warn",
-			message:
-				`plugin-scoped hooks are enabled and ${setupHooksPathDescription}, but packaged ${OMX_LOCAL_MARKETPLACE_NAME} metadata was not found`,
+			message: `plugin-scoped hooks are enabled and ${setupHooksPathDescription}, but packaged ${OMX_LOCAL_MARKETPLACE_NAME} metadata was not found`,
 		};
 	}
 
 	const version = await packagedOmxPluginVersion(packagedMarketplace);
 	const expectedCacheDir = version
-		? join(codexHomeDir, "plugins", "cache", OMX_LOCAL_MARKETPLACE_NAME, "oh-my-codex", version)
-		: join(codexHomeDir, "plugins", "cache", OMX_LOCAL_MARKETPLACE_NAME, "oh-my-codex", "<version>");
+		? join(
+				codexHomeDir,
+				"plugins",
+				"cache",
+				OMX_LOCAL_MARKETPLACE_NAME,
+				"oh-my-codex",
+				version,
+			)
+		: join(
+				codexHomeDir,
+				"plugins",
+				"cache",
+				OMX_LOCAL_MARKETPLACE_NAME,
+				"oh-my-codex",
+				"<version>",
+			);
 	const expectedHooksPath = join(expectedCacheDir, "hooks", "hooks.json");
-	const expectedHookLauncherPath = join(expectedCacheDir, "hooks", "codex-native-hook.mjs");
-	const expectedPinnedLauncherPath = join(expectedCacheDir, "hooks", "omx-command.json");
+	const expectedHookLauncherPath = join(
+		expectedCacheDir,
+		"hooks",
+		"codex-native-hook.mjs",
+	);
+	const expectedPinnedLauncherPath = join(
+		expectedCacheDir,
+		"hooks",
+		"omx-command.json",
+	);
 	const state = await readOmxPluginCacheState(expectedCacheDir);
 
 	if (!state) {
 		return {
 			name: "Native hooks",
 			status: "warn",
-			message:
-				`plugin-scoped hooks are enabled, but the expected Codex plugin cache manifest is missing at ${join(expectedCacheDir, ".codex-plugin", "plugin.json")}; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
+			message: `plugin-scoped hooks are enabled, but the expected Codex plugin cache manifest is missing at ${join(expectedCacheDir, ".codex-plugin", "plugin.json")}; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
 		};
 	}
 
@@ -1921,28 +2041,34 @@ async function checkPluginScopedNativeHooks(
 		return {
 			name: "Native hooks",
 			status: "warn",
-			message:
-				`plugin-scoped hooks are enabled, but the Codex plugin cache manifest points hooks to ${String(state.hooksPointer)} instead of ./hooks/hooks.json at ${expectedHooksPath}; run "omx setup --plugin" to refresh the plugin cache`,
+			message: `plugin-scoped hooks are enabled, but the Codex plugin cache manifest points hooks to ${String(state.hooksPointer)} instead of ./hooks/hooks.json at ${expectedHooksPath}; run "omx setup --plugin" to refresh the plugin cache`,
 		};
 	}
 
-	for (const expectedPath of [expectedHooksPath, expectedHookLauncherPath, expectedPinnedLauncherPath]) {
+	for (const expectedPath of [
+		expectedHooksPath,
+		expectedHookLauncherPath,
+		expectedPinnedLauncherPath,
+	]) {
 		if (!existsSync(expectedPath)) {
 			return {
 				name: "Native hooks",
 				status: "warn",
-				message:
-					`plugin-scoped hooks are enabled, but expected plugin hook file is missing at ${expectedPath}; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
+				message: `plugin-scoped hooks are enabled, but expected plugin hook file is missing at ${expectedPath}; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
 			};
 		}
 	}
 
-	if (!(await pluginHookCacheMatchesPackaged(expectedCacheDir, packagedMarketplace))) {
+	if (
+		!(await pluginHookCacheMatchesPackaged(
+			expectedCacheDir,
+			packagedMarketplace,
+		))
+	) {
 		return {
 			name: "Native hooks",
 			status: "warn",
-			message:
-				`plugin-scoped hooks are enabled, but cached plugin hook files or pinned hook launcher in ${expectedCacheDir} do not match the packaged plugin; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
+			message: `plugin-scoped hooks are enabled, but cached plugin hook files or pinned hook launcher in ${expectedCacheDir} do not match the packaged plugin; ${setupHooksPathDescription}; run "omx setup --plugin" to refresh the plugin cache`,
 		};
 	}
 
@@ -1969,8 +2095,7 @@ async function checkPluginScopedNativeHooks(
 		return {
 			name: "Native hooks",
 			status: "warn",
-			message:
-				`plugin-scoped hooks.json at ${expectedHooksPath} is missing OMX native coverage for one or more events; run "omx setup --plugin" to refresh the plugin cache`,
+			message: `plugin-scoped hooks.json at ${expectedHooksPath} is missing OMX native coverage for one or more events; run "omx setup --plugin" to refresh the plugin cache`,
 		};
 	}
 
@@ -2007,7 +2132,11 @@ async function checkPluginScopedNativeHooks(
 			};
 		}
 		if (result.status !== 0) {
-			const detail = (result.stderr || result.stdout || `exit ${result.status}`).trim();
+			const detail = (
+				result.stderr ||
+				result.stdout ||
+				`exit ${result.status}`
+			).trim();
 			return {
 				name: "Native hooks",
 				status: "fail",
@@ -2021,27 +2150,33 @@ async function checkPluginScopedNativeHooks(
 	return {
 		name: "Native hooks",
 		status: "pass",
-		message:
-			`plugin-scoped hooks are enabled; ${setupHooksPathDescription}, and plugin cache native hook coverage smoke passed via ${expectedHooksPath}`,
+		message: `plugin-scoped hooks are enabled; ${setupHooksPathDescription}, and plugin cache native hook coverage smoke passed via ${expectedHooksPath}`,
 	};
 }
 
 function decodeStrictUtf8(bytes: Buffer): string | null {
 	try {
-		const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+		const content = new TextDecoder("utf-8", {
+			fatal: true,
+			ignoreBOM: true,
+		}).decode(bytes);
 		return Buffer.from(content, "utf-8").equals(bytes) ? content : null;
 	} catch {
 		return null;
 	}
 }
 
-function combinePluginAndGlobalNativeHookChecks(plugin: Check, global: Check | null): Check {
+function combinePluginAndGlobalNativeHookChecks(
+	plugin: Check,
+	global: Check | null,
+): Check {
 	if (!global) return plugin;
-	const status = plugin.status === "fail" || global.status === "fail"
-		? "fail"
-		: plugin.status === "warn" || global.status === "warn"
-			? "warn"
-			: "pass";
+	const status =
+		plugin.status === "fail" || global.status === "fail"
+			? "fail"
+			: plugin.status === "warn" || global.status === "warn"
+				? "warn"
+				: "pass";
 	return {
 		name: "Native hooks",
 		status,
@@ -2056,9 +2191,10 @@ function combineNativeHookIntegrityAndRemovalChecks(
 	if (!integrityCheck) return removalCheck;
 	return {
 		name: "Native hooks",
-		status: integrityCheck.status === "fail" || removalCheck.status === "fail"
-			? "fail"
-			: "warn",
+		status:
+			integrityCheck.status === "fail" || removalCheck.status === "fail"
+				? "fail"
+				: "warn",
 		message: `${integrityCheck.message}; ${removalCheck.message}`,
 	};
 }
@@ -2101,15 +2237,17 @@ async function checkExistingNativeHooks(
 			platform,
 			codexHomeDir: context.codexHomeDir,
 		});
-		const windowsShimCheck = platform === "win32"
-			? await checkWindowsNativeHookShims(
-				validation.root,
-				validation.diagnostics,
-				context.codexHomeDir,
-			)
-			: null;
+		const windowsShimCheck =
+			platform === "win32"
+				? await checkWindowsNativeHookShims(
+						validation.root,
+						validation.diagnostics,
+						context.codexHomeDir,
+					)
+				: null;
 		if (!removalPlan.ok) {
-			const removalIsCoordinateOnly = removalPlan.error.code === "unsafe_managed_removal";
+			const removalIsCoordinateOnly =
+				removalPlan.error.code === "unsafe_managed_removal";
 			const removalCheck: Check = {
 				name: "Native hooks",
 				status: removalIsCoordinateOnly ? "warn" : "fail",
@@ -2117,10 +2255,15 @@ async function checkExistingNativeHooks(
 					? `hooks.json has OMX entries that cannot be safely removed (${removalPlan.error.code}): ${trimNativeHookDetailTerminalPeriod(removalPlan.error.message)}; manual cleanup is required because doctor will not overwrite or remove it`
 					: `hooks.json has ambiguous or untrusted OMX ownership (${removalPlan.error.code}): ${trimNativeHookDetailTerminalPeriod(removalPlan.error.message)}; inspect the file manually because doctor will not overwrite or remove it`,
 			};
-			return combineNativeHookIntegrityAndRemovalChecks(windowsShimCheck, removalCheck);
+			return combineNativeHookIntegrityAndRemovalChecks(
+				windowsShimCheck,
+				removalCheck,
+			);
 		}
 		if (windowsShimCheck) return windowsShimCheck;
-		const legacyTrustStateEntries = Object.keys(removalPlan.legacyTrustState).length;
+		const legacyTrustStateEntries = Object.keys(
+			removalPlan.legacyTrustState,
+		).length;
 		if (legacyTrustStateEntries > 0) {
 			return {
 				name: "Native hooks",
@@ -2199,12 +2342,14 @@ export async function checkNativeHooks(
 		if (existsSync(configPath)) {
 			try {
 				const configContent = await readFile(configPath, "utf-8");
-				if (context.installMode === "plugin" && configHasOmxEntries(configContent)) {
+				if (
+					context.installMode === "plugin" &&
+					configHasOmxEntries(configContent)
+				) {
 					return {
 						name: "Native hooks",
 						status: "warn",
-						message:
-							`plugin mode is using legacy native hook fallback, but expected setup-owned hooks.json is missing at ${hooksPath}; run "omx setup --plugin" to restore the fallback hook file, or upgrade Codex to plugin_hooks support so setup can use plugin-scoped hooks`,
+						message: `plugin mode is using legacy native hook fallback, but expected setup-owned hooks.json is missing at ${hooksPath}; run "omx setup --plugin" to restore the fallback hook file, or upgrade Codex to plugin_hooks support so setup can use plugin-scoped hooks`,
 					};
 				}
 
@@ -2212,8 +2357,7 @@ export async function checkNativeHooks(
 					return {
 						name: "Native hooks",
 						status: "warn",
-						message:
-							`expected setup-owned hooks.json is missing at ${hooksPath} even though config.toml has OMX entries; run "omx setup" to restore native hook coverage`,
+						message: `expected setup-owned hooks.json is missing at ${hooksPath} even though config.toml has OMX entries; run "omx setup" to restore native hook coverage`,
 					};
 				}
 			} catch {
@@ -2238,7 +2382,12 @@ export async function checkNativeHookDistSmoke(
 	const packageRoot = options.packageRoot ?? getPackageRoot();
 	const nodePath = options.nodePath ?? process.execPath;
 	const runner = options.runner ?? spawnSync;
-	const scriptPath = join(packageRoot, "dist", "scripts", "codex-native-hook.js");
+	const scriptPath = join(
+		packageRoot,
+		"dist",
+		"scripts",
+		"codex-native-hook.js",
+	);
 
 	if (!existsSync(scriptPath)) {
 		return {
@@ -2248,7 +2397,9 @@ export async function checkNativeHookDistSmoke(
 		};
 	}
 
-	const smokeCwd = await mkdtemp(join(tmpdir(), "omx-doctor-native-hook-dist-"));
+	const smokeCwd = await mkdtemp(
+		join(tmpdir(), "omx-doctor-native-hook-dist-"),
+	);
 	try {
 		const payload = JSON.stringify({
 			hook_event_name: "UserPromptSubmit",
@@ -2311,7 +2462,7 @@ export function classifyPostCompactHookStdout(stdout: string): Check | null {
 			name: "Native PostCompact hook",
 			status: "fail",
 			message:
-				"PostCompact hook emitted JSON stdout, but OMX PostCompact must emit no stdout until Codex defines a supported PostCompact output contract; rerun \"omx setup\" after upgrading",
+				'PostCompact hook emitted JSON stdout, but OMX PostCompact must emit no stdout until Codex defines a supported PostCompact output contract; rerun "omx setup" after upgrading',
 		};
 	} catch (error) {
 		return {
@@ -2395,7 +2546,8 @@ function smokeDirectoryIdentity(stat: Stats): SmokeDirectoryIdentity | null {
 		!stat.isDirectory() ||
 		stat.isSymbolicLink() ||
 		(process.platform !== "win32" && (stat.mode & 0o077) !== 0)
-	) return null;
+	)
+		return null;
 	return { dev: stat.dev, ino: stat.ino };
 }
 
@@ -2413,7 +2565,11 @@ function sameSmokeDirectoryIdentity(
 	expected: SmokeDirectoryIdentity,
 	actual: SmokeDirectoryIdentity | null,
 ): boolean {
-	return actual !== null && actual.dev === expected.dev && actual.ino === expected.ino;
+	return (
+		actual !== null &&
+		actual.dev === expected.dev &&
+		actual.ino === expected.ino
+	);
 }
 
 function smokeDirectorySafetyCheck(message: string): Check {
@@ -2428,7 +2584,12 @@ async function cleanupSmokeDirectoryIfUnchanged(
 	smokeCwd: string,
 	identity: SmokeDirectoryIdentity,
 ): Promise<Check | null> {
-	if (!sameSmokeDirectoryIdentity(identity, await readSmokeDirectoryIdentity(smokeCwd))) {
+	if (
+		!sameSmokeDirectoryIdentity(
+			identity,
+			await readSmokeDirectoryIdentity(smokeCwd),
+		)
+	) {
 		return smokeDirectorySafetyCheck(
 			"temporary PostCompact smoke directory changed during validation; doctor preserved it for manual recovery and skipped cleanup for safety",
 		);
@@ -2449,7 +2610,8 @@ function inMemoryWindowsShimSmokeCheck(): Check {
 	return {
 		name: "Native PostCompact hook",
 		status: "warn",
-		message: "doctor could not build an in-memory Windows native hook smoke command from exact validated shim bytes; doctor skipped execution for safety",
+		message:
+			"doctor could not build an in-memory Windows native hook smoke command from exact validated shim bytes; doctor skipped execution for safety",
 	};
 }
 
@@ -2477,12 +2639,14 @@ function getManagedPostCompactHookCommands(
 	return validation.discoveredCommands
 		.filter((command) => command.eventName === "PostCompact")
 		.map((command) => command.command)
-		.filter((command) =>
-			isManagedCodexHookCommand(command) ||
-			(platform === "win32" && parseManagedCodexNativeHookWindowsShimCommand(command, {
-				platform,
-				codexHomeDir,
-			}) !== null),
+		.filter(
+			(command) =>
+				isManagedCodexHookCommand(command) ||
+				(platform === "win32" &&
+					parseManagedCodexNativeHookWindowsShimCommand(command, {
+						platform,
+						codexHomeDir,
+					}) !== null),
 		);
 }
 
@@ -2491,7 +2655,7 @@ function currentPostCompactCommandCheck(): Check {
 		name: "Native PostCompact hook",
 		status: "warn",
 		message:
-			"effective PostCompact OMX command does not match this installation's managed hook command; doctor skipped execution for safety, and rerunning \"omx setup\" should refresh stale hooks.json entries",
+			'effective PostCompact OMX command does not match this installation\'s managed hook command; doctor skipped execution for safety, and rerunning "omx setup" should refresh stale hooks.json entries',
 	};
 }
 
@@ -2510,13 +2674,16 @@ export async function checkNativePostCompactHookRuntime(
 	options: NativePostCompactHookRuntimeOptions = {},
 ): Promise<Check | null> {
 	if (!existsSync(hooksPath)) return null;
-	if (options.nativeHooksCheck && options.nativeHooksCheck.status !== "pass") return null;
+	if (options.nativeHooksCheck && options.nativeHooksCheck.status !== "pass")
+		return null;
 
 	const platform = options.platform ?? process.platform;
-	const expectedCommand = options.expectedCommand ?? buildManagedCodexNativeHookCommand(getPackageRoot(), {
-		codexHomeDir,
-		platform,
-	});
+	const expectedCommand =
+		options.expectedCommand ??
+		buildManagedCodexNativeHookCommand(getPackageRoot(), {
+			codexHomeDir,
+			platform,
+		});
 	let content: string | null;
 	try {
 		content = decodeStrictUtf8(await readFile(hooksPath));
@@ -2525,8 +2692,13 @@ export async function checkNativePostCompactHookRuntime(
 	}
 	if (content === null) return null;
 
-	const postCompactCommands = getManagedPostCompactHookCommands(content, platform, codexHomeDir);
-	if (postCompactCommands === null || postCompactCommands.length === 0) return null;
+	const postCompactCommands = getManagedPostCompactHookCommands(
+		content,
+		platform,
+		codexHomeDir,
+	);
+	if (postCompactCommands === null || postCompactCommands.length === 0)
+		return null;
 	const uniqueCommands = [...new Set(postCompactCommands)];
 	if (uniqueCommands.length !== 1 || uniqueCommands[0] !== expectedCommand) {
 		return currentPostCompactCommandCheck();
@@ -2543,151 +2715,178 @@ export async function checkNativePostCompactHookRuntime(
 	let primaryError: Error | null = null;
 	try {
 		primaryResult = await (async (): Promise<Check> => {
-		const revalidatedIntegrity = await checkExistingNativeHooks(hooksPath, {
-			codexHomeDir,
-			platform,
-		});
-		if (revalidatedIntegrity.status !== "pass") {
-			return skippedPostCompactIntegrityCheck(revalidatedIntegrity);
-		}
-
-		let revalidatedContent: string | null;
-		try {
-			revalidatedContent = decodeStrictUtf8(await readFile(hooksPath));
-		} catch {
-			return {
-				name: "Native PostCompact hook",
-				status: "warn",
-				message: "hooks.json changed during verbose validation; doctor skipped execution for safety",
-			};
-		}
-		if (revalidatedContent === null) {
-			return {
-				name: "Native PostCompact hook",
-				status: "warn",
-				message: "hooks.json changed during verbose validation; doctor skipped execution for safety",
-			};
-		}
-		const revalidatedCommands = getManagedPostCompactHookCommands(
-			revalidatedContent,
-			platform,
-			codexHomeDir,
-		);
-		if (
-			revalidatedCommands === null ||
-			revalidatedCommands.length === 0 ||
-			new Set(revalidatedCommands).size !== 1 ||
-			revalidatedCommands[0] !== expectedCommand
-		) {
-			return currentPostCompactCommandCheck();
-		}
-
-		if (platform === "win32") {
-			const validation = validateCodexHooksConfigStrict(revalidatedContent, {
-				platform,
+			const revalidatedIntegrity = await checkExistingNativeHooks(hooksPath, {
 				codexHomeDir,
+				platform,
 			});
-			if (!validation.ok) {
+			if (revalidatedIntegrity.status !== "pass") {
+				return skippedPostCompactIntegrityCheck(revalidatedIntegrity);
+			}
+
+			let revalidatedContent: string | null;
+			try {
+				revalidatedContent = decodeStrictUtf8(await readFile(hooksPath));
+			} catch {
 				return {
 					name: "Native PostCompact hook",
 					status: "warn",
-					message: "hooks.json changed during verbose validation; doctor skipped execution for safety",
+					message:
+						"hooks.json changed during verbose validation; doctor skipped execution for safety",
 				};
 			}
-			const currentShimCheck = await checkWindowsNativeHookShims(
-				validation.root,
-				validation.diagnostics,
-				codexHomeDir,
-				true,
-			);
-			if (currentShimCheck) return skippedPostCompactIntegrityCheck(currentShimCheck);
-		}
-
-		let smokeInvocation: PostCompactSmokeSpawnInvocation;
-		if (platform === "win32") {
-			const canonicalShimPath = parseManagedCodexNativeHookWindowsShimCommand(expectedCommand, {
+			if (revalidatedContent === null) {
+				return {
+					name: "Native PostCompact hook",
+					status: "warn",
+					message:
+						"hooks.json changed during verbose validation; doctor skipped execution for safety",
+				};
+			}
+			const revalidatedCommands = getManagedPostCompactHookCommands(
+				revalidatedContent,
 				platform,
 				codexHomeDir,
-			});
-			if (!canonicalShimPath) return currentPostCompactCommandCheck();
-
-			const expectedShimContent = Buffer.from(
-				buildManagedCodexNativeHookWindowsShimContent(getPackageRoot()),
-				"utf-8",
 			);
-			const inMemoryInvocation = buildInMemoryWindowsShimSmokeInvocation(expectedShimContent);
-			if (!inMemoryInvocation) return inMemoryWindowsShimSmokeCheck();
-			smokeInvocation = inMemoryInvocation;
-			try {
-				await options.beforeWindowsShimSmoke?.({ canonicalShimPath, smokeCwd });
-			} catch {
-				return smokeDirectorySafetyCheck(
-					"Windows native hook changed during validation; doctor skipped execution for safety",
+			if (
+				revalidatedCommands === null ||
+				revalidatedCommands.length === 0 ||
+				new Set(revalidatedCommands).size !== 1 ||
+				revalidatedCommands[0] !== expectedCommand
+			) {
+				return currentPostCompactCommandCheck();
+			}
+
+			if (platform === "win32") {
+				const validation = validateCodexHooksConfigStrict(revalidatedContent, {
+					platform,
+					codexHomeDir,
+				});
+				if (!validation.ok) {
+					return {
+						name: "Native PostCompact hook",
+						status: "warn",
+						message:
+							"hooks.json changed during verbose validation; doctor skipped execution for safety",
+					};
+				}
+				const currentShimCheck = await checkWindowsNativeHookShims(
+					validation.root,
+					validation.diagnostics,
+					codexHomeDir,
+					true,
+				);
+				if (currentShimCheck)
+					return skippedPostCompactIntegrityCheck(currentShimCheck);
+			}
+
+			let smokeInvocation: PostCompactSmokeSpawnInvocation;
+			if (platform === "win32") {
+				const canonicalShimPath = parseManagedCodexNativeHookWindowsShimCommand(
+					expectedCommand,
+					{
+						platform,
+						codexHomeDir,
+					},
+				);
+				if (!canonicalShimPath) return currentPostCompactCommandCheck();
+
+				const expectedShimContent = Buffer.from(
+					buildManagedCodexNativeHookWindowsShimContent(getPackageRoot()),
+					"utf-8",
+				);
+				const inMemoryInvocation =
+					buildInMemoryWindowsShimSmokeInvocation(expectedShimContent);
+				if (!inMemoryInvocation) return inMemoryWindowsShimSmokeCheck();
+				smokeInvocation = inMemoryInvocation;
+				try {
+					await options.beforeWindowsShimSmoke?.({
+						canonicalShimPath,
+						smokeCwd,
+					});
+				} catch {
+					return smokeDirectorySafetyCheck(
+						"Windows native hook changed during validation; doctor skipped execution for safety",
+					);
+				}
+			} else {
+				smokeInvocation = buildPostCompactSmokeSpawnInvocation(
+					expectedCommand,
+					{ platform },
 				);
 			}
-		} else {
-			smokeInvocation = buildPostCompactSmokeSpawnInvocation(expectedCommand, { platform });
-		}
-		if (!sameSmokeDirectoryIdentity(smokeDirectory, await readSmokeDirectoryIdentity(smokeCwd))) {
-			return smokeDirectorySafetyCheck(
-				"temporary PostCompact smoke directory changed during validation; doctor preserved it for manual recovery and skipped execution for safety",
+			if (
+				!sameSmokeDirectoryIdentity(
+					smokeDirectory,
+					await readSmokeDirectoryIdentity(smokeCwd),
+				)
+			) {
+				return smokeDirectorySafetyCheck(
+					"temporary PostCompact smoke directory changed during validation; doctor preserved it for manual recovery and skipped execution for safety",
+				);
+			}
+
+			const payload = JSON.stringify({
+				hook_event_name: "PostCompact",
+				cwd: smokeCwd,
+				session_id: "omx-doctor-postcompact-smoke",
+			});
+			const result = (options.runner ?? spawnSync)(
+				smokeInvocation.command,
+				smokeInvocation.args,
+				{
+					cwd,
+					encoding: "utf-8",
+					env: {
+						...process.env,
+						OMX_NATIVE_HOOK_DOCTOR_SMOKE: "1",
+						OMX_ROOT: smokeCwd,
+						OMX_SESSION_ID: "omx-doctor-postcompact-smoke",
+						OMX_SOURCE_CWD: smokeCwd,
+						OMX_STARTUP_CWD: smokeCwd,
+					},
+					input: payload,
+					shell: smokeInvocation.shell,
+					timeout: 5_000,
+				},
 			);
-		}
+			if (result.error) {
+				return {
+					name: "Native PostCompact hook",
+					status: "fail",
+					message: `PostCompact hook smoke validation failed to run (${result.error.message})`,
+				};
+			}
+			if (result.status !== 0) {
+				const stderr = (result.stderr || "").trim();
+				return {
+					name: "Native PostCompact hook",
+					status: "fail",
+					message: `PostCompact hook smoke validation exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
+				};
+			}
 
-		const payload = JSON.stringify({
-			hook_event_name: "PostCompact",
-			cwd: smokeCwd,
-			session_id: "omx-doctor-postcompact-smoke",
-		});
-		const result = (options.runner ?? spawnSync)(smokeInvocation.command, smokeInvocation.args, {
-			cwd,
-			encoding: "utf-8",
-			env: {
-				...process.env,
-				OMX_NATIVE_HOOK_DOCTOR_SMOKE: "1",
-				OMX_ROOT: smokeCwd,
-				OMX_SESSION_ID: "omx-doctor-postcompact-smoke",
-				OMX_SOURCE_CWD: smokeCwd,
-				OMX_STARTUP_CWD: smokeCwd,
-			},
-			input: payload,
-			shell: smokeInvocation.shell,
-			timeout: 5_000,
-		});
-		if (result.error) {
+			const stdoutCheck = classifyPostCompactHookStdout(result.stdout || "");
+			if (stdoutCheck) return stdoutCheck;
+
 			return {
 				name: "Native PostCompact hook",
-				status: "fail",
-				message: `PostCompact hook smoke validation failed to run (${result.error.message})`,
+				status: "pass",
+				message:
+					"verbose smoke validation confirmed the effective PostCompact hook exits successfully with no stdout",
 			};
-		}
-		if (result.status !== 0) {
-			const stderr = (result.stderr || "").trim();
-			return {
-				name: "Native PostCompact hook",
-				status: "fail",
-				message: `PostCompact hook smoke validation exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
-			};
-		}
-
-		const stdoutCheck = classifyPostCompactHookStdout(result.stdout || "");
-		if (stdoutCheck) return stdoutCheck;
-
-		return {
-			name: "Native PostCompact hook",
-			status: "pass",
-			message:
-				"verbose smoke validation confirmed the effective PostCompact hook exits successfully with no stdout",
-		};
 		})();
 	} catch (error) {
 		primaryError = error instanceof Error ? error : new Error(String(error));
 		throw primaryError;
 	} finally {
-		const cleanupCheck = await cleanupSmokeDirectoryIfUnchanged(smokeCwd, smokeDirectory);
+		const cleanupCheck = await cleanupSmokeDirectoryIfUnchanged(
+			smokeCwd,
+			smokeDirectory,
+		);
 		if (cleanupCheck) {
 			if (primaryResult) {
-				if (primaryResult.status === "pass") primaryResult.status = cleanupCheck.status;
+				if (primaryResult.status === "pass")
+					primaryResult.status = cleanupCheck.status;
 				primaryResult.message = `${primaryResult.message}; ${cleanupCheck.message}`;
 			} else if (primaryError) {
 				primaryError.message = `${primaryError.message}; ${cleanupCheck.message}`;
@@ -2712,8 +2911,7 @@ async function checkNativeHookRuntimeMirrors(
 	return {
 		name: "Native hook runtime mirrors",
 		status: "warn",
-		message:
-			`.omx/runtime/codex-home contains ${runtimeMirrorCount} hooks.json runtime mirror${runtimeMirrorCount === 1 ? "" : "s"} skipped by hook discovery; cleanup or relaunch so external hook review tools do not see duplicate native hook surfaces`,
+		message: `.omx/runtime/codex-home contains ${runtimeMirrorCount} hooks.json runtime mirror${runtimeMirrorCount === 1 ? "" : "s"} skipped by hook discovery; cleanup or relaunch so external hook review tools do not see duplicate native hook surfaces`,
 	};
 }
 
@@ -2952,9 +3150,15 @@ async function readDoctorInstallStamp(codexHomeDir: string): Promise<{
 			install_revision?: unknown;
 		};
 		return {
-			...(typeof parsed.install_channel === "string" ? { install_channel: parsed.install_channel } : {}),
-			...(typeof parsed.dev_base_version === "string" ? { dev_base_version: parsed.dev_base_version } : {}),
-			...(typeof parsed.install_revision === "string" ? { install_revision: parsed.install_revision } : {}),
+			...(typeof parsed.install_channel === "string"
+				? { install_channel: parsed.install_channel }
+				: {}),
+			...(typeof parsed.dev_base_version === "string"
+				? { dev_base_version: parsed.dev_base_version }
+				: {}),
+			...(typeof parsed.install_revision === "string"
+				? { install_revision: parsed.install_revision }
+				: {}),
 		};
 	} catch {
 		return null;
@@ -2964,7 +3168,9 @@ async function readDoctorInstallStamp(codexHomeDir: string): Promise<{
 async function checkPluginVersionDiagnostics(
 	codexHomeDir: string,
 ): Promise<Check> {
-	const packagedMarketplace = await resolvePackagedOmxMarketplace(getPackageRoot());
+	const packagedMarketplace = await resolvePackagedOmxMarketplace(
+		getPackageRoot(),
+	);
 	if (!packagedMarketplace) {
 		return {
 			name: "Plugin versions",
@@ -3003,15 +3209,22 @@ async function checkPluginVersionDiagnostics(
 	}
 
 	if (stamp?.install_channel === "dev") {
-		const devDisplay = stamp.dev_base_version && stamp.install_revision
-			? `v${stamp.dev_base_version}-dev-${stamp.install_revision}`
-			: null;
+		const devDisplay =
+			stamp.dev_base_version && stamp.install_revision
+				? `v${stamp.dev_base_version}-dev-${stamp.install_revision}`
+				: null;
 		const stampDetail = [
 			`package/plugin manifest version ${manifestVersion}`,
 			devDisplay ? `dev display version ${devDisplay}` : null,
-			stamp.dev_base_version ? `dev_base_version ${stamp.dev_base_version}` : null,
-			stamp.install_revision ? `install_revision ${stamp.install_revision}` : null,
-		].filter(Boolean).join("; ");
+			stamp.dev_base_version
+				? `dev_base_version ${stamp.dev_base_version}`
+				: null,
+			stamp.install_revision
+				? `install_revision ${stamp.install_revision}`
+				: null,
+		]
+			.filter(Boolean)
+			.join("; ");
 		return {
 			name: "Plugin versions",
 			status: "pass",
@@ -3030,8 +3243,8 @@ const REQUIRED_NATIVE_REVIEWER_ROLES = ["architect", "critic"] as const;
 const ADVISORY_NATIVE_REVIEWER_ROLES = ["scholastic"] as const;
 
 type NativeReviewerRole =
-	| typeof REQUIRED_NATIVE_REVIEWER_ROLES[number]
-	| typeof ADVISORY_NATIVE_REVIEWER_ROLES[number];
+	| (typeof REQUIRED_NATIVE_REVIEWER_ROLES)[number]
+	| (typeof ADVISORY_NATIVE_REVIEWER_ROLES)[number];
 
 function getParsedAgentTables(
 	configPath: string,
@@ -3078,11 +3291,15 @@ function nativeReviewerRoleAvailable(
 	paths: DoctorPaths,
 	role: NativeReviewerRole,
 ): boolean {
-	return agentTomlDefinesRole(join(paths.agentsDir, `${role}.toml`), role)
-		|| configHasNativeReviewerRole(paths.configPath, role);
+	return (
+		agentTomlDefinesRole(join(paths.agentsDir, `${role}.toml`), role) ||
+		configHasNativeReviewerRole(paths.configPath, role)
+	);
 }
 
-function formatNativeRoleFileList(roles: readonly NativeReviewerRole[]): string {
+function formatNativeRoleFileList(
+	roles: readonly NativeReviewerRole[],
+): string {
 	const files = roles.map((role) => `${role}.toml`);
 	if (files.length <= 1) return files[0] ?? "";
 	return `${files.slice(0, -1).join(", ")} and ${files.at(-1)}`;
@@ -3102,9 +3319,10 @@ function checkNativeReviewerRoles(
 	);
 
 	if (missingRequired.length > 0) {
-		const advisorySuffix = missingAdvisory.length > 0
-			? `; advisory role missing: ${missingAdvisory.join(", ")}`
-			: "";
+		const advisorySuffix =
+			missingAdvisory.length > 0
+				? `; advisory role missing: ${missingAdvisory.join(", ")}`
+				: "";
 		return {
 			name: "Native reviewer roles",
 			status: "fail",
@@ -3128,8 +3346,7 @@ function checkNativeReviewerRoles(
 	return {
 		name: "Native reviewer roles",
 		status: "pass",
-		message:
-			`required RALPLAN/Autopilot native reviewer roles are available (${REQUIRED_NATIVE_REVIEWER_ROLES.join(", ")}); advisory ${ADVISORY_NATIVE_REVIEWER_ROLES.join(", ")} role is also available`,
+		message: `required RALPLAN/Autopilot native reviewer roles are available (${REQUIRED_NATIVE_REVIEWER_ROLES.join(", ")}); advisory ${ADVISORY_NATIVE_REVIEWER_ROLES.join(", ")} role is also available`,
 	};
 }
 
@@ -3139,7 +3356,9 @@ interface InstalledAgentModelInfo {
 	modelProvider?: string;
 }
 
-function readInstalledAgentModelInfo(tomlPath: string): InstalledAgentModelInfo {
+function readInstalledAgentModelInfo(
+	tomlPath: string,
+): InstalledAgentModelInfo {
 	if (!existsSync(tomlPath)) return { exists: false };
 	try {
 		const parsed = parseToml(readFileSync(tomlPath, "utf-8")) as {
@@ -3217,8 +3436,17 @@ export function checkSparkRouting(paths: DoctorPaths): Check {
 	const rootProvider = getCodexConfigRootModelProvider(codexHomeOverride);
 	const explicitSparkAgentOverrides = new Map(
 		getInstallableSparkLaneAgentNames()
-			.map((agentName) => [agentName, getAgentModelOverride(agentName, codexHomeOverride)] as const)
-			.filter((entry): entry is readonly [string, string] => typeof entry[1] === "string"),
+			.map(
+				(agentName) =>
+					[
+						agentName,
+						getAgentModelOverride(agentName, codexHomeOverride),
+					] as const,
+			)
+			.filter(
+				(entry): entry is readonly [string, string] =>
+					typeof entry[1] === "string",
+			),
 	);
 
 	const laneSummary =
@@ -3275,7 +3503,11 @@ export function checkSparkRouting(paths: DoctorPaths): Check {
 			);
 			continue;
 		}
-		if (info.modelProvider && rootProvider && info.modelProvider !== rootProvider) {
+		if (
+			info.modelProvider &&
+			rootProvider &&
+			info.modelProvider !== rootProvider
+		) {
 			problems.push(
 				`${agentName}.toml model_provider \`${info.modelProvider}\` differs from the config root provider \`${rootProvider}\` (stale install; run \`omx setup --force\`)`,
 			);
@@ -3514,7 +3746,10 @@ function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function pluginMcpServerEnabled(content: string, serverName: string): boolean | null {
+function pluginMcpServerEnabled(
+	content: string,
+	serverName: string,
+): boolean | null {
 	const headerPattern = new RegExp(
 		`^\\s*\\[plugins\\.${escapeRegExp(JSON.stringify(OMX_LOCAL_PLUGIN_CONFIG_KEY))}\\.mcp_servers\\.${escapeRegExp(serverName)}\\]\\s*$`,
 	);
@@ -3530,7 +3765,10 @@ function pluginMcpServerEnabled(content: string, serverName: string): boolean | 
 	return null;
 }
 
-function describePluginMcpState(content: string, mcpMode?: SetupMcpMode): Check {
+function describePluginMcpState(
+	content: string,
+	mcpMode?: SetupMcpMode,
+): Check {
 	const states = OMX_FIRST_PARTY_MCP_SERVER_NAMES.map((serverName) =>
 		pluginMcpServerEnabled(content, serverName),
 	);

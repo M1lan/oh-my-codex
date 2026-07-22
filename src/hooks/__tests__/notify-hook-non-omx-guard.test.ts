@@ -39,21 +39,64 @@ describe("notify-hook non-OMX project guard", () => {
 				},
 			);
 			assert.equal(result.status, 0);
-			const boxedSessionDir = join(omxRoot, ".omx", "state", "sessions", sessionId);
-			assert.equal(existsSync(join(boxedSessionDir, "skill-active-state.json")), true);
-			assert.equal(existsSync(join(boxedSessionDir, "ralplan-state.json")), true);
-			const skillState = JSON.parse(await readFile(join(boxedSessionDir, "skill-active-state.json"), "utf-8"));
+			const boxedSessionDir = join(
+				omxRoot,
+				".omx",
+				"state",
+				"sessions",
+				sessionId,
+			);
+			assert.equal(
+				existsSync(join(boxedSessionDir, "skill-active-state.json")),
+				true,
+			);
+			assert.equal(
+				existsSync(join(boxedSessionDir, "ralplan-state.json")),
+				true,
+			);
+			const skillState = JSON.parse(
+				await readFile(
+					join(boxedSessionDir, "skill-active-state.json"),
+					"utf-8",
+				),
+			);
 			assert.equal(skillState.skill, "ralplan");
 			assert.equal(skillState.active, true);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "skill-active-state.json")), false);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"skill-active-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"ralplan-state.json",
+					),
+				),
+				false,
+			);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
 	});
 
 	it("does not activate issue #3133 negated, non-English, or quoted ralplan mentions under OMX_ROOT", async () => {
-		const root = await mkdtemp(join(tmpdir(), "omx-notify-boxed-ralplan-inert-"));
+		const root = await mkdtemp(
+			join(tmpdir(), "omx-notify-boxed-ralplan-inert-"),
+		);
 		const wd = join(root, "source");
 		const omxRoot = join(root, "box");
 		try {
@@ -62,20 +105,23 @@ describe("notify-hook non-OMX project guard", () => {
 			for (const [index, input] of [
 				"Do not run $ralplan and do not repeat the review.",
 				"Не запускай $ralplan",
-				"Logged review text: \"$ralplan plan this change\".",
+				'Logged review text: "$ralplan plan this change".',
 			].entries()) {
 				const sessionId = `sess-notify-ralplan-inert-${index}`;
 				const result = spawnSync(
 					process.execPath,
-					["dist/scripts/notify-hook.js", JSON.stringify({
-						cwd: wd,
-						type: "agent-turn-complete",
-						session_id: sessionId,
-						thread_id: `thread-notify-ralplan-inert-${index}`,
-						turn_id: `turn-notify-ralplan-inert-${index}`,
-						"input-messages": [input],
-						"last-assistant-message": "working",
-					})],
+					[
+						"dist/scripts/notify-hook.js",
+						JSON.stringify({
+							cwd: wd,
+							type: "agent-turn-complete",
+							session_id: sessionId,
+							thread_id: `thread-notify-ralplan-inert-${index}`,
+							turn_id: `turn-notify-ralplan-inert-${index}`,
+							"input-messages": [input],
+							"last-assistant-message": "working",
+						}),
+					],
 					{
 						cwd: process.cwd(),
 						encoding: "utf-8",
@@ -88,11 +134,38 @@ describe("notify-hook non-OMX project guard", () => {
 					},
 				);
 				assert.equal(result.status, 0);
-				const boxedSessionDir = join(omxRoot, ".omx", "state", "sessions", sessionId);
-				assert.equal(existsSync(join(boxedSessionDir, "skill-active-state.json")), false);
-				assert.equal(existsSync(join(boxedSessionDir, "ralplan-state.json")), false);
-				assert.equal(existsSync(join(omxRoot, ".omx", "state", "skill-active-state.json")), false);
-				assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+				const boxedSessionDir = join(
+					omxRoot,
+					".omx",
+					"state",
+					"sessions",
+					sessionId,
+				);
+				assert.equal(
+					existsSync(join(boxedSessionDir, "skill-active-state.json")),
+					false,
+				);
+				assert.equal(
+					existsSync(join(boxedSessionDir, "ralplan-state.json")),
+					false,
+				);
+				assert.equal(
+					existsSync(join(omxRoot, ".omx", "state", "skill-active-state.json")),
+					false,
+				);
+				assert.equal(
+					existsSync(
+						join(
+							wd,
+							".omx",
+							"state",
+							"sessions",
+							sessionId,
+							"ralplan-state.json",
+						),
+					),
+					false,
+				);
 			}
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -107,9 +180,19 @@ describe("notify-hook non-OMX project guard", () => {
 		const workerName = "worker-1";
 		const sessionId = "sess-worker-ralplan";
 		try {
-			await mkdir(join(teamStateRoot, "team", teamName, "workers", workerName), { recursive: true });
+			await mkdir(
+				join(teamStateRoot, "team", teamName, "workers", workerName),
+				{ recursive: true },
+			);
 			await writeFile(
-				join(teamStateRoot, "team", teamName, "workers", workerName, "identity.json"),
+				join(
+					teamStateRoot,
+					"team",
+					teamName,
+					"workers",
+					workerName,
+					"identity.json",
+				),
 				JSON.stringify({
 					name: workerName,
 					worktree_path: wd,
@@ -144,10 +227,40 @@ describe("notify-hook non-OMX project guard", () => {
 			);
 			assert.equal(result.status, 0);
 			const teamSessionDir = join(teamStateRoot, "sessions", sessionId);
-			assert.equal(existsSync(join(teamSessionDir, "skill-active-state.json")), true);
-			assert.equal(existsSync(join(teamSessionDir, "ralplan-state.json")), true);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "skill-active-state.json")), false);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+			assert.equal(
+				existsSync(join(teamSessionDir, "skill-active-state.json")),
+				true,
+			);
+			assert.equal(
+				existsSync(join(teamSessionDir, "ralplan-state.json")),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"skill-active-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"ralplan-state.json",
+					),
+				),
+				false,
+			);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -188,10 +301,40 @@ describe("notify-hook non-OMX project guard", () => {
 			);
 			assert.equal(result.status, 0);
 			const teamSessionDir = join(teamStateRoot, "sessions", sessionId);
-			assert.equal(existsSync(join(teamSessionDir, "skill-active-state.json")), true);
-			assert.equal(existsSync(join(teamSessionDir, "ralplan-state.json")), true);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "skill-active-state.json")), false);
-			assert.equal(existsSync(join(wd, ".omx", "state", "sessions", sessionId, "ralplan-state.json")), false);
+			assert.equal(
+				existsSync(join(teamSessionDir, "skill-active-state.json")),
+				true,
+			);
+			assert.equal(
+				existsSync(join(teamSessionDir, "ralplan-state.json")),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"skill-active-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						wd,
+						".omx",
+						"state",
+						"sessions",
+						sessionId,
+						"ralplan-state.json",
+					),
+				),
+				false,
+			);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}
@@ -241,7 +384,10 @@ describe("notify-hook non-OMX project guard", () => {
 			);
 			assert.equal(result.status, 0);
 			assert.equal(existsSync(join(wd, ".omx", "state", "notify.json")), false);
-			assert.equal(existsSync(join(wd, ".omx", "logs", "notify-hook.log")), false);
+			assert.equal(
+				existsSync(join(wd, ".omx", "logs", "notify-hook.log")),
+				false,
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}

@@ -1,7 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	mkdir,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -18,11 +25,29 @@ describe("persisted setup merge policy", () => {
 			const path = join(root, ".omx", "setup-scope.json");
 			await mkdir(join(root, ".omx"), { recursive: true });
 
-			await writeFile(path, JSON.stringify({ scope: "user", mergeAgents: true }));
-			assert.equal(resolvePersistedSetupMergeAgents(await readPersistedSetupPreferences(root), "user"), true);
+			await writeFile(
+				path,
+				JSON.stringify({ scope: "user", mergeAgents: true }),
+			);
+			assert.equal(
+				resolvePersistedSetupMergeAgents(
+					await readPersistedSetupPreferences(root),
+					"user",
+				),
+				true,
+			);
 
-			await writeFile(path, JSON.stringify({ scope: "project-local", mergeAgents: false }));
-			assert.equal(resolvePersistedSetupMergeAgents(readPersistedSetupPreferencesSync(root), "project"), false);
+			await writeFile(
+				path,
+				JSON.stringify({ scope: "project-local", mergeAgents: false }),
+			);
+			assert.equal(
+				resolvePersistedSetupMergeAgents(
+					readPersistedSetupPreferencesSync(root),
+					"project",
+				),
+				false,
+			);
 
 			for (const record of [
 				{ mergeAgents: true },
@@ -32,7 +57,13 @@ describe("persisted setup merge policy", () => {
 				null,
 			]) {
 				await writeFile(path, JSON.stringify(record));
-				assert.equal(resolvePersistedSetupMergeAgents(await readPersistedSetupPreferences(root), "user"), undefined);
+				assert.equal(
+					resolvePersistedSetupMergeAgents(
+						await readPersistedSetupPreferences(root),
+						"user",
+					),
+					undefined,
+				);
 			}
 
 			await writeFile(path, "{ malformed");
@@ -45,9 +76,15 @@ describe("persisted setup merge policy", () => {
 	it("writes canonical newline-terminated state atomically without retaining temporary files", async () => {
 		const root = await mkdtemp(join(tmpdir(), "omx-setup-preferences-"));
 		try {
-			await writePersistedSetupPreferences(root, { scope: "project", mergeAgents: false });
+			await writePersistedSetupPreferences(root, {
+				scope: "project",
+				mergeAgents: false,
+			});
 			const path = join(root, ".omx", "setup-scope.json");
-			assert.equal(await readFile(path, "utf-8"), '{\n  "scope": "project",\n  "mergeAgents": false\n}\n');
+			assert.equal(
+				await readFile(path, "utf-8"),
+				'{\n  "scope": "project",\n  "mergeAgents": false\n}\n',
+			);
 			const entries = await readdir(join(root, ".omx"));
 			assert.deepEqual(entries, ["setup-scope.json"]);
 		} finally {
@@ -64,9 +101,15 @@ describe("persisted setup merge policy", () => {
 			await mkdir(dir, { recursive: true });
 			await writeFile(path, original);
 			await assert.rejects(
-				writePersistedSetupPreferences(root, { scope: "user", mergeAgents: false }, {
-					rename: async () => { throw new Error("rename denied"); },
-				}),
+				writePersistedSetupPreferences(
+					root,
+					{ scope: "user", mergeAgents: false },
+					{
+						rename: async () => {
+							throw new Error("rename denied");
+						},
+					},
+				),
 				/rename denied/,
 			);
 			assert.equal(await readFile(path, "utf-8"), original);
@@ -80,9 +123,15 @@ describe("persisted setup merge policy", () => {
 		const root = await mkdtemp(join(tmpdir(), "omx-setup-preferences-"));
 		try {
 			await assert.rejects(
-				writePersistedSetupPreferences(root, { scope: "user", mergeAgents: true }, {
-					writeFile: async () => { throw new Error("write denied"); },
-				}),
+				writePersistedSetupPreferences(
+					root,
+					{ scope: "user", mergeAgents: true },
+					{
+						writeFile: async () => {
+							throw new Error("write denied");
+						},
+					},
+				),
 				/write denied/,
 			);
 			assert.equal(existsSync(join(root, ".omx", "setup-scope.json")), false);

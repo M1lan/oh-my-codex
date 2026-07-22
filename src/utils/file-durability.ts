@@ -17,11 +17,13 @@ function isUnsupportedWindowsRegularFileSync(
 	error: unknown,
 	platform: NodeJS.Platform,
 ): boolean {
-	return platform === "win32"
-		&& typeof error === "object"
-		&& error !== null
-		&& "code" in error
-		&& (error as { code?: unknown }).code === "EPERM";
+	return (
+		platform === "win32" &&
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { code?: unknown }).code === "EPERM"
+	);
 }
 
 /**

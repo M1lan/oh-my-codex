@@ -65,15 +65,18 @@ describe("generateOverlay", () => {
 		assert.ok(overlay.includes("preflight-context.json"));
 	});
 
-  it("injects conditional native subagent agent_type routing guidance", async () => {
+	it("injects conditional native subagent agent_type routing guidance", async () => {
 		const overlay = await generateOverlay(tempDir, "native-subagent-routing");
 		assert.match(overlay, /\*\*Native Subagent Routing:\*\*/);
-    assert.match(overlay, /When the native surface exposes `agent_type` role routing, set `agent_type` to an installed OMX role and never omit it for OMX work/i);
-    assert.match(overlay, /role_routing_unavailable/i);
-    assert.match(overlay, /do not fabricate `agent_type`/i);
-    assert.match(overlay, /omx ralplan preflight --json/i);
-    assert.match(overlay, /unsupported_documented_leader_proof/i);
-    assert.match(overlay, /never fake the role via a prompt label/i);
+		assert.match(
+			overlay,
+			/When the native surface exposes `agent_type` role routing, set `agent_type` to an installed OMX role and never omit it for OMX work/i,
+		);
+		assert.match(overlay, /role_routing_unavailable/i);
+		assert.match(overlay, /do not fabricate `agent_type`/i);
+		assert.match(overlay, /omx ralplan preflight --json/i);
+		assert.match(overlay, /unsupported_documented_leader_proof/i);
+		assert.match(overlay, /never fake the role via a prompt label/i);
 	});
 
 	it("includes the team orchestrator overlay only when orchestration mode is team", async () => {

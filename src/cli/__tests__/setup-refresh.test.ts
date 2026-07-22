@@ -458,14 +458,14 @@ describe("omx setup refresh summary and dry-run behavior", () => {
 			await mkdir(join(wd, ".codex"), { recursive: true });
 			await writeFile(
 				join(wd, ".codex", "config.toml"),
-        [
-          'model = "gpt-5.3-codex"',
-          '# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)',
-          "model_context_window = 250000",
-          "model_auto_compact_token_limit = 200000",
-          "# End oh-my-codex seeded behavioral defaults",
-          "",
-        ].join("\n"),
+				[
+					'model = "gpt-5.3-codex"',
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"",
+				].join("\n"),
 			);
 
 			let promptCalls = 0;
@@ -483,9 +483,9 @@ describe("omx setup refresh summary and dry-run behavior", () => {
 			assert.equal(promptCalls, 1);
 			assert.match(config, /^model = "gpt-5\.6-sol"$/m);
 			assert.doesNotMatch(config, /^model = "gpt-5\.3-codex"$/m);
-      assert.doesNotMatch(config, /^model_context_window = 250000$/m);
-      assert.doesNotMatch(config, /^model_auto_compact_token_limit = 200000$/m);
-      assert.doesNotMatch(config, /seeded behavioral defaults/);
+			assert.doesNotMatch(config, /^model_context_window = 250000$/m);
+			assert.doesNotMatch(config, /^model_auto_compact_token_limit = 200000$/m);
+			assert.doesNotMatch(config, /seeded behavioral defaults/);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -1067,172 +1067,309 @@ describe("omx setup refresh summary and dry-run behavior", () => {
 			await rm(wd, { recursive: true, force: true });
 		}
 	});
-  it("omits legacy defaults on fresh setup and removes an exact marked pair on refresh", async () => {
-    const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
-    try {
-      await mkdir(join(wd, ".omx", "state"), { recursive: true });
-      await runSetupInTempDir(wd, { scope: "project" });
-      const configPath = join(wd, ".codex", "config.toml");
-      const fresh = await readFile(configPath, "utf-8");
-      assert.doesNotMatch(fresh, /model_(?:context_window|auto_compact_token_limit)\s*=/);
-      assert.doesNotMatch(fresh, /seeded behavioral defaults/);
+	it("omits legacy defaults on fresh setup and removes an exact marked pair on refresh", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
+		try {
+			await mkdir(join(wd, ".omx", "state"), { recursive: true });
+			await runSetupInTempDir(wd, { scope: "project" });
+			const configPath = join(wd, ".codex", "config.toml");
+			const fresh = await readFile(configPath, "utf-8");
+			assert.doesNotMatch(
+				fresh,
+				/model_(?:context_window|auto_compact_token_limit)\s*=/,
+			);
+			assert.doesNotMatch(fresh, /seeded behavioral defaults/);
 
-      await writeFile(
-        configPath,
-        [
-          'model = "gpt-5.6-sol"',
-          '# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)',
-          "model_context_window = 250000",
-          "model_auto_compact_token_limit = 200000",
-          "# End oh-my-codex seeded behavioral defaults",
-          'approval_policy = "on-failure"',
-          "",
-        ].join("\n"),
-      );
-      await runSetupInTempDir(wd, { scope: "project" });
-      const refreshed = await readFile(configPath, "utf-8");
-      assert.doesNotMatch(refreshed, /seeded behavioral defaults/);
-      assert.doesNotMatch(refreshed, /model_(?:context_window|auto_compact_token_limit)\s*=/);
-      assert.equal((TOML.parse(refreshed) as { approval_policy?: string }).approval_policy, "on-failure");
-      await runSetupInTempDir(wd, { scope: "project" });
-      assert.equal(await readFile(configPath, "utf-8"), refreshed);
-    } finally {
-      await rm(wd, { recursive: true, force: true });
-    }
-  });
+			await writeFile(
+				configPath,
+				[
+					'model = "gpt-5.6-sol"',
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"# End oh-my-codex seeded behavioral defaults",
+					'approval_policy = "on-failure"',
+					"",
+				].join("\n"),
+			);
+			await runSetupInTempDir(wd, { scope: "project" });
+			const refreshed = await readFile(configPath, "utf-8");
+			assert.doesNotMatch(refreshed, /seeded behavioral defaults/);
+			assert.doesNotMatch(
+				refreshed,
+				/model_(?:context_window|auto_compact_token_limit)\s*=/,
+			);
+			assert.equal(
+				(TOML.parse(refreshed) as { approval_policy?: string }).approval_policy,
+				"on-failure",
+			);
+			await runSetupInTempDir(wd, { scope: "project" });
+			assert.equal(await readFile(configPath, "utf-8"), refreshed);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
 
-  it("removes exact singleton markers only with one explicit opposite root sibling", async () => {
-    const start = "# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)";
-    const end = "# End oh-my-codex seeded behavioral defaults";
-    const cases = [
-      {
-        baseline: ['# explicit auto sibling', '  model_auto_compact_token_limit   =   777', '[user_table]', 'label = "context-singleton"', ''].join("\n"),
-        migrated: ['# explicit auto sibling', '  model_auto_compact_token_limit   =   777', start, 'model_context_window = 250000', end, '[user_table]', 'label = "context-singleton"', ''].join("\n"),
-        removed: "model_context_window",
-        preserved: "model_auto_compact_token_limit",
-        value: 777,
-      },
-      {
-        baseline: ['# explicit multiline context sibling', 'model_context_window = [', '  123456,', ']', '[user_table]', 'label = "auto-singleton"', ''].join("\n"),
-        migrated: ['# explicit multiline context sibling', 'model_context_window = [', '  123456,', ']', start, 'model_auto_compact_token_limit = 200000', end, '[user_table]', 'label = "auto-singleton"', ''].join("\n"),
-        removed: "model_auto_compact_token_limit",
-        preserved: "model_context_window",
-        value: [123456],
-      },
-    ] as const;
-    for (const fixture of cases) {
-      const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
-      try {
-        await mkdir(join(wd, ".omx", "state"), { recursive: true });
-        await mkdir(join(wd, ".codex"), { recursive: true });
-        const configPath = join(wd, ".codex", "config.toml");
+	it("removes exact singleton markers only with one explicit opposite root sibling", async () => {
+		const start =
+			"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)";
+		const end = "# End oh-my-codex seeded behavioral defaults";
+		const cases = [
+			{
+				baseline: [
+					"# explicit auto sibling",
+					"  model_auto_compact_token_limit   =   777",
+					"[user_table]",
+					'label = "context-singleton"',
+					"",
+				].join("\n"),
+				migrated: [
+					"# explicit auto sibling",
+					"  model_auto_compact_token_limit   =   777",
+					start,
+					"model_context_window = 250000",
+					end,
+					"[user_table]",
+					'label = "context-singleton"',
+					"",
+				].join("\n"),
+				removed: "model_context_window",
+				preserved: "model_auto_compact_token_limit",
+				value: 777,
+			},
+			{
+				baseline: [
+					"# explicit multiline context sibling",
+					"model_context_window = [",
+					"  123456,",
+					"]",
+					"[user_table]",
+					'label = "auto-singleton"',
+					"",
+				].join("\n"),
+				migrated: [
+					"# explicit multiline context sibling",
+					"model_context_window = [",
+					"  123456,",
+					"]",
+					start,
+					"model_auto_compact_token_limit = 200000",
+					end,
+					"[user_table]",
+					'label = "auto-singleton"',
+					"",
+				].join("\n"),
+				removed: "model_auto_compact_token_limit",
+				preserved: "model_context_window",
+				value: [123456],
+			},
+		] as const;
+		for (const fixture of cases) {
+			const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
+			try {
+				await mkdir(join(wd, ".omx", "state"), { recursive: true });
+				await mkdir(join(wd, ".codex"), { recursive: true });
+				const configPath = join(wd, ".codex", "config.toml");
 
-        await writeFile(configPath, fixture.baseline);
-        await runSetupInTempDir(wd, { scope: "project" });
-        const baseline = await readFile(configPath, "utf-8");
+				await writeFile(configPath, fixture.baseline);
+				await runSetupInTempDir(wd, { scope: "project" });
+				const baseline = await readFile(configPath, "utf-8");
 
-        await writeFile(configPath, fixture.migrated);
-        await runSetupInTempDir(wd, { scope: "project" });
-        const migrated = await readFile(configPath, "utf-8");
-        assert.equal(migrated, baseline);
-        const parsed = TOML.parse(migrated) as Record<string, unknown>;
-        assert.equal(parsed[fixture.removed], undefined);
-        assert.deepEqual(parsed[fixture.preserved], fixture.value);
-        assert.match(migrated, /\[user_table\]\nlabel = "/);
+				await writeFile(configPath, fixture.migrated);
+				await runSetupInTempDir(wd, { scope: "project" });
+				const migrated = await readFile(configPath, "utf-8");
+				assert.equal(migrated, baseline);
+				const parsed = TOML.parse(migrated) as Record<string, unknown>;
+				assert.equal(parsed[fixture.removed], undefined);
+				assert.deepEqual(parsed[fixture.preserved], fixture.value);
+				assert.match(migrated, /\[user_table\]\nlabel = "/);
 
-        await runSetupInTempDir(wd, { scope: "project" });
-        assert.equal(await readFile(configPath, "utf-8"), migrated);
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    }
-  });
+				await runSetupInTempDir(wd, { scope: "project" });
+				assert.equal(await readFile(configPath, "utf-8"), migrated);
+			} finally {
+				await rm(wd, { recursive: true, force: true });
+			}
+		}
+	});
 
-  it("preserves unmarked and edited values, and fails closed for ambiguous legacy ownership", async () => {
-    const cases = [
-      {
-        lines: ["model_context_window = 250000", "model_auto_compact_token_limit = 200000", "[user_table]", 'label = "unmarked"'],
-        preservedLines: ["model_context_window = 250000", "model_auto_compact_token_limit = 200000", "[user_table]", 'label = "unmarked"'],
-        markers: false,
-      },
-      {
-        lines: ['# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)', "model_context_window = 123456", "model_auto_compact_token_limit = 200000", "# End oh-my-codex seeded behavioral defaults", "[user_table]", 'label = "edited"'],
-        preservedLines: ["model_context_window = 123456", "model_auto_compact_token_limit = 200000", "[user_table]", 'label = "edited"'],
-        markers: false,
-      },
-      {
-        lines: ["model_auto_compact_token_limit = 1", "model_auto_compact_token_limit = 2", '# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)', "model_context_window = 250000", "# End oh-my-codex seeded behavioral defaults", "[user_table]", 'label = "ambiguous"'],
-        preservedLines: ["model_auto_compact_token_limit = 1", "model_auto_compact_token_limit = 2", "model_context_window = 250000", "[user_table]", 'label = "ambiguous"'],
-        markers: true,
-      },
-      {
-        lines: ["model_context_window = 999", '# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)', "model_context_window = 250000", "model_auto_compact_token_limit = 200000", "# End oh-my-codex seeded behavioral defaults", "[user_table]", 'label = "pair-duplicate-before"'],
-        preservedLines: ["model_context_window = 999", "model_context_window = 250000", "model_auto_compact_token_limit = 200000", "[user_table]", 'label = "pair-duplicate-before"'],
-        markers: true,
-      },
-      {
-        lines: ['# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)', "model_context_window = 250000", "model_auto_compact_token_limit = 200000", "# End oh-my-codex seeded behavioral defaults", "model_auto_compact_token_limit = 999", "[user_table]", 'label = "pair-duplicate-after"'],
-        preservedLines: ["model_context_window = 250000", "model_auto_compact_token_limit = 200000", "model_auto_compact_token_limit = 999", "[user_table]", 'label = "pair-duplicate-after"'],
-        markers: true,
-      },
-      {
-        lines: ['# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)', "model_context_window = 250000", "# End oh-my-codex seeded behavioral defaults", "[user_table]", 'label = "after-table"', "model_auto_compact_token_limit = 777"],
-        preservedLines: ["model_context_window = 250000", "[user_table]", 'label = "after-table"', "model_auto_compact_token_limit = 777"],
-        markers: false,
-      },
-    ];
-    for (const fixture of cases) {
-      const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
-      try {
-        await mkdir(join(wd, ".omx", "state"), { recursive: true });
-        await mkdir(join(wd, ".codex"), { recursive: true });
-        const configPath = join(wd, ".codex", "config.toml");
-        const original = `${fixture.lines.join("\n")}\n`;
-        await writeFile(configPath, original);
-        if (fixture.markers) {
-          await assert.rejects(
-            runSetupInTempDir(wd, { scope: "project" }),
-            /Refusing to write invalid planned config\.toml/,
-          );
-          assert.equal(await readFile(configPath, "utf-8"), original);
-          assert.equal(existsSync(join(wd, ".codex", "hooks.json")), false);
-          continue;
-        }
-        await runSetupInTempDir(wd, { scope: "project" });
-        const refreshed = await readFile(configPath, "utf-8");
-        for (const line of fixture.preservedLines) assert.ok(refreshed.includes(line), `missing preserved line: ${line}`);
-        assert.doesNotMatch(refreshed, /seeded behavioral defaults/);
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    }
-  });
-  it("rejects malformed config.toml and hooks.json bytes before any setup mutation", async () => {
-    const fixtures = [
-      { name: "config.toml", path: [".codex", "config.toml"] },
-      { name: "hooks.json", path: [".codex", "hooks.json"] },
-    ] as const;
-    for (const fixture of fixtures) {
-      const wd = await mkdtemp(join(tmpdir(), "omx-setup-invalid-utf8-"));
-      try {
-        const artifactPath = join(wd, ...fixture.path);
-        const invalidBytes = Buffer.from([0x7b, 0x80, 0x7d, 0x0a]);
-        await mkdir(join(wd, ".codex"), { recursive: true });
-        await writeFile(artifactPath, invalidBytes);
+	it("preserves unmarked and edited values, and fails closed for ambiguous legacy ownership", async () => {
+		const cases = [
+			{
+				lines: [
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"[user_table]",
+					'label = "unmarked"',
+				],
+				preservedLines: [
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"[user_table]",
+					'label = "unmarked"',
+				],
+				markers: false,
+			},
+			{
+				lines: [
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 123456",
+					"model_auto_compact_token_limit = 200000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"[user_table]",
+					'label = "edited"',
+				],
+				preservedLines: [
+					"model_context_window = 123456",
+					"model_auto_compact_token_limit = 200000",
+					"[user_table]",
+					'label = "edited"',
+				],
+				markers: false,
+			},
+			{
+				lines: [
+					"model_auto_compact_token_limit = 1",
+					"model_auto_compact_token_limit = 2",
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"[user_table]",
+					'label = "ambiguous"',
+				],
+				preservedLines: [
+					"model_auto_compact_token_limit = 1",
+					"model_auto_compact_token_limit = 2",
+					"model_context_window = 250000",
+					"[user_table]",
+					'label = "ambiguous"',
+				],
+				markers: true,
+			},
+			{
+				lines: [
+					"model_context_window = 999",
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"[user_table]",
+					'label = "pair-duplicate-before"',
+				],
+				preservedLines: [
+					"model_context_window = 999",
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"[user_table]",
+					'label = "pair-duplicate-before"',
+				],
+				markers: true,
+			},
+			{
+				lines: [
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"model_auto_compact_token_limit = 999",
+					"[user_table]",
+					'label = "pair-duplicate-after"',
+				],
+				preservedLines: [
+					"model_context_window = 250000",
+					"model_auto_compact_token_limit = 200000",
+					"model_auto_compact_token_limit = 999",
+					"[user_table]",
+					'label = "pair-duplicate-after"',
+				],
+				markers: true,
+			},
+			{
+				lines: [
+					"# oh-my-codex seeded behavioral defaults (uninstall removes unchanged defaults)",
+					"model_context_window = 250000",
+					"# End oh-my-codex seeded behavioral defaults",
+					"[user_table]",
+					'label = "after-table"',
+					"model_auto_compact_token_limit = 777",
+				],
+				preservedLines: [
+					"model_context_window = 250000",
+					"[user_table]",
+					'label = "after-table"',
+					"model_auto_compact_token_limit = 777",
+				],
+				markers: false,
+			},
+		];
+		for (const fixture of cases) {
+			const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-defaults-"));
+			try {
+				await mkdir(join(wd, ".omx", "state"), { recursive: true });
+				await mkdir(join(wd, ".codex"), { recursive: true });
+				const configPath = join(wd, ".codex", "config.toml");
+				const original = `${fixture.lines.join("\n")}\n`;
+				await writeFile(configPath, original);
+				if (fixture.markers) {
+					await assert.rejects(
+						runSetupInTempDir(wd, { scope: "project" }),
+						/Refusing to write invalid planned config\.toml/,
+					);
+					assert.equal(await readFile(configPath, "utf-8"), original);
+					assert.equal(existsSync(join(wd, ".codex", "hooks.json")), false);
+					continue;
+				}
+				await runSetupInTempDir(wd, { scope: "project" });
+				const refreshed = await readFile(configPath, "utf-8");
+				for (const line of fixture.preservedLines)
+					assert.ok(
+						refreshed.includes(line),
+						`missing preserved line: ${line}`,
+					);
+				assert.doesNotMatch(refreshed, /seeded behavioral defaults/);
+			} finally {
+				await rm(wd, { recursive: true, force: true });
+			}
+		}
+	});
+	it("rejects malformed config.toml and hooks.json bytes before any setup mutation", async () => {
+		const fixtures = [
+			{ name: "config.toml", path: [".codex", "config.toml"] },
+			{ name: "hooks.json", path: [".codex", "hooks.json"] },
+		] as const;
+		for (const fixture of fixtures) {
+			const wd = await mkdtemp(join(tmpdir(), "omx-setup-invalid-utf8-"));
+			try {
+				const artifactPath = join(wd, ...fixture.path);
+				const invalidBytes = Buffer.from([0x7b, 0x80, 0x7d, 0x0a]);
+				await mkdir(join(wd, ".codex"), { recursive: true });
+				await writeFile(artifactPath, invalidBytes);
 
-        await assert.rejects(
-          runSetupInTempDir(wd, { scope: "project", skipNativeAgentRefresh: true }),
-          /invalid UTF-8/,
-        );
+				await assert.rejects(
+					runSetupInTempDir(wd, {
+						scope: "project",
+						skipNativeAgentRefresh: true,
+					}),
+					/invalid UTF-8/,
+				);
 
-        assert.deepEqual(await readFile(artifactPath), invalidBytes, fixture.name);
-        assert.equal(existsSync(join(wd, ".codex", "config.toml")), fixture.name === "config.toml");
-        assert.equal(existsSync(join(wd, ".codex", "hooks.json")), fixture.name === "hooks.json");
-        assert.equal(existsSync(join(wd, ".omx")), false);
-        assert.equal(existsSync(join(wd, "AGENTS.md")), false);
-      } finally {
-        await rm(wd, { recursive: true, force: true });
-      }
-    }
-  });
+				assert.deepEqual(
+					await readFile(artifactPath),
+					invalidBytes,
+					fixture.name,
+				);
+				assert.equal(
+					existsSync(join(wd, ".codex", "config.toml")),
+					fixture.name === "config.toml",
+				);
+				assert.equal(
+					existsSync(join(wd, ".codex", "hooks.json")),
+					fixture.name === "hooks.json",
+				);
+				assert.equal(existsSync(join(wd, ".omx")), false);
+				assert.equal(existsSync(join(wd, "AGENTS.md")), false);
+			} finally {
+				await rm(wd, { recursive: true, force: true });
+			}
+		}
+	});
 });
