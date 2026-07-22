@@ -137,6 +137,23 @@ Sequences deep-interview → ralplan → ultragoal → code-review → ultraqa.
 | `types/` | Shared TypeScript types. |
 | `scripts/` | Notify-hook engine, eval scripts, fixtures. |
 
+### OMC interop contract (`scripts/notify-hook/interop-*.ts`)
+
+Launched by `omc interop [--yolo]` (oh-my-claudecode), which starts codex in
+the right rmux/tmux pane with a cross-repo env contract:
+
+- `OMX_OMC_INTEROP_ENABLED=1`, `OMX_OMC_INTEROP_MODE` (`observe`/`active`),
+  `OMX_OMC_INTEROP_SESSION_ID`, `OMX_OMC_INTEROP_DIR` — shared state lives in
+  `.omc/state/interop/` (poll-based task/message envelopes; no push delivery).
+- `OMX_INTEROP_CAVEMAN_LEVEL` (e.g. `wenyan-ultra`) — read at startup by
+  `interop-caveman.ts`; the sole caveman activation path (OMC never types
+  keystrokes into the codex pane).
+- `interop-context.ts` injects an interop context notice on top-level
+  SessionStart so the codex side knows it is in an interop session.
+
+Renaming any of these env vars breaks the contract locked by tests on both
+sides (`just test interop` here; `just interop-verify` in oh-my-claudecode).
+
 ## Native crates (`crates/`)
 
 | Crate | Purpose |
