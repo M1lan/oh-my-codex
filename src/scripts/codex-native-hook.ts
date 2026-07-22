@@ -142,6 +142,10 @@ import {
 	resolveInteropCavemanActivation,
 } from "./notify-hook/interop-caveman.js";
 import {
+	performInteropContextInjection,
+	resolveInteropContextNotice,
+} from "./notify-hook/interop-context.js";
+import {
 	resolveCodexExecutionSurface,
 	type CodexLauncherKind,
 	type CodexTransportKind,
@@ -392,6 +396,38 @@ async function maybeInjectInteropCavemanActivation(options: {
 		JSON.stringify({
 			level: activation.level,
 			activation: activation.activation,
+			injected_at: new Date().toISOString(),
+		}),
+	).catch(() => {});
+}
+
+/**
+ * OMC<->OMX interop: on a top-level (non-subagent) codex SessionStart, inject
+ * the interop context notice (session id, mode, shared-state dir) exactly once
+ * when the OMC leader launched this pane with `OMX_OMC_INTEROP_ENABLED=1`. A
+ * per-session marker dedupes repeated startup events, mirroring the interop
+ * caveman activation above.
+ */
+async function maybeInjectInteropContextNotice(options: {
+	stateDir: string;
+	sessionId: string;
+}): Promise<void> {
+	const notice = resolveInteropContextNotice(process.env);
+	if (!notice) return;
+	const sessionId = safeString(options.sessionId).trim();
+	const markerPath = sessionId
+		? join(options.stateDir, "sessions", sessionId, "interop-context-injected")
+		: join(options.stateDir, "interop-context-injected");
+	if (existsSync(markerPath)) return;
+	const result = await performInteropContextInjection(notice);
+	if (!result.injected) return;
+	await mkdir(dirname(markerPath), { recursive: true }).catch(() => {});
+	await writeFile(
+		markerPath,
+		JSON.stringify({
+			session_id: notice.sessionId,
+			mode: notice.mode,
+			dir: notice.dir,
 			injected_at: new Date().toISOString(),
 		}),
 	).catch(() => {});
@@ -28974,6 +29010,10 @@ export async function dispatchCodexNativeHook(
 	// SessionStart so workers never switch to the leader's requested caveman level.
 	if (hookEventName === "SessionStart" && !isSubagentSessionStart) {
 		await maybeInjectInteropCavemanActivation({
+			stateDir,
+			sessionId: sessionIdForState ?? "",
+		}).catch(() => {});
+		await maybeInjectInteropContextNotice({
 			stateDir,
 			sessionId: sessionIdForState ?? "",
 		}).catch(() => {});
