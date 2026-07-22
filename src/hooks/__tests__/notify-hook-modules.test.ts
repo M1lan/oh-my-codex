@@ -170,11 +170,17 @@ describe("notify-hook/operational-events – buildOperationalContext", () => {
 			"notify-hook/operational-events.js",
 		);
 		const sessionId = "omx-issue-663-session";
+		const { mkdtemp, rm } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		// Plain non-git temp dir: a real repo cwd opens the baseline-write
+		// guard and mutates the live checkout's .omx/state.
+		const cwd = await mkdtemp(join(tmpdir(), "omx-opctx-session-name-"));
 		const originalTmux = process.env.TMUX;
 		delete process.env.TMUX;
 		try {
 			const context = buildOperationalContext({
-				cwd: process.cwd(),
+				cwd,
 				normalizedEvent: "pr-created",
 				sessionId,
 				status: "finished",
@@ -187,6 +193,7 @@ describe("notify-hook/operational-events – buildOperationalContext", () => {
 		} finally {
 			if (originalTmux === undefined) delete process.env.TMUX;
 			else process.env.TMUX = originalTmux;
+			await rm(cwd, { recursive: true, force: true });
 		}
 	});
 

@@ -1775,7 +1775,15 @@ describe("buildWorkerStartupCommand", () => {
 		const prevMsystem = process.env.MSYSTEM;
 		const prevBypass = process.env.OMX_BYPASS_DEFAULT_SYSTEM_PROMPT;
 		const stateRoot = "C:\\omx-state";
+		// Sandbox cwd: the Windows-literal state root resolves relatively on
+		// POSIX hosts, so the startup-script write would otherwise land in the
+		// real repo root.
+		const sandboxCwd = await mkdtemp(
+			join(tmpdir(), "omx-worker-startup-msys-sandbox-"),
+		);
+		const previousCwd = process.cwd();
 		try {
+			process.chdir(sandboxCwd);
 			Object.defineProperty(process, "platform", {
 				value: "win32",
 				configurable: true,
@@ -1801,7 +1809,8 @@ describe("buildWorkerStartupCommand", () => {
 			assert.match(script, /^cd '\/c\/repo'$/m);
 			assert.match(script, /^exec '\/bin\/sh' -c /m);
 		} finally {
-			await rm(stateRoot, { recursive: true, force: true });
+			process.chdir(previousCwd);
+			await rm(sandboxCwd, { recursive: true, force: true });
 			if (originalPlatform)
 				Object.defineProperty(process, "platform", originalPlatform);
 			if (typeof prevMsystem === "string") process.env.MSYSTEM = prevMsystem;
@@ -8898,6 +8907,12 @@ esac
 	it("restores standalone HUD panes with OMX_ROOT forwarded and shell-escaped", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-standalone-root-hud-"));
 		const previousOmxRoot = process.env.OMX_ROOT;
+		// Keep the shell-hostile characters, but rooted in a temp dir: a bare
+		// /tmp literal left the debt-file state tree behind on every run.
+		const omxRootBase = await mkdtemp(
+			join(tmpdir(), "omx-standalone-root-base-"),
+		);
+		const boxedOmxRoot = join(omxRootBase, "boxed root", "it's", "$(literal)");
 
 		try {
 			await withMockTmuxFixture(
@@ -8919,7 +8934,7 @@ case "\${1:-}" in
 esac
 `,
 				async ({ logPath }) => {
-					process.env.OMX_ROOT = "/tmp/boxed root/it's/$(literal)";
+					process.env.OMX_ROOT = boxedOmxRoot;
 
 					const paneId = restoreStandaloneHudPane("%11", cwd);
 					assert.equal(paneId, "%44");
@@ -8927,7 +8942,9 @@ esac
 					const tmuxLog = await readFile(logPath, "utf-8");
 					assert.match(
 						tmuxLog,
-						/exec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%11' OMX_ROOT='\/tmp\/boxed root\/it'\\''s\/\$\(literal\)' .*hud --watch/,
+						new RegExp(
+							`exec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%11' OMX_ROOT='${escapeRegExp(boxedOmxRoot.replace(/'/g, "'\\''"))}' .*hud --watch`,
+						),
 					);
 				},
 			);
@@ -8935,6 +8952,7 @@ esac
 			if (typeof previousOmxRoot === "string")
 				process.env.OMX_ROOT = previousOmxRoot;
 			else delete process.env.OMX_ROOT;
+			await rm(omxRootBase, { recursive: true, force: true });
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { after, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import {
@@ -25,6 +25,19 @@ import { OMX_TMUX_HUD_LEADER_PANE_ENV } from "../tmux.js";
 
 const noOpRegisterHudResizeHook = () => true;
 const noOpUnregisterHudResizeHook = () => true;
+
+// A literal "/repo" cwd pointed reconcile's lock mkdir at the filesystem
+// root (a real write when the test runs as root, e.g. in containers).
+// Fresh dir per test: reconcile persists lock state under the cwd, so a
+// shared dir would leak one test's lock into the next.
+let repoCwd = "";
+beforeEach(async () => {
+	if (repoCwd) await rm(repoCwd, { recursive: true, force: true });
+	repoCwd = await mkdtemp(join(tmpdir(), "omx-hud-reconcile-repo-"));
+});
+after(async () => {
+	if (repoCwd) await rm(repoCwd, { recursive: true, force: true });
+});
 
 async function writeHudReconcileLock(
 	cwd: string,
@@ -61,7 +74,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		let listed = false;
 		let created = false;
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: { TMUX: "1", TMUX_PANE: "%claude", OMX_SESSION_ID: "untrusted" },
 			listCurrentWindowPanes: () => {
 				listed = true;
@@ -94,7 +107,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		}> = [];
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: { TMUX: "1", TMUX_PANE: "%1", [OMX_TMUX_HUD_OWNER_ENV]: "1" },
 			listCurrentWindowPanes: () => [
 				{ paneId: "%1", currentCommand: "codex", startCommand: "codex" },
@@ -260,7 +273,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		}> = [];
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -311,7 +324,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			startCommand: `exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_OWNER='1' ${OMX_TMUX_HUD_LEADER_PANE_ENV}='%21' node omx hud --watch --preset=focused`,
 		});
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%33",
@@ -355,7 +368,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		// owner reconcile still reclaims dead-leader HUDs tagged with the native id.
 		const killed: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -390,7 +403,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const killed: string[] = [];
 		const created: Array<{ options?: { targetPaneId?: string } }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%leader",
@@ -429,7 +442,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const created: string[] = [];
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%leader",
@@ -477,7 +490,7 @@ describe("reconcileHudForPromptSubmit", () => {
 	it("does not reap a different-session HUD pane owned by a neighboring live leader", async () => {
 		const killed: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%left",
@@ -512,7 +525,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		// window we cannot see here) must survive even when that leader is absent.
 		const killed: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -549,7 +562,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		// reaped — leaving a dangling strip that still never matches the real pane.
 		const killed: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -589,7 +602,7 @@ describe("reconcileHudForPromptSubmit", () => {
 	it("prefers an explicit session override when recreating HUD", async () => {
 		const created: Array<{ cmd: string }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -622,7 +635,7 @@ describe("reconcileHudForPromptSubmit", () => {
 	it("forwards OMX_ROOT when recreating HUD with shell-safe quoting", async () => {
 		const created: Array<{ cmd: string }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -653,7 +666,7 @@ describe("reconcileHudForPromptSubmit", () => {
 
 	it("forwards OMX_STATE_ROOT when recreating HUD with shell-safe quoting", async () => {
 		const created: string[] = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -700,7 +713,7 @@ describe("reconcileHudForPromptSubmit", () => {
 
 	it("forwards OMX_TEAM_STATE_ROOT before boxed roots when recreating HUD", async () => {
 		const created: string[] = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -754,7 +767,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			options?: { heightLines?: number; targetPaneId?: string };
 		}> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%leader",
@@ -787,7 +800,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			options?: { heightLines?: number; targetPaneId?: string };
 		}> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%right",
@@ -839,7 +852,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			startCommand: `exec env OMX_SESSION_ID='${sessionId}' OMX_TMUX_HUD_OWNER='1' ${OMX_TMUX_HUD_LEADER_PANE_ENV}='${leaderPaneId}' node omx hud --watch --preset=focused`,
 		});
 
-		const leftCreateResult = await reconcileHudForPromptSubmit("/repo", {
+		const leftCreateResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%left",
@@ -866,7 +879,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			resolveOmxCliEntryPath: () => "/repo/dist/cli/omx.js",
 		});
 
-		const leftRepeatResult = await reconcileHudForPromptSubmit("/repo", {
+		const leftRepeatResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%left",
@@ -894,7 +907,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			resolveOmxCliEntryPath: () => "/repo/dist/cli/omx.js",
 		});
 
-		const rightCreateResult = await reconcileHudForPromptSubmit("/repo", {
+		const rightCreateResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%right",
@@ -921,7 +934,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			resolveOmxCliEntryPath: () => "/repo/dist/cli/omx.js",
 		});
 
-		const rightRepeatResult = await reconcileHudForPromptSubmit("/repo", {
+		const rightRepeatResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%right",
@@ -1022,7 +1035,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			windowHeight: 40,
 		});
 
-		const leftRepeatResult = await reconcileHudForPromptSubmit("/repo", {
+		const leftRepeatResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%left",
@@ -1051,7 +1064,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			resolveOmxCliEntryPath: () => "/repo/dist/cli/omx.js",
 		});
 
-		const rightCreateResult = await reconcileHudForPromptSubmit("/repo", {
+		const rightCreateResult = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%right",
@@ -1098,7 +1111,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		let listCount = 0;
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1152,7 +1165,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		let listCount = 0;
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1200,7 +1213,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const registered: string[] = [];
 		let listCount = 0;
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1252,7 +1265,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: Array<{ cmd: string }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1304,7 +1317,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: Array<{ cmd: string }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1363,7 +1376,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1422,7 +1435,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const killed: string[] = [];
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1467,7 +1480,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		let listCount = 0;
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1519,7 +1532,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const killed: string[] = [];
 		const registered: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1564,7 +1577,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const created: Array<{ cmd: string; options?: { targetPaneId?: string } }> =
 			[];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%3",
@@ -1612,7 +1625,7 @@ describe("reconcileHudForPromptSubmit", () => {
 	it("still cleans stale duplicate HUD panes for the same session and leader owner", async () => {
 		const killed: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1663,7 +1676,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1742,7 +1755,7 @@ describe("reconcileHudForPromptSubmit", () => {
 
 	it("resizes an existing single HUD pane instead of recreating it", async () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1773,7 +1786,7 @@ describe("reconcileHudForPromptSubmit", () => {
 
 	it("resizes an existing HUD pane to active ultragoal height when ultragoal is active", async () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1837,7 +1850,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -1876,7 +1889,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: { TMUX: "1", TMUX_PANE: "%1", [OMX_TMUX_HUD_OWNER_ENV]: "1" },
 			listCurrentWindowPanes: () => [
 				{ paneId: "%1", currentCommand: "codex", startCommand: "codex" },
@@ -1920,7 +1933,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 		const created: string[] = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: { TMUX: "1", TMUX_PANE: "%1", [OMX_TMUX_HUD_OWNER_ENV]: "1" },
 			listCurrentWindowPanes: () => [
 				{ paneId: "%1", currentCommand: "codex", startCommand: "codex" },
@@ -1960,7 +1973,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		}> = [];
 		const resized: Array<{ paneId: string; heightLines: number }> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2032,7 +2045,7 @@ describe("reconcileHudForPromptSubmit", () => {
 		}> = [];
 		const unregistered: Array<string | undefined> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2131,7 +2144,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			};
 		}> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2207,7 +2220,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			};
 		}> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2287,7 +2300,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			};
 		}> = [];
 
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2365,7 +2378,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			heightLines: number;
 		}> = [];
 
-		await reconcileHudForPromptSubmit("/repo", {
+		await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2401,7 +2414,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			heightLines: number;
 		}> = [];
 
-		await reconcileHudForPromptSubmit("/repo", {
+		await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2434,7 +2447,7 @@ describe("reconcileHudForPromptSubmit", () => {
 			leaderPaneId: string | undefined;
 		}> = [];
 
-		await reconcileHudForPromptSubmit("/repo", {
+		await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2481,7 +2494,7 @@ describe("reconcileHudForPromptSubmit cramped-window guard (#2754)", () => {
 
 	it("does not create a HUD split on prompt submit when the existing window is too cramped", async () => {
 		const created: string[] = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2528,7 +2541,7 @@ if [[ "$cmd" == "display-message" ]]; then
   printf '160\t${crampedHeight}'
 fi
 if [[ "$cmd" == "list-panes" ]]; then
-  printf '%%1\\037codex\\0370\\0370\\037160\\03724\\03723\\037160\\037${crampedHeight}\\037codex\\037/repo'
+  printf '%%1\\037codex\\0370\\0370\\037160\\03724\\03723\\037160\\037${crampedHeight}\\037codex\\037${repoCwd}'
 fi
 `,
 			);
@@ -2536,7 +2549,7 @@ fi
 			process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
 
 			const created: string[] = [];
-			const result = await reconcileHudForPromptSubmit("/repo", {
+			const result = await reconcileHudForPromptSubmit(repoCwd, {
 				env: {
 					TMUX: "1",
 					TMUX_PANE: "%1",
@@ -2572,7 +2585,7 @@ fi
 
 	it("creates the HUD on prompt submit when the existing window has room", async () => {
 		const created: string[] = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2600,7 +2613,7 @@ fi
 
 	it("creates the HUD on prompt submit when the window height is unknown", async () => {
 		const created: string[] = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
@@ -2628,7 +2641,7 @@ fi
 	it("keeps an existing HUD pane even when the window is cramped", async () => {
 		const created: string[] = [];
 		const resized: Array<{ paneId: string; lines: number }> = [];
-		const result = await reconcileHudForPromptSubmit("/repo", {
+		const result = await reconcileHudForPromptSubmit(repoCwd, {
 			env: {
 				TMUX: "1",
 				TMUX_PANE: "%1",
