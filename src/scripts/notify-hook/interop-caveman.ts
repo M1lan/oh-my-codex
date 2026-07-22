@@ -7,6 +7,10 @@
  * natural-language activation string (`use caveman <level> mode`) into codex's
  * own tmux pane, reusing the readiness-aware pane injection so keystrokes are
  * not dropped during TUI boot.
+ *
+ * External dependency: the `caveman` skill itself is provided by the operator
+ * environment (synced from ~/forge/skills/caveman), not shipped by this repo.
+ * If the skill is absent, the injected activation string is a no-op sentence.
  */
 
 import { resolveCodexPane } from "../tmux-hook-engine.js";
@@ -86,7 +90,7 @@ export interface InteropCavemanInjectionResult {
  * No-ops quietly when not inside tmux or when no self pane is resolvable.
  */
 export async function performInteropCavemanInjection(
-	activation: InteropCavemanActivation,
+	activation: Pick<InteropCavemanActivation, "activation">,
 	deps: InteropCavemanInjectionDeps = {},
 ): Promise<InteropCavemanInjectionResult> {
 	const env = deps.env ?? process.env;
