@@ -8539,8 +8539,16 @@ esac
 			"platform",
 		);
 		const statCalls: string[] = [];
+		// Sandbox cwd: the fake Windows fallback cwd resolves relatively on
+		// POSIX hosts and the HUD cleanup-debt write would otherwise land in
+		// the real repo root (leaking a literal "C:\fallback" directory).
+		const sandboxCwd = await mkdtemp(
+			join(tmpdir(), "omx-msys-fallback-sandbox-"),
+		);
+		const previousCwd = process.cwd();
 
 		try {
+			process.chdir(sandboxCwd);
 			const cygpathPath = join(fakeCygpathDir, "cygpath");
 			await writeFile(cygpathPath, '#!/bin/sh\nprintf "%s\\n" "$2"\n');
 			await chmod(cygpathPath, 0o755);
@@ -8645,6 +8653,8 @@ esac
 			if (typeof previousWslInterop === "string")
 				process.env.WSL_INTEROP = previousWslInterop;
 			else delete process.env.WSL_INTEROP;
+			process.chdir(previousCwd);
+			await rm(sandboxCwd, { recursive: true, force: true });
 			await rm(fakeCygpathDir, { recursive: true, force: true });
 		}
 	});
@@ -8665,8 +8675,16 @@ esac
 			"platform",
 		);
 		const statCalls: string[] = [];
+		// Sandbox cwd: the fake Windows fallback cwd resolves relatively on
+		// POSIX hosts and the HUD cleanup-debt write would otherwise land in
+		// the real repo root (leaking a literal "C:\fallback" directory).
+		const sandboxCwd = await mkdtemp(
+			join(tmpdir(), "omx-msys-fallback-sandbox-"),
+		);
+		const previousCwd = process.cwd();
 
 		try {
+			process.chdir(sandboxCwd);
 			const cygpathPath = join(fakeCygpathDir, "cygpath");
 			await writeFile(cygpathPath, '#!/bin/sh\nprintf "%s\\n" "$2"\n');
 			await chmod(cygpathPath, 0o755);
@@ -8767,6 +8785,8 @@ esac
 			if (typeof previousWslInterop === "string")
 				process.env.WSL_INTEROP = previousWslInterop;
 			else delete process.env.WSL_INTEROP;
+			process.chdir(previousCwd);
+			await rm(sandboxCwd, { recursive: true, force: true });
 			await rm(fakeCygpathDir, { recursive: true, force: true });
 		}
 	});
