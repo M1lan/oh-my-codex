@@ -826,9 +826,7 @@ async function latestMtime(path: string): Promise<number> {
 	return latest;
 }
 
-async function terminalGraph(
-	keyPath: string,
-): Promise<{
+async function terminalGraph(keyPath: string): Promise<{
 	terminal: boolean;
 	nonCompactable: boolean;
 	newestRecordMs: number;

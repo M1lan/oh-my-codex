@@ -61,9 +61,7 @@ function cleanQualityGate(): string {
 	});
 }
 
-async function capture(
-	run: () => Promise<void>,
-): Promise<{
+async function capture(run: () => Promise<void>): Promise<{
 	stdout: string[];
 	stderr: string[];
 	exitCode: string | number | undefined;

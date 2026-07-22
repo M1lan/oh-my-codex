@@ -1994,9 +1994,7 @@ async function buildNotifyPayload(
 	};
 }
 
-async function invokeNotifyHook(
-	payload: Record<string, unknown>,
-): Promise<{
+async function invokeNotifyHook(payload: Record<string, unknown>): Promise<{
 	spawned: boolean;
 	childPid?: number;
 	status?: number | null;

@@ -775,9 +775,7 @@ export async function verifyManagedPaneTarget(
 	}
 }
 
-async function readManagedPaneCommandState(
-	paneTarget: string,
-): Promise<{
+async function readManagedPaneCommandState(paneTarget: string): Promise<{
 	currentCommand: string;
 	startCommand: string;
 	lookupFailed: boolean;
