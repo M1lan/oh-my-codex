@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# menu.bash -- the GUM launcher: a guided, parameter-aware command builder.
+# menu.bash -- THE human menu: compact splash header + guided command builder.
 #
 #   menu.bash
 #
-# Identity (vs fzf.bash, the flat power launcher):
+# The one and only human UI (agents get entry.bash's terse dump instead):
+#   * Compact splash header: repo facts parsed from files -- never spawns
+#     node/cargo. The old full-screen info-screen splash + countdown are gone.
 #   * `gum filter` IS the menu -- full grouped list visible, narrows live,
 #     --no-fuzzy gives word-prefix matching ("te" hits test, not pretest).
-#   * The differentiator: recipes with parameters become fill-in-the-blank
-#     forms (gum input per argument, defaults skippable), then gum confirm.
-#     menu PROMPTS for params; fzf MULTI-SELECTS. That is the dividing line.
-#   * Items self-generate from `just --dump` -- the menu can never go stale.
+#   * Recipes with parameters become fill-in-the-blank forms (gum input per
+#     argument, defaults skippable), then gum confirm.
+#   * Items self-generate from `just --dump` with modules recursed -- the
+#     menu can never go stale. Module recipes show as "test node" etc.
 #   * NO separator/header pseudo-entries -- grouping is a [group] column.
 #   * Terminal DEFAULT colors only (gum defaults + ANSI indexes) -- no themes.
 #   * SIGINT-safe: trap + rc-capture (never `|| true` around gum).
-#   * Uses NO fzf anywhere, by design.
 #   * Iron Rule 5: never clear -- a `printf '\n'` spacer at every loop top;
 #     gum filter redraws its own region inline.
 #
@@ -29,29 +30,39 @@ for dep in gum jq just; do
 done
 
 # group display order (anything unknown sorts last, alphabetically)
-GROUP_ORDER=(build run test lint check rust git clean util meta)
+GROUP_ORDER=(meta gate build test lint rust omx ai dev sync util clean)
 
 # ── build the item list from the live recipe inventory ───────────────────
 # tab-separated: name <TAB> group <TAB> doc <TAB> params(space-joined)
+# name may be "recipe" (root) or "module recipe". group = module name, or the
+# [group] attribute for root recipes.
 # param suffixes: `?` = has default (skippable) · `*` = variadic (skippable)
 recipe_rows() {
   just --dump --dump-format json | jq -r '
-        .recipes
-        | to_entries[]
-        | select(.key | startswith("_") | not)
-        | select(.key != "default")
-        | select([.value.attributes[]? | strings] | index("private") | not)
-        | [ .key,
-            (([.value.attributes[]? | objects | .group] | first) // "misc"),
-            (.value.doc // ""),
-            ([.value.parameters[]?
-              | .name
-                + (if .kind == "star" or .kind == "plus" then "*"
-                   elif .default != null then "?"
-                   else "" end)
-             ] | join(" "))
-          ]
-        | @tsv'
+        def rows($prefix; $grp):
+            .recipes
+            | to_entries[]
+            | select(.key | startswith("_") | not)
+            | select(.key != "default")
+            | select([.value.attributes[]? | strings] | index("private") | not)
+            | [ ($prefix + .key),
+                (if $grp != "" then $grp
+                 else (([.value.attributes[]? | objects | .group] | first) // "misc")
+                 end),
+                (.value.doc // ""),
+                ([.value.parameters[]?
+                  | .name
+                    + (if .kind == "star" or .kind == "plus" then "*"
+                       elif .default != null then "?"
+                       else "" end)
+                 ] | join(" "))
+              ]
+            | @tsv;
+        rows(""; ""),
+        (.modules | to_entries[]
+         | (.key) as $m
+         | ([$m, $m, "the bare verb -- runs this module'\''s default recipe", ""] | @tsv),
+           (.value | rows($m + " "; $m)))'
 }
 
 build_items() {
@@ -63,7 +74,7 @@ build_items() {
     ITEM_PARAMS[$name]=$params
     local tag suffix=''
     [[ -n "$params" ]] && suffix=" ($params)"
-    printf -v tag '%-16s %-9s %s%s' "$name" "[$group]" "$doc" "$suffix"
+    printf -v tag '%-22s %-7s %s%s' "$name" "[$group]" "$doc" "$suffix"
     by_group[$group]+="$tag"$'\n'
   done < <(recipe_rows | LC_ALL=C sort -t $'\t' -k2,2 -k1,1)
 
@@ -77,23 +88,51 @@ build_items() {
     while IFS= read -r line; do [[ -n "$line" ]] && ITEMS+=("$line"); done <<<"${by_group[$g]}"
   done
   # a real, actionable entry -- NOT a separator
-  printf -v line '%-16s %-9s %s' 'quit' '[menu]' 'leave the menu'
+  printf -v line '%-22s %-7s %s' 'quit' '[menu]' 'leave the menu'
   ITEMS+=("$line")
 }
 
+# ── splash header (facts are FILE-PARSE ONLY -- instant) ─────────────────
+splash() {
+  local branch dirty last pkg_v built deps state
+  branch=$(fact_branch)
+  dirty=$(fact_dirty)
+  last=$(fact_last_commit)
+  ((${#last} > 40)) && last="${last:0:39}…"
+  pkg_v=$(fact_pkg_version)
+  built=$(fact_built)
+  deps=$(fact_deps)
+  state="deps ${deps:-MISSING -> just setup} · build ${built:-MISSING -> just build}"
+  gum style --border rounded --border-foreground "$G_ACCENT" \
+    --padding "0 2" --margin "0 1" \
+    "$(printf '%s%s %s v%s%s  %s%s · %s dirty · %s%s' \
+      "$C_BOLD$C_CYAN" "$I_NODE" "$PKGNAME" "$pkg_v" "$C_RESET" \
+      "$C_DIM" "$branch" "$dirty" "$last" "$C_RESET")" \
+    "$(printf '%s%s · gates: just ci · params become forms%s' "$C_DIM" "$state" "$C_RESET")"
+}
+
 # ── preview + parameter form + confirm + run ─────────────────────────────
-show_recipe() { # <name>
+show_recipe() { # <name> ("recipe", "module recipe", or bare module name)
+  local -a words
+  read -r -a words <<<"$1"
+  local src
+  if ! src=$(just --show "${words[@]}" 2>/dev/null); then
+    # bare module: --show rejects it -- preview the module's recipe list
+    just --list "${words[0]}" 2>/dev/null || return 0
+    return 0
+  fi
   if has bat; then
-    just --show "$1" 2>/dev/null |
-      bat --language=make --color=always --style=plain --paging=never 2>/dev/null ||
-      just --show "$1"
+    bat --language=make --color=always --style=plain --paging=never <<<"$src" 2>/dev/null ||
+      printf '%s\n' "$src"
   else
-    just --show "$1"
+    printf '%s\n' "$src"
   fi
 }
 
 run_recipe() { # <name>
   local name="$1" args=() p val rc words
+  local -a cmd
+  read -r -a cmd <<<"$name"
   printf '\n'
   gum style --border rounded --border-foreground "$G_ACCENT" \
     --padding "0 2" --margin "1 2" \
@@ -138,22 +177,18 @@ run_recipe() { # <name>
     --prompt.foreground="6" \
     "$(printf 'just %s %s' "$name" "${args[*]:-}")" || rc=$?
   ((rc != 0)) && return 0 # back to menu
-  exec just "$name" "${args[@]+"${args[@]}"}"
+  exec just "${cmd[@]}" "${args[@]+"${args[@]}"}"
 }
 
 # ── main loop ────────────────────────────────────────────────────────────
 build_items
-header=$(printf '%s %s · %s recipes · type to filter · esc esc quits' \
-  "$I_NODE" "$PKGNAME" "${#ITEMS[@]}")
+header=$(printf '%s recipes · type to filter · esc esc quits' "${#ITEMS[@]}")
 
 while true; do
   printf '\n' # Iron Rule 5: spacer, never clear
-  gum style --border rounded --border-foreground "$G_ACCENT" \
-    --padding "0 2" --margin "0 1" \
-    "$(printf '%s%s %s%s' "$C_BOLD$C_CYAN" "$I_NODE" "$PKGNAME" "$C_RESET")" \
-    "$(printf '%sguided builder · params become forms · just fzf = power mode%s' "$C_DIM" "$C_RESET")"
+  splash
 
-  height=$(($(term_lines) - 12))
+  height=$(($(term_lines) - 10))
   ((height < 8)) && height=8
   rc=0
   choice=$(printf '%s\n' "${ITEMS[@]}" |
@@ -168,7 +203,9 @@ while true; do
   ((rc != 0)) && exit 0 # esc / ctrl-c
   [[ -z "$choice" ]] && exit 0
 
-  recipe=${choice%%[[:space:]]*}
+  # item name = everything before the [group] column (1 or 2 words)
+  recipe=$(gawk '{ for (i = 1; i <= NF; i++) if ($i ~ /^\[/) { NF = i - 1; break } } 1' <<<"$choice")
+  recipe=${recipe%"${recipe##*[![:space:]]}"} # rtrim
   case "$recipe" in
     quit) exit 0 ;;
     *) run_recipe "$recipe" ;;

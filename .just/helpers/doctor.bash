@@ -64,7 +64,7 @@ declare -A WHY=(
   [biome]='TS/JS lint + format (just lint/fmt)'
   [shellcheck]='lint the bash helpers'
   [shfmt]='format the bash helpers'
-  [rumdl]='markdown linting (just md-lint)'
+  [rumdl]='markdown linting (just lint md)'
   [typos]='spell check (just typos)'
   [gitleaks]='secret scanning (just secrets)'
 )
@@ -155,7 +155,7 @@ project_checks() {
   crates=$(fact_crates)
   if ((crates > 0)); then
     state=ok
-    note="$crates workspace crate(s) (just rust-build)"
+    note="$crates workspace crate(s) (just rust)"
   else
     state=warn
     note='no Cargo workspace found'
@@ -169,7 +169,7 @@ project_checks() {
     note="clean on $(fact_branch)"
   else
     state=warn
-    note="$dirty dirty file(s) -- just verify before commit"
+    note="$dirty dirty file(s) -- just ci before commit"
   fi
   project_rows+=("$state|git tree|$note")
 }
@@ -226,11 +226,11 @@ cmd_factoid() {
   local dirty
   dirty=$(fact_dirty)
   if ((dirty > 0)); then
-    printf '%s uncommitted file(s) on %s -- just verify before commit\n' "$dirty" "$(fact_branch)"
+    printf '%s uncommitted file(s) on %s -- just ci before commit\n' "$dirty" "$(fact_branch)"
     return 0
   fi
   # shellcheck disable=SC2016  # literal backticks are intentional output
-  printf 'all green -- `just verify` is the exact pre-push gate\n'
+  printf 'all green -- `just ci` is the exact pre-push gate\n'
 }
 
 # ── output: full table ───────────────────────────────────────────────────

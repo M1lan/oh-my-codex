@@ -311,24 +311,23 @@ welcome_screen() {
   printf '\n'
   {
     printf '%sWHAT NEXT%s\n\n' "$C_BOLD" "$C_RESET"
-    printf '%sjust%s              this screen'\''s splash sibling (any time)\n' "$C_BOLD$C_CYAN" "$C_RESET"
-    printf '%sjust menu%s         guided command builder\n' "$C_BOLD$C_CYAN" "$C_RESET"
-    printf '%sjust fzf%s          power launcher (tab multi-select)\n' "$C_BOLD$C_CYAN" "$C_RESET"
-    printf '%sjust verify%s       the full pre-push gate\n' "$C_BOLD$C_CYAN" "$C_RESET"
+    printf '%sjust%s              smart entry (menu for humans, terse dump for agents)\n' "$C_BOLD$C_CYAN" "$C_RESET"
+    printf '%sjust menu%s         the human menu (splash + guided builder)\n' "$C_BOLD$C_CYAN" "$C_RESET"
+    printf '%sjust ci%s           the full pre-push gate\n' "$C_BOLD$C_CYAN" "$C_RESET"
   } | gum style --border thick --border-foreground "$G_WARN" --padding "0 3" --margin "0 2"
   printf '%s\n' "$EPOCHSECONDS" >"$STATE_DIR/welcome-shown"
 
-  # 4.2 s tenths countdown: ⏎/m menu · f fzf · any other key -> shell
+  # 4.2 s tenths countdown: ⏎/m menu · any other key -> shell
   local t key rc
   is_tty && tput civis 2>/dev/null
   drain_tty_input # gum's terminal-query replies must not count as hotkeys
   local secs="${JUST_WELCOME_SECS:-4.2}" tenths
   if [[ "$secs" == *.* ]]; then tenths=$((${secs%.*} * 10 + ${secs#*.})); else tenths=$((secs * 10)); fi
   for ((t = tenths; t > 0; t--)); do
-    printf '\r  %s▌%s  %s%s %s %s  %s⏎/m%s menu   %sf%s fzf   %sany key%s shell ' \
+    printf '\r  %s▌%s  %s%s %s %s  %s⏎/m%s menu   %sany key%s shell ' \
       "$C_BOLD$C_CYAN" "$C_RESET" \
       "$C_BOLD$C_YELLOW" "$C_REV" "$(fmt_tenths "$t")" "$C_RESET" \
-      "$C_BOLD$C_GREEN" "$C_RESET" "$C_BOLD$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET"
+      "$C_BOLD$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET"
     rc=0
     read -rsn1 -t 0.1 key || rc=$?
     if ((rc == 0)); then
@@ -337,7 +336,6 @@ welcome_screen() {
       is_tty && tput cnorm 2>/dev/null
       case "$key" in
         '' | m | M) exec just menu ;;
-        f | F) exec just fzf ;;
         *) return 0 ;;
       esac
     fi
