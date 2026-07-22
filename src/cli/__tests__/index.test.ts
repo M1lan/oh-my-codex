@@ -27,6 +27,10 @@ import {
 	buildWindowsPromptCommand,
 	buildTmuxSessionName,
 	resolveCliInvocation,
+	parseResumeCodexHomeSelection,
+	isResumeCodexLaunch,
+	CODEX_GLOBAL_OPTIONS_WITH_SPLIT_VALUE,
+	isCodexVersionRequest,
 	resolveUpdateChannelArg,
 	commandOwnsLocalHelp,
 	resolveCodexLaunchPolicy,
@@ -48,7 +52,7 @@ import {
 	resolveSetupMcpModeArg,
 	resolveSetupScopeArg,
 	resolveSetupTeamModeArg,
-  resolveSetupAgentsMergePolicyArg,
+	resolveSetupAgentsMergePolicyArg,
 	resolveLaunchConfigRepairOptions,
 	readPersistedSetupPreferences,
 	readPersistedSetupScope,
@@ -103,6 +107,10 @@ import {
 	DETACHED_TMUX_HISTORY_LIMIT,
 	isExistingTmuxWindowTooCrampedForLaunchHud,
 } from "../index.js";
+import {
+	buildResumeArgsWithPreservedFlags,
+	stripHotswapArg,
+} from "../../auth/hotswap.js";
 import { mergeConfig, repairConfigIfNeeded } from "../../config/generator.js";
 import { ensureReusableNodeModules } from "../../utils/repo-deps.js";
 import { readAllState } from "../../hud/state.js";
@@ -121,7 +129,6 @@ import {
 } from "../../config/models.js";
 import type { ProcessEntry } from "../cleanup.js";
 import { splitWorkerLaunchArgs } from "../../team/model-contract.js";
-
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..", "..");
@@ -722,6 +729,37 @@ describe("normalizeCodexLaunchArgs", () => {
 		]);
 	});
 
+	it("adds reasoning overrides before a literal -- marker", () => {
+		assert.deepEqual(normalizeCodexLaunchArgs(["--xhigh", "--", "--max"]), [
+			"-c",
+			'model_reasoning_effort="xhigh"',
+			"--",
+			"--max",
+		]);
+	});
+
+	it("adds bypass and reasoning overrides before preserving raw marker suffix args", () => {
+		assert.deepEqual(
+			normalizeCodexLaunchArgs([
+				"--madmax",
+				"--xhigh",
+				"--",
+				"-c",
+				'model_reasoning_effort="ultra"',
+				"--max",
+			]),
+			[
+				"--dangerously-bypass-approvals-and-sandbox",
+				"-c",
+				'model_reasoning_effort="xhigh"',
+				"--",
+				"-c",
+				'model_reasoning_effort="ultra"',
+				"--max",
+			],
+		);
+	});
+
 	it("uses the last reasoning shorthand when both are present", () => {
 		assert.deepEqual(normalizeCodexLaunchArgs(["--high", "--xhigh"]), [
 			"-c",
@@ -729,15 +767,296 @@ describe("normalizeCodexLaunchArgs", () => {
 		]);
 	});
 
-	it("rejects ambiguous max and ultra reasoning shorthands", () => {
-		assert.throws(
-			() => normalizeCodexLaunchArgs(["--max"]),
-			/canonical highest reasoning effort is "xhigh".*"max" and "ultra" are not accepted aliases/,
+	it("rejects pre-marker max and ultra reasoning shorthands with approved guidance", () => {
+		const errors = [
+			[
+				"--max",
+				'Unsupported OMX launch shorthand "--max".\nNo --max shorthand exists; use agentReasoning for per-agent "max" or pass -c model_reasoning_effort=... directly to Codex.\nRun "omx help" for usage.',
+			],
+			[
+				"--ultra",
+				'Unsupported OMX launch shorthand "--ultra".\n"ultra" is not an OMX root or per-agent reasoning value and is not an alias for "max".\nRun "omx help" for usage.',
+			],
+		] as const;
+
+		for (const [flag, message] of errors) {
+			assert.throws(() => normalizeCodexLaunchArgs([flag]), { message });
+		}
+	});
+
+	it("preserves literal max and ultra after -- with raw -c arguments", () => {
+		const args = [
+			"-c",
+			"model_reasoning_effort=MAX",
+			"--",
+			"--max",
+			"--ultra",
+			"-c",
+			'model_reasoning_effort="ultra"',
+			"-c",
+			"model_reasoning_effort=future",
+		];
+		assert.deepEqual(normalizeCodexLaunchArgs(args), args);
+	});
+
+	it("preserves post-marker OMX flags as literal Codex arguments", () => {
+		const args = [
+			"--",
+			"--worktree",
+			"post-marker-branch",
+			"--notify-temp",
+			"--discord",
+			"--custom",
+			"openclaw:ops",
+			"--spark",
+			"resume",
+			"--project",
+			"--codex-home",
+			"/tmp/literal-codex-home",
+			"--version",
+		];
+		const notifyTempResult = resolveNotifyTempContract(args, {});
+		assert.equal(notifyTempResult.contract.active, false);
+		assert.deepEqual(notifyTempResult.contract.canonicalSelectors, []);
+		assert.deepEqual(notifyTempResult.passthroughArgs, args);
+		assert.equal(
+			resolveWorkerSparkModel(notifyTempResult.passthroughArgs),
+			undefined,
 		);
-		assert.throws(
-			() => normalizeCodexLaunchArgs(["--ultra"]),
-			/canonical highest reasoning effort is "xhigh".*"max" and "ultra" are not accepted aliases/,
+		assert.equal(isResumeCodexLaunch(args), false);
+		assert.equal(isCodexVersionRequest(args), false);
+		assert.deepEqual(parseResumeCodexHomeSelection(args), {
+			args,
+			explicitCodexHome: undefined,
+			projectOnly: false,
+		});
+		assert.deepEqual(
+			normalizeCodexLaunchArgs(notifyTempResult.passthroughArgs),
+			args,
 		);
+	});
+
+	it("parses resume-owned selectors only before the end-of-options marker", () => {
+		assert.deepEqual(
+			parseResumeCodexHomeSelection([
+				"resume",
+				"--codex-home",
+				"/tmp/selected-codex-home",
+				"--project",
+				"--",
+				"--codex-home",
+				"/tmp/literal-codex-home",
+				"--project",
+			]),
+			{
+				args: [
+					"resume",
+					"--",
+					"--codex-home",
+					"/tmp/literal-codex-home",
+					"--project",
+				],
+				explicitCodexHome: "/tmp/selected-codex-home",
+				projectOnly: true,
+			},
+		);
+		assert.equal(isResumeCodexLaunch(["resume", "--", "literal"]), true);
+		assert.equal(isCodexVersionRequest(["--version", "--", "literal"]), true);
+	});
+
+	it("removes hotswap only before the end-of-options marker", () => {
+		assert.deepEqual(
+			stripHotswapArg(["--hotswap", "--", "--hotswap", "literal"]),
+			["--", "--hotswap", "literal"],
+		);
+	});
+
+	it("preserves Codex launch authority and the first literal suffix when building quota resume args", () => {
+		assert.deepEqual(
+			buildResumeArgsWithPreservedFlags(
+				[
+					"--model",
+					"gpt-review",
+					"--model=gpt-review-fast",
+					"--config",
+					"developer_instructions=enabled",
+					"--config=developer_instructions=overridden",
+					"--add-dir",
+					"src",
+					"--remote",
+					"ws://127.0.0.1:4500",
+					"--remote=ws://127.0.0.1:4501",
+					"--remote-auth-token-env",
+					"CODEX_REMOTE_TOKEN",
+					"--remote-auth-token-env=CODEX_REMOTE_TOKEN_BACKUP",
+					"-i",
+					"one.png",
+					"--image",
+					"two.png",
+					"-i",
+					"three.png,four.png",
+					"--image=five.png,six.png",
+					"-iseven.png,eight.png",
+					"--image=resume",
+					"resume",
+					"--oss",
+					"--dangerously-bypass-approvals-and-sandbox",
+					"--model",
+					"gpt-resume",
+					"resume",
+					"old-session",
+					"--last",
+					"--all",
+					"--include-non-interactive",
+					"--",
+					"--hotswap",
+					"--last",
+					"--all",
+					"--include-non-interactive",
+					"--model",
+					"opaque-model",
+					"literal suffix",
+				],
+				"session-123",
+			),
+			[
+				"resume",
+				"session-123",
+				"--model",
+				"gpt-review",
+				"--model=gpt-review-fast",
+				"--config",
+				"developer_instructions=enabled",
+				"--config=developer_instructions=overridden",
+				"--add-dir",
+				"src",
+				"--remote",
+				"ws://127.0.0.1:4500",
+				"--remote=ws://127.0.0.1:4501",
+				"--remote-auth-token-env",
+				"CODEX_REMOTE_TOKEN",
+				"--remote-auth-token-env=CODEX_REMOTE_TOKEN_BACKUP",
+				"-i",
+				"one.png",
+				"--image",
+				"two.png",
+				"-i",
+				"three.png,four.png",
+				"--image=five.png,six.png",
+				"-iseven.png,eight.png",
+				"--image=resume",
+				"--oss",
+				"--dangerously-bypass-approvals-and-sandbox",
+				"--model",
+				"gpt-resume",
+				"--",
+				"--hotswap",
+				"--last",
+				"--all",
+				"--include-non-interactive",
+				"--model",
+				"opaque-model",
+				"literal suffix",
+			],
+		);
+	});
+
+	it("removes resume selectors only when synthesizing an explicit session", () => {
+		for (const selectors of [
+			["--last"],
+			["--all"],
+			["--include-non-interactive"],
+			["--last", "--all"],
+			["--all", "--include-non-interactive"],
+			["--last", "--all", "--include-non-interactive"],
+		]) {
+			assert.deepEqual(
+				buildResumeArgsWithPreservedFlags(
+					[
+						"resume",
+						...selectors,
+						"--model",
+						"gpt-review",
+						"--remote",
+						"ws://127.0.0.1:4500",
+						"--",
+						...selectors,
+						"opaque suffix",
+					],
+					"session-123",
+				),
+				[
+					"resume",
+					"session-123",
+					"--model",
+					"gpt-review",
+					"--remote",
+					"ws://127.0.0.1:4500",
+					"--",
+					...selectors,
+					"opaque suffix",
+				],
+				JSON.stringify(selectors),
+			);
+		}
+	});
+
+	it("treats only split image values as variadic", () => {
+		assert.deepEqual(
+			[...CODEX_GLOBAL_OPTIONS_WITH_SPLIT_VALUE],
+			[
+				["-a", "single"],
+				["--ask-for-approval", "single"],
+				["-c", "single"],
+				["--config", "single"],
+				["-C", "single"],
+				["--cd", "single"],
+				["-i", "variadic"],
+				["--image", "variadic"],
+				["-m", "single"],
+				["--model", "single"],
+				["-p", "single"],
+				["--profile", "single"],
+				["-s", "single"],
+				["--sandbox", "single"],
+				["--add-dir", "single"],
+				["--disable", "single"],
+				["--enable", "single"],
+				["--local-provider", "single"],
+				["--remote", "single"],
+				["--remote-auth-token-env", "single"],
+			],
+		);
+		for (const args of [
+			["--model", "resume"],
+			["--remote", "resume"],
+			["--image", "resume"],
+			["-i", "resume"],
+			["--image=resume"],
+			["-iresume"],
+			["-i=resume"],
+			["-i", "one.png", "resume"],
+			["--image", "one.png", "resume"],
+			["-i", "one.png", "-i", "two.png", "resume"],
+			["--image", "one.png", "--image", "two.png", "resume"],
+			["-i", "one.png,two.png", "resume"],
+			["--image", "one.png,two.png", "resume"],
+			["exec", "resume"],
+			["--image", "one.png", "--", "resume"],
+		]) {
+			assert.equal(isResumeCodexLaunch(args), false, JSON.stringify(args));
+		}
+		for (const args of [
+			["--model", "gpt-review", "resume"],
+			["--image=one.png", "resume"],
+			["-ione.png", "resume"],
+			["-i=one.png", "resume"],
+			["--image", "one.png", "--model", "gpt-review", "resume"],
+			["--image=one.png", "--model=gpt-review", "resume"],
+			["-ione.png", "--remote", "ws://127.0.0.1:4500", "resume"],
+		]) {
+			assert.equal(isResumeCodexLaunch(args), true, JSON.stringify(args));
+		}
 	});
 
 	it("maps --xhigh --madmax to codex-native flags only", () => {
@@ -988,6 +1307,20 @@ describe("resolveNotifyTempContract", () => {
 			"custom:my-hook",
 		]);
 		assert.equal(parsed.contract.warnings.length >= 1, true);
+	});
+
+	it("does not activate or consume selectors after --", () => {
+		const args = [
+			"--",
+			"--notify-temp",
+			"--discord",
+			"--custom",
+			"openclaw:ops",
+		];
+		const parsed = resolveNotifyTempContract(args, {});
+		assert.equal(parsed.contract.active, false);
+		assert.deepEqual(parsed.contract.selectors, []);
+		assert.deepEqual(parsed.passthroughArgs, args);
 	});
 
 	it("activates from OMX_NOTIFY_TEMP=1 env parity", () => {
@@ -2077,6 +2410,11 @@ describe("resolveWorkerSparkModel", () => {
 		assert.equal(resolveWorkerSparkModel([]), undefined);
 	});
 
+	it("returns undefined for spark flags after --", () => {
+		assert.equal(resolveWorkerSparkModel(["--", "--spark"]), undefined);
+		assert.equal(resolveWorkerSparkModel(["--", "--madmax-spark"]), undefined);
+	});
+
 	it("reads low-complexity team model from config when codexHomeOverride is provided", async () => {
 		// Intentional legacy model fixture: verifies an explicit user override is routed to workers unchanged.
 		const codexHome = await mkdtemp(join(tmpdir(), "omx-codex-home-"));
@@ -2104,7 +2442,7 @@ describe("resolveTeamWorkerLaunchArgsEnv (spark)", () => {
 				true,
 				expectedLowComplexityModel(),
 			),
-      `"--model" "${expectedLowComplexityModel()}"`,
+			`"--model" "${expectedLowComplexityModel()}"`,
 		);
 	});
 
@@ -2116,7 +2454,7 @@ describe("resolveTeamWorkerLaunchArgsEnv (spark)", () => {
 				true,
 				expectedLowComplexityModel(),
 			),
-      '"--model" "gpt-5"',
+			'"--model" "gpt-5"',
 		);
 	});
 
@@ -2128,7 +2466,7 @@ describe("resolveTeamWorkerLaunchArgsEnv (spark)", () => {
 				true,
 				expectedLowComplexityModel(),
 			),
-      '"--model" "gpt-4.1"',
+			'"--model" "gpt-4.1"',
 		);
 	});
 });
@@ -2329,12 +2667,23 @@ describe("resolveCliInvocation", () => {
 		);
 		assert.match(
 			HELP,
-			/omx update --stable\s+Install\/rollback to the stable release \(oh-my-codex@latest\), then refresh setup/,
+			/omx update --stable\s+Install\/rollback to npm stable \(oh-my-codex@latest\), then refresh setup/,
 		);
 		assert.match(
 			HELP,
 			/omx update --dev\s+Install the upstream dev branch, then refresh setup/,
 		);
+	});
+
+	it("advertises only the four supported root reasoning modes", () => {
+		assert.match(
+			HELP,
+			/omx reasoning Show or set model reasoning effort \(low\|medium\|high\|xhigh\)/,
+		);
+		assert.match(HELP, /--high\s+Launch Codex with high reasoning effort/);
+		assert.match(HELP, /--xhigh\s+Launch Codex with xhigh reasoning effort/);
+		assert.doesNotMatch(HELP, /--max/);
+		assert.doesNotMatch(HELP, /--ultra/);
 	});
 
 	it("advertises concise launch policy controls in top-level help", () => {
@@ -2489,28 +2838,63 @@ describe("resolveSetupTeamModeArg", () => {
 	});
 });
 describe("resolveSetupAgentsMergePolicyArg", () => {
-  it("accepts only the explicit bare set and clear selectors", () => {
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg([]), undefined);
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--merge-agents"]), { kind: "set", value: true });
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--no-merge-agents"]), { kind: "set", value: false });
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--clear-merge-agents-policy"]), { kind: "clear" });
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--merge-agents", "--merge-agents"]), { kind: "set", value: true });
-    assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--clear-merge-agents-policy", "--clear-merge-agents-policy"]), { kind: "clear" });
-  });
+	it("accepts only the explicit bare set and clear selectors", () => {
+		assert.deepEqual(resolveSetupAgentsMergePolicyArg([]), undefined);
+		assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--merge-agents"]), {
+			kind: "set",
+			value: true,
+		});
+		assert.deepEqual(resolveSetupAgentsMergePolicyArg(["--no-merge-agents"]), {
+			kind: "set",
+			value: false,
+		});
+		assert.deepEqual(
+			resolveSetupAgentsMergePolicyArg(["--clear-merge-agents-policy"]),
+			{ kind: "clear" },
+		);
+		assert.deepEqual(
+			resolveSetupAgentsMergePolicyArg(["--merge-agents", "--merge-agents"]),
+			{ kind: "set", value: true },
+		);
+		assert.deepEqual(
+			resolveSetupAgentsMergePolicyArg([
+				"--clear-merge-agents-policy",
+				"--clear-merge-agents-policy",
+			]),
+			{ kind: "clear" },
+		);
+	});
 
-  it("rejects values, equals spellings, and conflicting policy selectors", () => {
-    for (const argv of [
-      ["--merge-agents=true"],
-      ["--no-merge-agents=false"],
-      ["--clear-merge-agents-policy=true"],
-      ["--merge-agents", "true"],
-      ["--no-merge-agents", "false"],
-    ]) {
-      assert.throws(() => resolveSetupAgentsMergePolicyArg(argv), /merge.*policy|merge-agents/i);
-    }
-    assert.throws(() => resolveSetupAgentsMergePolicyArg(["--merge-agents", "--no-merge-agents"]), /Conflicting.*merge.*policy/i);
-    assert.throws(() => resolveSetupAgentsMergePolicyArg(["--clear-merge-agents-policy", "--merge-agents"]), /Conflicting.*merge.*policy/i);
-  });
+	it("rejects values, equals spellings, and conflicting policy selectors", () => {
+		for (const argv of [
+			["--merge-agents=true"],
+			["--no-merge-agents=false"],
+			["--clear-merge-agents-policy=true"],
+			["--merge-agents", "true"],
+			["--no-merge-agents", "false"],
+		]) {
+			assert.throws(
+				() => resolveSetupAgentsMergePolicyArg(argv),
+				/merge.*policy|merge-agents/i,
+			);
+		}
+		assert.throws(
+			() =>
+				resolveSetupAgentsMergePolicyArg([
+					"--merge-agents",
+					"--no-merge-agents",
+				]),
+			/Conflicting.*merge.*policy/i,
+		);
+		assert.throws(
+			() =>
+				resolveSetupAgentsMergePolicyArg([
+					"--clear-merge-agents-policy",
+					"--merge-agents",
+				]),
+			/Conflicting.*merge.*policy/i,
+		);
+	});
 });
 
 describe("resolveSetupScopeArg", () => {
@@ -3314,6 +3698,10 @@ describe("project launch scope helpers", () => {
 					'trusted_hash = "sha256:setup-owned"',
 					"# End OMX-owned Codex hook trust state",
 					"",
+					"# User-owned project trust source must remain external during launch repair.",
+					`[projects."${wd}"] # retained external ownership`,
+					'trust_level = "trusted"',
+					"",
 					"# OMX-synced Codex project trust state (from runtime CODEX_HOME)",
 					`[projects."${wd}"]`,
 					'trust_level = "trusted"',
@@ -3354,6 +3742,25 @@ describe("project launch scope helpers", () => {
 			);
 			assert.ok(runtimeConfig.includes(`[projects."${wd}"]`));
 			assert.ok(repairedProjectConfig.includes(`[projects."${wd}"]`));
+			assert.match(
+				repairedProjectConfig,
+				/User-owned project trust source must remain external/,
+			);
+			assert.match(
+				repairedProjectConfig,
+				new RegExp(
+					`^${escapeRegExp(`[projects."${wd}"]`)} # retained external ownership$`,
+					"m",
+				),
+			);
+			assert.equal(
+				countMatches(
+					repairedProjectConfig,
+					new RegExp(`^${escapeRegExp(`[projects."${wd}"]`)}(?:\\s|$)`, "gm"),
+				),
+				1,
+				"launch repair must remove only the marker-owned duplicate before the runtime mirror is written",
+			);
 		} finally {
 			await rm(wd, { recursive: true, force: true });
 		}
@@ -3579,120 +3986,142 @@ describe("project launch scope helpers", () => {
 });
 
 describe("pointer launch aborts", () => {
-  it("does not launch, tag, or retain a runtime home when a pointer lock is held", async () => {
-    const wd = await mkdtemp(join(tmpdir(), "omx-pointer-lock-launch-"));
-    try {
-      const binDir = join(wd, "bin");
-      const codexLog = join(wd, "codex.log");
-      const tmuxLog = join(wd, "tmux.log");
-      const lockPath = join(wd, ".omx", "state", "session.json.lock");
-      const ownerPath = join(lockPath, "owner.json");
-      const ownerContents = "{malformed-held-lock\n";
-      await mkdir(binDir, { recursive: true });
-      await mkdir(lockPath, { recursive: true });
-      await writeFile(join(wd, ".omx", "setup-scope.json"), JSON.stringify({ scope: "project" }));
-      await writeFile(ownerPath, ownerContents);
-      await writeFile(
-        join(binDir, "codex"),
-        `#!/bin/sh\nprintf 'spawned\\n' >> ${JSON.stringify(codexLog)}\n`,
-      );
-      await writeFile(
-        join(binDir, "tmux"),
-        `#!/bin/sh\ncase "$1" in set-option|display-message) printf '%s\\n' "$*" >> ${JSON.stringify(tmuxLog)} ;; esac\n`,
-      );
-      await chmod(join(binDir, "codex"), 0o755);
-      await chmod(join(binDir, "tmux"), 0o755);
+	it("does not launch, tag, or retain a runtime home when a pointer lock is held", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-pointer-lock-launch-"));
+		try {
+			const binDir = join(wd, "bin");
+			const codexLog = join(wd, "codex.log");
+			const tmuxLog = join(wd, "tmux.log");
+			const lockPath = join(wd, ".omx", "state", "session.json.lock");
+			const ownerPath = join(lockPath, "owner.json");
+			const ownerContents = "{malformed-held-lock\n";
+			await mkdir(binDir, { recursive: true });
+			await mkdir(lockPath, { recursive: true });
+			await writeFile(
+				join(wd, ".omx", "setup-scope.json"),
+				JSON.stringify({ scope: "project" }),
+			);
+			await writeFile(ownerPath, ownerContents);
+			await writeFile(
+				join(binDir, "codex"),
+				`#!/bin/sh\nprintf 'spawned\\n' >> ${JSON.stringify(codexLog)}\n`,
+			);
+			await writeFile(
+				join(binDir, "tmux"),
+				`#!/bin/sh\ncase "$1" in set-option|display-message) printf '%s\\n' "$*" >> ${JSON.stringify(tmuxLog)} ;; esac\n`,
+			);
+			await chmod(join(binDir, "codex"), 0o755);
+			await chmod(join(binDir, "tmux"), 0o755);
 
-      const { spawnSync } = await import("node:child_process");
-      const result = spawnSync(process.execPath, [join(repoRoot, "dist", "cli", "omx.js"), "launch", "--direct"], {
-        cwd: wd,
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: join(wd, "home"),
-          PATH: `${binDir}${delimiter}/usr/bin:/bin`,
-          CODEX_HOME: "",
-          OMX_ROOT: "",
-          OMX_STATE_ROOT: "",
-          OMX_TEAM_STATE_ROOT: "",
-          OMX_SESSION_ID: "",
-          OMX_MCP_WORKDIR_ROOTS: "",
-          OMX_AUTO_UPDATE: "0",
-          OMX_HOOK_DERIVED_SIGNALS: "0",
-          OMX_NOTIFY_FALLBACK: "0",
-          TMUX: "test-socket,1,1",
-          TMUX_PANE: "%1",
-        },
-      });
+			const { spawnSync } = await import("node:child_process");
+			const result = spawnSync(
+				process.execPath,
+				[join(repoRoot, "dist", "cli", "omx.js"), "launch", "--direct"],
+				{
+					cwd: wd,
+					encoding: "utf-8",
+					env: {
+						...process.env,
+						HOME: join(wd, "home"),
+						PATH: `${binDir}${delimiter}/usr/bin:/bin`,
+						CODEX_HOME: "",
+						OMX_ROOT: "",
+						OMX_STATE_ROOT: "",
+						OMX_TEAM_STATE_ROOT: "",
+						OMX_SESSION_ID: "",
+						OMX_MCP_WORKDIR_ROOTS: "",
+						OMX_AUTO_UPDATE: "0",
+						OMX_HOOK_DERIVED_SIGNALS: "0",
+						OMX_NOTIFY_FALLBACK: "0",
+						TMUX: "test-socket,1,1",
+						TMUX_PANE: "%1",
+					},
+				},
+			);
 
-      assert.equal(result.status, 1, result.stderr || result.stdout);
-      assert.match(result.stderr, /session_pointer_lock_recovery_required/);
-      assert.equal(existsSync(codexLog), false);
-      assert.equal(existsSync(tmuxLog), false);
-      assert.equal(await readFile(ownerPath, "utf-8"), ownerContents);
-      assert.equal(existsSync(join(wd, ".omx", "state", "sessions")), false);
-      const runtimeRoot = join(wd, ".omx", "runtime", "codex-home");
-      assert.deepEqual(existsSync(runtimeRoot) ? await fsReaddir(runtimeRoot) : [], []);
-    } finally {
-      await rm(wd, { recursive: true, force: true });
-    }
-  });
+			assert.equal(result.status, 1, result.stderr || result.stdout);
+			assert.match(result.stderr, /session_pointer_lock_recovery_required/);
+			assert.equal(existsSync(codexLog), false);
+			assert.equal(existsSync(tmuxLog), false);
+			assert.equal(await readFile(ownerPath, "utf-8"), ownerContents);
+			assert.equal(existsSync(join(wd, ".omx", "state", "sessions")), false);
+			const runtimeRoot = join(wd, ".omx", "runtime", "codex-home");
+			assert.deepEqual(
+				existsSync(runtimeRoot) ? await fsReaddir(runtimeRoot) : [],
+				[],
+			);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
 
-  it("does not exec, tag, or retain a runtime home when pointer context root resolution is rejected", async () => {
-    const allowedRoot = await mkdtemp(join(tmpdir(), "omx-pointer-allowed-root-"));
-    const wd = await mkdtemp(join(tmpdir(), "omx-pointer-root-exec-"));
-    try {
-      const binDir = join(wd, "bin");
-      const codexLog = join(wd, "codex.log");
-      const tmuxLog = join(wd, "tmux.log");
-      await mkdir(binDir, { recursive: true });
-      await mkdir(join(wd, ".omx"), { recursive: true });
-      await writeFile(join(wd, ".omx", "setup-scope.json"), JSON.stringify({ scope: "project" }));
-      await writeFile(
-        join(binDir, "codex"),
-        `#!/bin/sh\nprintf 'spawned\\n' >> ${JSON.stringify(codexLog)}\n`,
-      );
-      await writeFile(
-        join(binDir, "tmux"),
-        `#!/bin/sh\ncase "$1" in set-option|display-message) printf '%s\\n' "$*" >> ${JSON.stringify(tmuxLog)} ;; esac\n`,
-      );
-      await chmod(join(binDir, "codex"), 0o755);
-      await chmod(join(binDir, "tmux"), 0o755);
+	it("does not exec, tag, or retain a runtime home when pointer context root resolution is rejected", async () => {
+		const allowedRoot = await mkdtemp(
+			join(tmpdir(), "omx-pointer-allowed-root-"),
+		);
+		const wd = await mkdtemp(join(tmpdir(), "omx-pointer-root-exec-"));
+		try {
+			const binDir = join(wd, "bin");
+			const codexLog = join(wd, "codex.log");
+			const tmuxLog = join(wd, "tmux.log");
+			await mkdir(binDir, { recursive: true });
+			await mkdir(join(wd, ".omx"), { recursive: true });
+			await writeFile(
+				join(wd, ".omx", "setup-scope.json"),
+				JSON.stringify({ scope: "project" }),
+			);
+			await writeFile(
+				join(binDir, "codex"),
+				`#!/bin/sh\nprintf 'spawned\\n' >> ${JSON.stringify(codexLog)}\n`,
+			);
+			await writeFile(
+				join(binDir, "tmux"),
+				`#!/bin/sh\ncase "$1" in set-option|display-message) printf '%s\\n' "$*" >> ${JSON.stringify(tmuxLog)} ;; esac\n`,
+			);
+			await chmod(join(binDir, "codex"), 0o755);
+			await chmod(join(binDir, "tmux"), 0o755);
 
-      const { spawnSync } = await import("node:child_process");
-      const result = spawnSync(process.execPath, [join(repoRoot, "dist", "cli", "omx.js"), "exec", "echo", "blocked"], {
-        cwd: wd,
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          HOME: join(wd, "home"),
-          PATH: `${binDir}${delimiter}/usr/bin:/bin`,
-          CODEX_HOME: "",
-          OMX_ROOT: "",
-          OMX_STATE_ROOT: "",
-          OMX_TEAM_STATE_ROOT: "",
-          OMX_SESSION_ID: "",
-          OMX_AUTO_UPDATE: "0",
-          OMX_HOOK_DERIVED_SIGNALS: "0",
-          OMX_NOTIFY_FALLBACK: "0",
-          OMX_MCP_WORKDIR_ROOTS: allowedRoot,
-          TMUX: "test-socket,1,1",
-          TMUX_PANE: "%1",
-        },
-      });
+			const { spawnSync } = await import("node:child_process");
+			const result = spawnSync(
+				process.execPath,
+				[join(repoRoot, "dist", "cli", "omx.js"), "exec", "echo", "blocked"],
+				{
+					cwd: wd,
+					encoding: "utf-8",
+					env: {
+						...process.env,
+						HOME: join(wd, "home"),
+						PATH: `${binDir}${delimiter}/usr/bin:/bin`,
+						CODEX_HOME: "",
+						OMX_ROOT: "",
+						OMX_STATE_ROOT: "",
+						OMX_TEAM_STATE_ROOT: "",
+						OMX_SESSION_ID: "",
+						OMX_AUTO_UPDATE: "0",
+						OMX_HOOK_DERIVED_SIGNALS: "0",
+						OMX_NOTIFY_FALLBACK: "0",
+						OMX_MCP_WORKDIR_ROOTS: allowedRoot,
+						TMUX: "test-socket,1,1",
+						TMUX_PANE: "%1",
+					},
+				},
+			);
 
-      assert.equal(result.status, 1, result.stderr || result.stdout);
-      assert.match(result.stderr, /session_pointer_context_failure/);
-      assert.equal(existsSync(codexLog), false);
-      assert.equal(existsSync(tmuxLog), false);
-      assert.equal(existsSync(join(wd, ".omx", "state", "sessions")), false);
-      const runtimeRoot = join(wd, ".omx", "runtime", "codex-home");
-      assert.deepEqual(existsSync(runtimeRoot) ? await fsReaddir(runtimeRoot) : [], []);
-    } finally {
-      await rm(wd, { recursive: true, force: true });
-      await rm(allowedRoot, { recursive: true, force: true });
-    }
-  });
+			assert.equal(result.status, 1, result.stderr || result.stdout);
+			assert.match(result.stderr, /session_pointer_context_failure/);
+			assert.equal(existsSync(codexLog), false);
+			assert.equal(existsSync(tmuxLog), false);
+			assert.equal(existsSync(join(wd, ".omx", "state", "sessions")), false);
+			const runtimeRoot = join(wd, ".omx", "runtime", "codex-home");
+			assert.deepEqual(
+				existsSync(runtimeRoot) ? await fsReaddir(runtimeRoot) : [],
+				[],
+			);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+			await rm(allowedRoot, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("resolveCodexLaunchPolicy", () => {
@@ -4384,56 +4813,65 @@ describe("detached tmux new-session sequencing", () => {
 		assert.doesNotMatch(envScript, /not-a-shell-name/);
 	});
 
-  it("omits only tmux-owned pane metadata from the detached session env", () => {
-    const envScript = serializeDetachedSessionParentEnv({
-      CUSTOM_LLM_API_KEY: "fake-provider-key",
-      TERM: "xterm-256color",
-      TERM_PROGRAM: "",
-      TERM_PROGRAM_VERSION: undefined,
-      TERMINFO: "/tmp/outer-terminfo",
-      TERMINFO_DIRS: "/tmp/outer-terminfo-dirs",
-      TERMCAP: "outer-termcap",
-      COLORTERM: "truecolor",
-      TMUX: "",
-      TMUX_PANE: undefined,
-      COLUMNS: "200",
-      LINES: "",
-    });
+	it("omits only tmux-owned pane metadata from the detached session env", () => {
+		const envScript = serializeDetachedSessionParentEnv({
+			CUSTOM_LLM_API_KEY: "fake-provider-key",
+			TERM: "xterm-256color",
+			TERM_PROGRAM: "",
+			TERM_PROGRAM_VERSION: undefined,
+			TERMINFO: "/tmp/outer-terminfo",
+			TERMINFO_DIRS: "/tmp/outer-terminfo-dirs",
+			TERMCAP: "outer-termcap",
+			COLORTERM: "truecolor",
+			TMUX: "",
+			TMUX_PANE: undefined,
+			COLUMNS: "200",
+			LINES: "",
+		});
 
-    assert.match(envScript, /export CUSTOM_LLM_API_KEY='fake-provider-key'/);
-    assert.match(envScript, /export COLORTERM='truecolor'/);
-    assert.match(envScript, /export TERMINFO='\/tmp\/outer-terminfo'/);
-    assert.match(envScript, /export TERMINFO_DIRS='\/tmp\/outer-terminfo-dirs'/);
-    assert.match(envScript, /export TERMCAP='outer-termcap'/);
-    assert.doesNotMatch(envScript, /^unset\b/m);
-    for (const key of [
-      "TERM",
-      "TERM_PROGRAM",
-      "TERM_PROGRAM_VERSION",
-      "TMUX",
-      "TMUX_PANE",
-      "COLUMNS",
-      "LINES",
-    ]) {
-      assert.doesNotMatch(envScript, new RegExp(`^export ${key}=`, "m"));
-    }
-  });
+		assert.match(envScript, /export CUSTOM_LLM_API_KEY='fake-provider-key'/);
+		assert.match(envScript, /export COLORTERM='truecolor'/);
+		assert.match(envScript, /export TERMINFO='\/tmp\/outer-terminfo'/);
+		assert.match(
+			envScript,
+			/export TERMINFO_DIRS='\/tmp\/outer-terminfo-dirs'/,
+		);
+		assert.match(envScript, /export TERMCAP='outer-termcap'/);
+		assert.doesNotMatch(envScript, /^unset\b/m);
+		for (const key of [
+			"TERM",
+			"TERM_PROGRAM",
+			"TERM_PROGRAM_VERSION",
+			"TMUX",
+			"TMUX_PANE",
+			"COLUMNS",
+			"LINES",
+		]) {
+			assert.doesNotMatch(envScript, new RegExp(`^export ${key}=`, "m"));
+		}
+	});
 
-  it("round-trips shell-sensitive detached parent env values without evaluating them", { skip: process.platform === "win32" }, async () => {
-    const shellSensitiveValue = "literal ' quote $HOME $(printf injected) `printf injected`; \\ slash\nsecond line";
-    const envScript = serializeDetachedSessionParentEnv({
-      CUSTOM_LLM_API_KEY: shellSensitiveValue,
-      EMPTY_PROVIDER_KEY: "",
-    });
-    const result = (await import("node:child_process")).spawnSync(
-      "/bin/sh",
-      ["-c", `${envScript}printf '%s\\n<%s>\\n' "$CUSTOM_LLM_API_KEY" "$EMPTY_PROVIDER_KEY"`],
-      { encoding: "utf-8", env: { HOME: "/should-not-expand" } },
-    );
+	it("round-trips shell-sensitive detached parent env values without evaluating them", {
+		skip: process.platform === "win32",
+	}, async () => {
+		const shellSensitiveValue =
+			"literal ' quote $HOME $(printf injected) `printf injected`; \\ slash\nsecond line";
+		const envScript = serializeDetachedSessionParentEnv({
+			CUSTOM_LLM_API_KEY: shellSensitiveValue,
+			EMPTY_PROVIDER_KEY: "",
+		});
+		const result = (await import("node:child_process")).spawnSync(
+			"/bin/sh",
+			[
+				"-c",
+				`${envScript}printf '%s\\n<%s>\\n' "$CUSTOM_LLM_API_KEY" "$EMPTY_PROVIDER_KEY"`,
+			],
+			{ encoding: "utf-8", env: { HOME: "/should-not-expand" } },
+		);
 
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, `${shellSensitiveValue}\n<>\n`);
-  });
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout, `${shellSensitiveValue}\n<>\n`);
+	});
 
 	it("creates a repo-local omx command shim for launched Codex sessions", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-runtime-command-shim-"));
@@ -6691,7 +7129,7 @@ describe("team worker launch arg inheritance helpers", () => {
 				],
 				true,
 			),
-      '"--no-alt-screen" "--dangerously-bypass-approvals-and-sandbox" "-c" "model_reasoning_effort=\\"xhigh\\"" "--model" "old-b"',
+			'"--no-alt-screen" "--dangerously-bypass-approvals-and-sandbox" "-c" "model_reasoning_effort=\\"xhigh\\"" "--model" "old-b"',
 		);
 	});
 
@@ -6706,7 +7144,7 @@ describe("team worker launch arg inheritance helpers", () => {
 				],
 				false,
 			),
-      '"--no-alt-screen"',
+			'"--no-alt-screen"',
 		);
 	});
 
@@ -6717,7 +7155,7 @@ describe("team worker launch arg inheritance helpers", () => {
 				["--model=gpt-5.6-terra"],
 				true,
 			),
-      '"--no-alt-screen" "--model" "gpt-5.6-terra"',
+			'"--no-alt-screen" "--model" "gpt-5.6-terra"',
 		);
 	});
 
@@ -6729,7 +7167,7 @@ describe("team worker launch arg inheritance helpers", () => {
 				true,
 				DEFAULT_FRONTIER_MODEL,
 			),
-      `"--no-alt-screen" "--dangerously-bypass-approvals-and-sandbox" "--model" "${DEFAULT_FRONTIER_MODEL}"`,
+			`"--no-alt-screen" "--dangerously-bypass-approvals-and-sandbox" "--model" "${DEFAULT_FRONTIER_MODEL}"`,
 		);
 	});
 
@@ -6741,7 +7179,7 @@ describe("team worker launch arg inheritance helpers", () => {
 				true,
 				"fallback-model",
 			),
-      '"--model" "env-model-final"',
+			'"--model" "env-model-final"',
 		);
 	});
 
@@ -6753,67 +7191,73 @@ describe("team worker launch arg inheritance helpers", () => {
 				true,
 				"fallback-model",
 			),
-      '"--no-alt-screen" "--model" "inherited-model"',
-
-    );
-  });
+			'"--no-alt-screen" "--model" "inherited-model"',
+		);
+	});
 });
 
 describe("team worker launch argument environment serialization", () => {
-  it("round-trips quoted, empty, and literal args while direct policy suppresses inherited bypass", () => {
-    const raw = resolveTeamWorkerLaunchArgsEnv(
-      '"" "two words" $VAR --sandbox=workspace-write',
-      [
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--model", "leader-model",
-      ],
-      true,
-    );
-    assert.ok(raw);
-    assert.deepEqual(splitWorkerLaunchArgs(raw ?? undefined), [
-      '',
-      'two words',
-      '$VAR',
-      '--sandbox', 'workspace-write',
-      '--model', 'leader-model',
-    ]);
-  });
+	it("round-trips quoted, empty, and literal args while direct policy suppresses inherited bypass", () => {
+		const raw = resolveTeamWorkerLaunchArgsEnv(
+			'"" "two words" $VAR --sandbox=workspace-write',
+			["--dangerously-bypass-approvals-and-sandbox", "--model", "leader-model"],
+			true,
+		);
+		assert.ok(raw);
+		assert.deepEqual(splitWorkerLaunchArgs(raw ?? undefined), [
+			"",
+			"two words",
+			"$VAR",
+			"--sandbox",
+			"workspace-write",
+			"--model",
+			"leader-model",
+		]);
+	});
 
-  it("round-trips Windows paths, including terminal backslashes, through the environment", () => {
-    const path = "C:\\Users\\alice\\file.txt";
-    const terminalPath = "C:\\Users\\alice\\";
-    const raw = resolveTeamWorkerLaunchArgsEnv(
-      [
-        "--add-dir", path,
-        "--add-dir", `"${path}"`,
-        "--add-dir", `'${terminalPath}'`,
-      ].join(" "),
-      [],
-      false,
-    );
+	it("round-trips Windows paths, including terminal backslashes, through the environment", () => {
+		const path = "C:\\Users\\alice\\file.txt";
+		const terminalPath = "C:\\Users\\alice\\";
+		const raw = resolveTeamWorkerLaunchArgsEnv(
+			[
+				"--add-dir",
+				path,
+				"--add-dir",
+				`"${path}"`,
+				"--add-dir",
+				`'${terminalPath}'`,
+			].join(" "),
+			[],
+			false,
+		);
 
-    assert.deepEqual(splitWorkerLaunchArgs(raw ?? undefined), [
-      "--add-dir", path,
-      "--add-dir", path,
-      "--add-dir", terminalPath,
-    ]);
-  });
+		assert.deepEqual(splitWorkerLaunchArgs(raw ?? undefined), [
+			"--add-dir",
+			path,
+			"--add-dir",
+			path,
+			"--add-dir",
+			terminalPath,
+		]);
+	});
 
-  it("honors the inheritance gate and rejects an explicitly mixed source before transport", () => {
-    const noInheritance = resolveTeamWorkerLaunchArgsEnv(
-      '--ask-for-approval=on-request',
-      ["--dangerously-bypass-approvals-and-sandbox", "--model", "leader-model"],
-      false,
-    );
-    assert.deepEqual(splitWorkerLaunchArgs(noInheritance ?? undefined), [
-      '--ask-for-approval', 'on-request',
-    ]);
-    assert.throws(
-      () => resolveTeamWorkerLaunchArgsEnv(
-        '--dangerously-bypass-approvals-and-sandbox --sandbox workspace-write',
-        [],
-      ),
-      /Invalid OMX_TEAM_WORKER_LAUNCH_ARGS: bypass cannot be combined with direct approval or sandbox policy/,
+	it("honors the inheritance gate and rejects an explicitly mixed source before transport", () => {
+		const noInheritance = resolveTeamWorkerLaunchArgsEnv(
+			"--ask-for-approval=on-request",
+			["--dangerously-bypass-approvals-and-sandbox", "--model", "leader-model"],
+			false,
+		);
+		assert.deepEqual(splitWorkerLaunchArgs(noInheritance ?? undefined), [
+			"--ask-for-approval",
+			"on-request",
+		]);
+		assert.throws(
+			() =>
+				resolveTeamWorkerLaunchArgsEnv(
+					"--dangerously-bypass-approvals-and-sandbox --sandbox workspace-write",
+					[],
+				),
+			/Invalid OMX_TEAM_WORKER_LAUNCH_ARGS: bypass cannot be combined with direct approval or sandbox policy/,
 		);
 	});
 });
@@ -6848,6 +7292,36 @@ describe("injectModelInstructionsBypassArgs", () => {
 			"gpt-5",
 			"-c",
 			'model_instructions_file="/tmp/my-project/AGENTS.md"',
+		]);
+	});
+
+	it("inserts model instructions before the end-of-options marker", () => {
+		const args = injectModelInstructionsBypassArgs(
+			"/tmp/my-project",
+			["--", "--spark", "literal"],
+			{},
+		);
+		assert.deepEqual(args, [
+			"-c",
+			'model_instructions_file="/tmp/my-project/AGENTS.md"',
+			"--",
+			"--spark",
+			"literal",
+		]);
+	});
+
+	it("does not treat a post-marker model instructions token as an OMX override", () => {
+		const args = injectModelInstructionsBypassArgs(
+			"/tmp/my-project",
+			["--", "-c", 'model_instructions_file="/tmp/literal.md"'],
+			{},
+		);
+		assert.deepEqual(args, [
+			"-c",
+			'model_instructions_file="/tmp/my-project/AGENTS.md"',
+			"--",
+			"-c",
+			'model_instructions_file="/tmp/literal.md"',
 		]);
 	});
 

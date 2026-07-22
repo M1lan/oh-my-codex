@@ -32,11 +32,13 @@ import {
  *
  * @param root - Project root directory
  * @param config - Wiki configuration (uses defaults if not provided)
+ * @param options - Read-only callers can suppress the audit log side effect
  * @returns Lint report with issues and stats
  */
 export function lintWiki(
 	root: string,
 	config: WikiConfig = DEFAULT_WIKI_CONFIG,
+	options: { logLint?: boolean } = {},
 ): WikiLintReport {
 	const legacyFallbackActive = isLegacyWikiFallbackActive(root);
 	const pages = readAllPages(root);
@@ -135,7 +137,7 @@ export function lintWiki(
 
 	// Log the lint operation. Suppress logging while serving legacy fallback so
 	// read-only lint does not create source-visible canonical wiki files.
-	if (!legacyFallbackActive) {
+	if (options.logLint !== false && !legacyFallbackActive) {
 		appendLog(root, {
 			timestamp: new Date().toISOString(),
 			operation: "lint",

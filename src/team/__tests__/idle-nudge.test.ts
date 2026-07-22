@@ -18,6 +18,8 @@ import {
 	isPaneIdle,
 } from "../idle-nudge.js";
 
+const WORKER_TARGET = "";
+
 function buildFakeTmux(tmuxLogPath: string): string {
 	return `#!/usr/bin/env bash
 set -eu
@@ -63,6 +65,11 @@ if [[ "\$cmd" == "capture-pane" ]]; then
   exit 0
 fi
 
+if [[ "$cmd" == "show-option" ]]; then
+  printf '%s\n' "\${OMX_TEAM_OWNER:-omx-team-a-owner}"
+  exit 0
+fi
+
 if [[ "\$cmd" == "send-keys" ]]; then
   if [[ "\${OMX_FAIL_SEND_KEYS:-0}" == "1" ]]; then
     exit 1
@@ -71,7 +78,11 @@ if [[ "\$cmd" == "send-keys" ]]; then
 fi
 
 if [[ "\$cmd" == "list-panes" ]]; then
-  printf '0 12345\\n'
+  if [[ "$#" -eq 3 && "$1" == "-a" && "$2" == "-F" && "$3" == "#{pane_id}\t#{pane_dead}\t#{pane_pid}" ]]; then
+    printf '%%2\t0\t12345\n'
+  else
+    printf '0 12345\\n'
+  fi
   exit 0
 fi
 
@@ -174,16 +185,24 @@ describe("idle-nudge", () => {
 				});
 
 				const first = await tracker.checkAndNudge(
-					["%2"],
+					[WORKER_TARGET],
 					undefined,
 					"omx-team-a",
 				);
-				assert.deepEqual(first, ["%2"]);
+				assert.deepEqual(first, [WORKER_TARGET]);
 				const firstLog = await readFile(tmuxLogPath, "utf-8");
+				const firstCommands = firstLog.trim().split("\n").filter(Boolean);
+				const nudgeEffectIndex = firstCommands.findIndex((command) =>
+					command.startsWith("send-keys -t omx-team-a:0 "),
+				);
+				assert.ok(
+					nudgeEffectIndex >= 0,
+					"expected nudge send-keys target effect",
+				);
 
 				setNow(11_000); // < 5000ms scan interval
 				const second = await tracker.checkAndNudge(
-					["%2"],
+					[WORKER_TARGET],
 					undefined,
 					"omx-team-a",
 				);
@@ -221,16 +240,16 @@ describe("idle-nudge", () => {
 				});
 
 				const first = await tracker.checkAndNudge(
-					["%2"],
+					[WORKER_TARGET],
 					undefined,
 					"omx-team-a",
 				);
-				assert.deepEqual(first, ["%2"]);
+				assert.deepEqual(first, [WORKER_TARGET]);
 				const firstLog = await readFile(tmuxLogPath, "utf-8");
 
 				setNow(16_000); // > 5000ms scan interval
 				const second = await tracker.checkAndNudge(
-					["%2"],
+					[WORKER_TARGET],
 					undefined,
 					"omx-team-a",
 				);
@@ -240,7 +259,7 @@ describe("idle-nudge", () => {
 				assert.equal(secondLog, firstLog);
 				assert.equal(tracker.totalNudges, 1);
 				assert.deepEqual(tracker.getSummary(), {
-					"%2": {
+					[WORKER_TARGET]: {
 						nudgeCount: 1,
 						lastNudgeAt: 10_000,
 					},
@@ -260,24 +279,44 @@ describe("idle-nudge", () => {
 					message: "nudge",
 				});
 
-				const r1 = await tracker.checkAndNudge(["%2"], undefined, "omx-team-a");
+				const r1 = await tracker.checkAndNudge(
+					[WORKER_TARGET],
+					undefined,
+					"omx-team-a",
+				);
 				assert.deepEqual(r1, []);
 
 				setNow(16_000);
-				const r2 = await tracker.checkAndNudge(["%2"], undefined, "omx-team-a");
+				const r2 = await tracker.checkAndNudge(
+					[WORKER_TARGET],
+					undefined,
+					"omx-team-a",
+				);
 				assert.deepEqual(r2, []);
 
 				setNow(22_000);
-				const r3 = await tracker.checkAndNudge(["%2"], undefined, "omx-team-a");
+				const r3 = await tracker.checkAndNudge(
+					[WORKER_TARGET],
+					undefined,
+					"omx-team-a",
+				);
 				assert.deepEqual(r3, []);
 
 				setNow(28_000);
-				const r4 = await tracker.checkAndNudge(["%2"], undefined, "omx-team-a");
+				const r4 = await tracker.checkAndNudge(
+					[WORKER_TARGET],
+					undefined,
+					"omx-team-a",
+				);
 				assert.deepEqual(r4, []);
 
 				setNow(39_000);
-				const r5 = await tracker.checkAndNudge(["%2"], undefined, "omx-team-a");
-				assert.deepEqual(r5, ["%2"]);
+				const r5 = await tracker.checkAndNudge(
+					[WORKER_TARGET],
+					undefined,
+					"omx-team-a",
+				);
+				assert.deepEqual(r5, [WORKER_TARGET]);
 				assert.equal(tracker.totalNudges, 1);
 			});
 		});
@@ -294,7 +333,7 @@ describe("idle-nudge", () => {
 					message: "nudge",
 				});
 				const nudged = await tracker.checkAndNudge(
-					["%2"],
+					[WORKER_TARGET],
 					undefined,
 					"omx-team-a",
 				);
@@ -313,6 +352,49 @@ describe("idle-nudge", () => {
 
 			const idle = await isPaneIdle("%2");
 			assert.equal(idle, false);
+		});
+	});
+
+	it("fails closed for replacement, owner drift, and HUD nudge targets", async () => {
+		await withFakeTmux(async ({ tmuxLogPath }) => {
+			await withMockedNow(10_000, async () => {
+				const targets = [
+					{
+						paneId: "%2",
+						workerIndex: 1,
+						panePid: 999,
+						teamOwnerId: "omx-team-a-owner",
+					},
+					{
+						paneId: "%2",
+						workerIndex: 1,
+						panePid: 12345,
+						teamOwnerId: "foreign-owner",
+					},
+					{
+						paneId: "%2",
+						workerIndex: 1,
+						panePid: 12345,
+						teamOwnerId: "omx-team-a-owner",
+						hudPaneId: "%2",
+					},
+				];
+				for (const target of targets) {
+					const tracker = new NudgeTracker({
+						delayMs: 0,
+						maxCount: 1,
+						message: "nudge",
+					});
+					assert.deepEqual(
+						await tracker.checkAndNudge([target], undefined, "omx-team-a"),
+						[],
+					);
+				}
+				const log = existsSync(tmuxLogPath)
+					? await readFile(tmuxLogPath, "utf-8")
+					: "";
+				assert.doesNotMatch(log, /send-keys/);
+			});
 		});
 	});
 });

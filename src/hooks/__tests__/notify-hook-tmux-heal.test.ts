@@ -465,6 +465,7 @@ set -eu
 cmd="$1"
 shift || true
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   target=""
   while (($#)); do
     case "$1" in
@@ -520,6 +521,11 @@ if [[ "$cmd" == "display-message" ]]; then
   echo "bad display target: $target / $format" >&2
   exit 1
 fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
+fi
+
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
   exit 0
@@ -630,6 +636,7 @@ if [[ "$cmd" == "list-sessions" ]]; then
   exit 0
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   target=""
   while (($#)); do
     case "$1" in
@@ -681,6 +688,11 @@ if [[ "$cmd" == "display-message" ]]; then
   if [[ "$format" == "#S" && "$target" == "%42" ]]; then echo "${wrongSessionName}"; exit 0; fi
   exit 1
 fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
+fi
+
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
   exit 0
@@ -907,6 +919,7 @@ set -eu
 cmd="$1"
 shift || true
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   target=""
   while (($#)); do
     case "$1" in
@@ -1156,6 +1169,7 @@ set -eu
 cmd="$1"
 shift || true
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   all=false
   target=""
   while (($#)); do
@@ -1199,9 +1213,22 @@ if [[ "$cmd" == "display-message" ]]; then
     echo "${cwd}"
     exit 0
   fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
   echo "bad display target: $target / $format" >&2
   exit 1
 fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
+fi
+
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
   exit 0
@@ -1306,8 +1333,9 @@ if [[ "$cmd" == "display-message" ]]; then
     esac
   done
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
-    echo "node"
+    echo "codex"
     exit 0
+
   fi
   if [[ "$format" == "#{pane_id}" && "$target" == "%77" ]]; then
     echo "%77"
@@ -1340,6 +1368,7 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 1
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   target=""
   while (($#)); do
     case "$1" in
@@ -1353,6 +1382,11 @@ if [[ "$cmd" == "list-panes" ]]; then
   fi
   exit 1
 fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
+fi
+
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
   exit 0
@@ -1474,6 +1508,15 @@ if [[ "$cmd" == "display-message" ]]; then
     echo "${cwd}"
     exit 0
   fi
+  if [[ "$format" == "#{pane_current_command}" && "$target" == "%99" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
+    echo "codex"
+    exit 0
+  fi
+
   if [[ "$format" == "#S" && "$target" == "%99" ]]; then
     echo "${managedSessionName}"
     exit 0
@@ -1482,9 +1525,15 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 1
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   echo "can't find session" >&2
   exit 1
 fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
+fi
+
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
   exit 0
@@ -1933,6 +1982,7 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 1
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   echo "can't find session" >&2
   exit 1
 fi
@@ -2062,6 +2112,10 @@ if [[ "$cmd" == "display-message" ]]; then
     echo "codex"
     exit 0
   fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%99" ]]; then
+    echo "codex"
+    exit 0
+  fi
   if [[ "$format" == "#{pane_in_mode}" && "$target" == "%99" ]]; then
     echo "0"
     exit 0
@@ -2070,8 +2124,13 @@ if [[ "$cmd" == "display-message" ]]; then
   exit 1
 fi
 if [[ "$cmd" == "list-panes" ]]; then
+  if [[ " $* " == *" -a "* ]]; then printf '%s\t%s\t%s\n' '%42' '0' '4242' '%77' '0' '4277' '%99' '0' '4299'; exit 0; fi
   echo "can't find session" >&2
   exit 1
+fi
+if [[ "$cmd" == "capture-pane" ]]; then
+  printf "› ready\n"
+  exit 0
 fi
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${cwd}/tmux-buffer"
@@ -2173,6 +2232,10 @@ exit 1
 set -eu
 cmd="$1"
 shift || true
+if [[ "$cmd" == "list-panes" && " $* " == *" -a "* ]]; then
+  printf '%s\t%s\t%s\n' '%42' '0' '4242'
+  exit 0
+fi
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -2188,6 +2251,10 @@ if [[ "$cmd" == "display-message" ]]; then
     exit 0
   fi
   if [[ "$format" == "#{pane_current_command}" && "$target" == "%42" ]]; then
+    echo "codex"
+    exit 0
+  fi
+  if [[ "$format" == "#{pane_start_command}" && "$target" == "%42" ]]; then
     echo "codex"
     exit 0
   fi

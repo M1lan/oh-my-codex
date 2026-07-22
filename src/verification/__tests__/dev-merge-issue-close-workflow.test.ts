@@ -135,6 +135,10 @@ describe("dev merge issue close workflow", () => {
 		assert.match(comment, /A hot-fix build is available now\./);
 		assert.match(comment, /`omx update --dev`/);
 		assert.match(comment, /let us know whether it resolves the issue/);
+		assert.match(
+			comment,
+			/\n\n—\n\*\[repo owner's gaebal-gajae \(clawdbot\) 🦞\]\*$/,
+		);
 	});
 
 	it("provides a matching PR summary comment after linked issues close", () => {
@@ -146,6 +150,10 @@ describe("dev merge issue close workflow", () => {
 		assert.match(comment, /A hot-fix build is available now\./);
 		assert.match(comment, /Issue creators can try it with `omx update --dev`/);
 		assert.match(comment, /let us know whether it resolves the issue/);
+		assert.match(
+			comment,
+			/\n\n—\n\*\[repo owner's gaebal-gajae \(clawdbot\) 🦞\]\*$/,
+		);
 	});
 	it("posts the PR follow-up comment on the success path", async () => {
 		const calls: Array<Record<string, unknown>> = [];
@@ -179,6 +187,10 @@ describe("dev merge issue close workflow", () => {
 		assert.match(
 			String(calls[0].body),
 			/Closed explicitly linked issue after this PR was merged into `dev`: #2824\./,
+		);
+		assert.match(
+			String(calls[0].body),
+			/\n\n—\n\*\[repo owner's gaebal-gajae \(clawdbot\) 🦞\]\*$/,
 		);
 		assert.deepEqual(warnings, []);
 	});

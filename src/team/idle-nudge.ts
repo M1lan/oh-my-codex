@@ -15,6 +15,7 @@ import { execFile } from "child_process";
 import { buildCapturePaneArgv } from "../scripts/tmux-hook-engine.js";
 import { resolveTmuxBinaryForPlatform } from "../utils/platform-command.js";
 import {
+	captureWorkerPane,
 	paneLooksReady,
 	paneHasActiveTask,
 	sendToWorker,
@@ -76,14 +77,73 @@ export async function isPaneIdle(paneId: string): Promise<boolean> {
  * Thin wrapper to call OMX's sendToWorker by pane ID only (for NudgeTracker).
  * workerIndex=0 is a dummy — paneTarget() prefers workerPaneId when provided.
  */
+export interface TeamNudgePaneTarget {
+	paneId: string;
+	workerIndex: number;
+	panePid: number;
+	teamOwnerId: string;
+	hudPaneId?: string;
+}
+
 async function sendToWorkerByPaneId(
 	sessionName: string,
-	paneId: string,
+	target: TeamNudgePaneTarget | null,
 	message: string,
 ): Promise<boolean> {
 	try {
-		await sendToWorker(sessionName, 0, message, paneId);
+		if (target) {
+			await sendToWorker(
+				sessionName,
+				target.workerIndex,
+				message,
+				target.paneId,
+				undefined,
+				target.panePid,
+				target.teamOwnerId,
+				target.hudPaneId,
+			);
+		} else {
+			// Blank pane IDs retain legacy session-target compatibility and are not
+			// explicit Team pane effects.
+			await sendToWorker(sessionName, 0, message);
+		}
 		return true;
+	} catch {
+		return false;
+	}
+}
+
+function isAuthorizedTeamNudgeTarget(
+	value: string | TeamNudgePaneTarget,
+): value is TeamNudgePaneTarget {
+	return (
+		typeof value !== "string" &&
+		/^%[0-9]+$/.test(value.paneId) &&
+		Number.isSafeInteger(value.workerIndex) &&
+		value.workerIndex >= 0 &&
+		Number.isSafeInteger(value.panePid) &&
+		value.panePid > 0 &&
+		value.teamOwnerId.trim() !== "" &&
+		value.paneId !== value.hudPaneId?.trim()
+	);
+}
+
+async function isAuthorizedTeamPaneIdle(
+	sessionName: string,
+	target: TeamNudgePaneTarget,
+): Promise<boolean> {
+	try {
+		const capture = await captureWorkerPane(
+			sessionName,
+			target.workerIndex,
+			target.paneId,
+			target.panePid,
+			target.teamOwnerId,
+			target.hudPaneId,
+		);
+		return (
+			capture !== "" && paneLooksReady(capture) && !paneHasActiveTask(capture)
+		);
 	} catch {
 		return false;
 	}
@@ -119,7 +179,7 @@ export class NudgeTracker {
 	 * @param sessionName  - Tmux session name (passed to sendToWorker)
 	 */
 	async checkAndNudge(
-		paneIds: string[],
+		paneTargets: Array<string | TeamNudgePaneTarget>,
 		leaderPaneId: string | undefined,
 		sessionName: string,
 	): Promise<string[]> {
@@ -131,7 +191,12 @@ export class NudgeTracker {
 
 		const nudged: string[] = [];
 
-		for (const paneId of paneIds) {
+		for (const paneTarget of paneTargets) {
+			const paneId =
+				typeof paneTarget === "string" ? paneTarget : paneTarget.paneId;
+			// Explicit Team panes require their persisted PID, canonical owner, and HUD exclusion.
+			if (paneId.startsWith("%") && !isAuthorizedTeamNudgeTarget(paneTarget))
+				continue;
 			// Never nudge the leader pane
 			if (paneId === leaderPaneId) continue;
 
@@ -144,7 +209,9 @@ export class NudgeTracker {
 			// Max nudges reached for this pane — skip
 			if (state.nudgeCount >= this.config.maxCount) continue;
 
-			const idle = await isPaneIdle(paneId);
+			const idle = isAuthorizedTeamNudgeTarget(paneTarget)
+				? await isAuthorizedTeamPaneIdle(sessionName, paneTarget)
+				: await isPaneIdle(paneId);
 
 			if (!idle) {
 				// Pane is active — reset idle tracking
@@ -161,11 +228,13 @@ export class NudgeTracker {
 			if (now - state.firstIdleAt < this.config.delayMs) continue;
 
 			// Send the nudge
-			const ok = await sendToWorkerByPaneId(
-				sessionName,
-				paneId,
-				this.config.message,
-			);
+			const ok = isAuthorizedTeamNudgeTarget(paneTarget)
+				? await sendToWorkerByPaneId(
+						sessionName,
+						paneTarget,
+						this.config.message,
+					)
+				: await sendToWorkerByPaneId(sessionName, null, this.config.message);
 			if (ok) {
 				state.nudgeCount++;
 				state.lastNudgeAt = now;

@@ -701,11 +701,13 @@ describe("Pipeline Orchestrator", () => {
 						ralplan_architect_review: {
 							agent_role: "architect",
 							verdict: "approve",
+							sequence_index: 1,
 							summary: "architect ok",
 						},
 						ralplan_critic_review: {
 							agent_role: "critic",
 							verdict: "approve",
+							sequence_index: 2,
 							summary: "critic ok",
 						},
 					},
@@ -734,11 +736,13 @@ describe("Pipeline Orchestrator", () => {
 				ralplan_architect_review: {
 					agent_role: "architect",
 					verdict: "approve",
+					sequence_index: 1,
 					summary: "architect ok",
 				},
 				ralplan_critic_review: {
 					agent_role: "critic",
 					verdict: "approve",
+					sequence_index: 2,
 					summary: "critic ok",
 				},
 				source: join(tempDir, ".omx", "state", "ralplan-state.json"),

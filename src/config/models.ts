@@ -38,6 +38,7 @@ export interface OmxConfigEnv {
 	[key: string]: string | undefined;
 }
 
+/** @deprecated Use the surface-specific per-agent or root reasoning exports instead. */
 export const CANONICAL_REASONING_EFFORTS = [
 	"low",
 	"medium",
@@ -47,12 +48,35 @@ export const CANONICAL_REASONING_EFFORTS = [
 export type ConfiguredAgentReasoningEffort =
 	(typeof CANONICAL_REASONING_EFFORTS)[number];
 
+/** @deprecated Use ROOT_UNSUPPORTED_REASONING_EFFORTS for root diagnostics. */
 export const AMBIGUOUS_UNSUPPORTED_REASONING_EFFORTS = [
 	"max",
 	"ultra",
 ] as const;
 export type AmbiguousUnsupportedReasoningEffort =
 	(typeof AMBIGUOUS_UNSUPPORTED_REASONING_EFFORTS)[number];
+
+export const PER_AGENT_REASONING_EFFORTS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+export type PerAgentReasoningEffort =
+	(typeof PER_AGENT_REASONING_EFFORTS)[number];
+
+export const ROOT_REASONING_EFFORTS = [
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+] as const;
+export type RootReasoningEffort = (typeof ROOT_REASONING_EFFORTS)[number];
+
+export const ROOT_UNSUPPORTED_REASONING_EFFORTS = ["max", "ultra"] as const;
+export type RootUnsupportedReasoningEffort =
+	(typeof ROOT_UNSUPPORTED_REASONING_EFFORTS)[number];
 
 interface OmxConfigFile {
 	agentReasoning?: Record<string, unknown>;
@@ -147,15 +171,32 @@ export function isAmbiguousUnsupportedReasoningEffort(
 	).includes(value.toLowerCase());
 }
 
+export function isUnsupportedRootReasoningEffort(value: string): boolean {
+	return (ROOT_UNSUPPORTED_REASONING_EFFORTS as readonly string[]).includes(
+		value.toLowerCase(),
+	);
+}
+
+export function normalizeUnsupportedRootReasoningEffort(
+	value: string,
+): RootUnsupportedReasoningEffort | undefined {
+	const normalized = value.trim().toLowerCase();
+	return (ROOT_UNSUPPORTED_REASONING_EFFORTS as readonly string[]).includes(
+		normalized,
+	)
+		? (normalized as RootUnsupportedReasoningEffort)
+		: undefined;
+}
+
 function normalizeAgentReasoningEffort(
 	value: unknown,
-): ConfiguredAgentReasoningEffort | undefined {
+): PerAgentReasoningEffort | undefined {
 	const normalized = normalizeConfiguredValue(value)?.toLowerCase();
 	if (
 		normalized &&
-		(CANONICAL_REASONING_EFFORTS as readonly string[]).includes(normalized)
+		(PER_AGENT_REASONING_EFFORTS as readonly string[]).includes(normalized)
 	) {
-		return normalized as ConfiguredAgentReasoningEffort;
+		return normalized as PerAgentReasoningEffort;
 	}
 	return undefined;
 }
@@ -225,12 +266,12 @@ export function readConfiguredEnvOverrides(
 
 export function readAgentReasoningOverrides(
 	codexHomeOverride?: string,
-): Record<string, ConfiguredAgentReasoningEffort> {
+): Record<string, PerAgentReasoningEffort> {
 	const config = readOmxConfigFile(codexHomeOverride);
 	const raw = config?.agentReasoning;
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
 
-	const resolved: Record<string, ConfiguredAgentReasoningEffort> = {};
+	const resolved: Record<string, PerAgentReasoningEffort> = {};
 	for (const [key, value] of Object.entries(raw)) {
 		const role = normalizeAgentName(key);
 		const effort = normalizeAgentReasoningEffort(value);
@@ -242,7 +283,7 @@ export function readAgentReasoningOverrides(
 export function getAgentReasoningOverride(
 	agentName: string | undefined,
 	codexHomeOverride?: string,
-): ConfiguredAgentReasoningEffort | undefined {
+): PerAgentReasoningEffort | undefined {
 	const normalized = normalizeAgentName(agentName);
 	if (!normalized) return undefined;
 	return readAgentReasoningOverrides(codexHomeOverride)[normalized];

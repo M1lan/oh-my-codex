@@ -76,7 +76,11 @@ describe("Windows popup loop contracts", () => {
 		);
 		assert.match(
 			fallbackWatcherSource,
-			/spawnPlatformCommandSync\('tmux', \['send-keys'/,
+			/spawnPlatformCommandSync\('tmux', args/,
+		);
+		assert.match(
+			fallbackWatcherSource,
+			/sendKeys\(\['send-keys', '-t', binding\.paneId/,
 		);
 		assert.doesNotMatch(fallbackWatcherSource, /spawnSync\('tmux'/);
 	});
