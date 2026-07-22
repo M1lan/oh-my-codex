@@ -42,6 +42,10 @@ team-rebase:
 team-identity:
     {{ pnpm_cmd }} run test:team:worker-runtime-identity
 
+# OMC interop contract: caveman env hook + interop context notice (needs dist/)
+interop:
+    node dist/scripts/run-test-files.js dist/scripts/notify-hook/__tests__/interop-caveman.test.js dist/scripts/notify-hook/__tests__/interop-context.test.js
+
 # Reply-listener LIVE test -- SENDS REAL MESSAGES to a live session
 reply-live:
     {{ pnpm_cmd }} run test:reply-listener:live
