@@ -79,6 +79,25 @@ describe("omx setup refresh summary and dry-run behavior", () => {
 		}
 	}
 
+	it("accepts compiler-normalized quotes in the Team CLI API marker", async () => {
+		const wd = await mkdtemp(join(tmpdir(), "omx-setup-team-interop-"));
+		try {
+			const output = await runSetupWithCapturedLogs(wd, {
+				scope: "project",
+				installMode: "legacy",
+				skipNativeAgentRefresh: true,
+			});
+
+			assert.match(
+				output,
+				/omx team api command detected \(CLI-first interop ready\)/,
+			);
+			assert.doesNotMatch(output, /team CLI interop markers missing/);
+		} finally {
+			await rm(wd, { recursive: true, force: true });
+		}
+	});
+
 	it("prints per-category summary and verbose changed-file detail", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-refresh-"));
 		try {

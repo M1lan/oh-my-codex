@@ -4685,7 +4685,7 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 			console.log("  omx team api command detected (CLI-first interop ready)");
 		} else {
 			console.log(`  WARNING: ${teamToolsCheck.message}`);
-			console.log("  Run `npm run build` and then re-run `omx setup`.");
+			console.log("  Run `pnpm run build` and then re-run `omx setup`.");
 		}
 	} else {
 		console.log("  Skipped because Team mode is disabled for this setup.");
@@ -6355,8 +6355,10 @@ async function verifyTeamCliApiInterop(
 
 	try {
 		const content = await readFile(teamCliPath, "utf-8");
+		const normalizedContent = content.replaceAll('"', "'");
 		const missing = REQUIRED_TEAM_CLI_API_MARKERS.filter(
-			(marker) => !content.includes(marker),
+			(marker) =>
+				!content.includes(marker) && !normalizedContent.includes(marker),
 		);
 		if (missing.length > 0) {
 			return {
