@@ -91,6 +91,8 @@ export interface HookPluginOmxSessionState {
   platform?: NodeJS.Platform;
   pid_start_ticks?: number;
   pid_cmdline?: string;
+  identity_schema_version?: 2;
+  process_identity?: { platform: NodeJS.Platform; birth: string; cmdline_hash?: string };
   [key: string]: unknown;
 }
 
@@ -203,6 +205,7 @@ export type HookDispatchSummary = HookDispatchResult;
 
 export interface HookDispatchOptions {
   cwd?: string;
+  stateRoot?: string;
   event?: HookEventEnvelope;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;

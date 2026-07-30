@@ -24,6 +24,7 @@ import {
   type TeamSession,
   waitForWorkerReady,
   waitForWorkerReadyAsync,
+  waitForWorkerReadyDetailedAsync,
   dismissTrustPromptIfPresent,
   evaluateStartupDirectTriggerSafety,
   sendToWorker,
@@ -97,7 +98,11 @@ import {
   type TeamPolicy,
   type TeamDispatchRequest,
 } from './team-ops.js';
-import { commitTeamMembershipTaskTransaction, writeTeamManifestV2 as writeTeamManifestV2State } from './state.js';
+import {
+  commitTeamMembershipTaskTransaction,
+  teamContinuationRequiredDiagnostic,
+  writeTeamManifestV2 as writeTeamManifestV2State,
+} from './state.js';
 import {
   queueInboxInstruction,
   queueDirectMailboxMessage,
@@ -176,6 +181,13 @@ import {
   type TeamCommitHygieneArtifactPaths,
   type TeamOperationalCommitEntry,
 } from './commit-hygiene.js';
+import {
+  classifyRecordedIdentity,
+  defaultProcessInspectionProvider,
+  type IdentityClassification,
+  type ProcessIdentity as SharedProcessIdentity,
+} from '../hooks/session.js';
+
 import {
   assertCleanLeaderWorkspaceForWorkerWorktrees,
   ensureWorktree,
@@ -351,6 +363,7 @@ async function mutateShutdownConfig(
           hud_pane_pid: current.hud_pane_pid,
           resize_hook_name: current.resize_hook_name,
           resize_hook_target: current.resize_hook_target,
+          startup_cleanup_panes: current.startup_cleanup_panes,
         }, null, 2),
       },
     });
@@ -358,6 +371,74 @@ async function mutateShutdownConfig(
     if (!committed) throw new Error(`shutdown_config_missing_after_commit:${current.name}`);
     return committed;
   });
+}
+
+export async function reconcileStartupCleanupPanes(
+  config: TeamConfig,
+  cwd: string,
+): Promise<TeamConfig> {
+  const cleanupPanes = config.startup_cleanup_panes ?? [];
+  if (cleanupPanes.length === 0) return config;
+
+  const teamPaneOwnerId = config.tmux_pane_owner_id?.trim() ?? '';
+  if (!teamPaneOwnerId) throw new Error('startup_cleanup_pane_owner_unavailable:missing_team_owner_id');
+
+  const resolvedPaneIds = new Set<string>();
+  const expectedPanePids: Record<string, number> = {};
+  for (const cleanupPane of cleanupPanes) {
+    if (cleanupPane.pane_id === config.leader_pane_id || cleanupPane.pane_id === config.hud_pane_id) {
+      throw new Error(`startup_cleanup_pane_target_invalid:${cleanupPane.pane_id}`);
+    }
+    const proof = readExactPaneProofSync(cleanupPane.pane_id);
+    if (proof.status === 'gone') {
+      resolvedPaneIds.add(cleanupPane.pane_id);
+      continue;
+    }
+    if (proof.status === 'unavailable') {
+      assertPaneTeardownProofsAvailable('startup_cleanup', [proof]);
+      continue;
+    }
+    if (cleanupPane.pid === null) {
+      throw new Error(`startup_cleanup_pane_pid_missing:${cleanupPane.pane_id}`);
+    }
+    if (proof.pid !== cleanupPane.pid) {
+      throw new Error(`startup_cleanup_pane_identity_changed:${cleanupPane.pane_id}`);
+    }
+    const owner = readPaneTeamOwnerTagResult(cleanupPane.pane_id);
+    if (owner.status === 'error') {
+      throw new Error(`startup_cleanup_pane_owner_unavailable:${cleanupPane.pane_id}:${owner.error}`);
+    }
+    if (owner.status !== 'value' || owner.value !== teamPaneOwnerId) {
+      throw new Error(`startup_cleanup_pane_owner_changed:${cleanupPane.pane_id}`);
+    }
+    expectedPanePids[cleanupPane.pane_id] = cleanupPane.pid;
+  }
+
+  const livePaneIds = Object.keys(expectedPanePids);
+  if (livePaneIds.length > 0) {
+    const teardown = await teardownWorkerPanes(livePaneIds, {
+      leaderPaneId: config.leader_pane_id,
+      hudPaneId: config.hud_pane_id,
+      expectedPanePids,
+      authorizePaneKill: (paneId, proof) => {
+        if (expectedPanePids[paneId] !== proof.pid) return false;
+        const owner = readPaneTeamOwnerTagResult(paneId);
+        return owner.status === 'value' && owner.value === teamPaneOwnerId;
+      },
+    });
+    assertPaneTeardownProofsAvailable('startup_cleanup', teardown.proofUnavailable);
+    for (const paneId of teardown.killedPaneIds) resolvedPaneIds.add(paneId);
+  }
+
+  const nextConfig = await mutateShutdownConfig(config, cwd, (current) => {
+    const unresolved = (current.startup_cleanup_panes ?? [])
+      .filter((cleanupPane) => !resolvedPaneIds.has(cleanupPane.pane_id));
+    current.startup_cleanup_panes = unresolved.length > 0 ? unresolved : undefined;
+  });
+  if ((nextConfig.startup_cleanup_panes?.length ?? 0) > 0) {
+    throw new Error(`startup_cleanup_pane_teardown_failed:${nextConfig.startup_cleanup_panes!.map((pane) => pane.pane_id).join(',')}`);
+  }
+  return nextConfig;
 }
 
 async function assertTeamStartupIsNonDestructive(
@@ -406,6 +487,14 @@ interface ShutdownOptions {
 export interface TeamShutdownSummary {
   commitHygieneArtifacts: TeamCommitHygieneArtifactPaths | null;
 }
+let terminalEpochStartedHookForTest: ((teamName: string, cwd: string, phase: TeamPhaseState) => Promise<void>) | null = null;
+
+export function setTerminalEpochStartedHookForTest(
+  hook: ((teamName: string, cwd: string, phase: TeamPhaseState) => Promise<void>) | null,
+): void {
+  terminalEpochStartedHookForTest = hook;
+}
+
 
 export function applyCreatedInteractiveSessionToConfig(
   config: TeamConfig,
@@ -426,6 +515,9 @@ export function applyCreatedInteractiveSessionToConfig(
   config.tmux_pane_owner_id = createdSession.teamPaneOwnerId;
   config.resize_hook_name = createdSession.resizeHookName;
   config.resize_hook_target = createdSession.resizeHookTarget;
+  config.startup_cleanup_panes = createdSession.startupCleanupPanes
+    ?.map(({ paneId, panePid }) => ({ pane_id: paneId, pid: panePid }))
+    .filter(({ pane_id }) => /^%[0-9]+$/.test(pane_id));
   const paneIdsByIndex = createdSession.workerPaneIdsByIndex;
   const panePidsByIndex = createdSession.workerPanePidsByIndex;
   if (paneIdsByIndex) {
@@ -2212,6 +2304,10 @@ function isStartupEvidenceMissingReason(reason: string): boolean {
     || normalized.includes('fallback_attempted_but_unconfirmed');
 }
 
+function isStartupIncompatibleReason(reason: string): boolean {
+  return reason.trim() === 'codex_bypass_mdm_incompatible';
+}
+
 async function recordRecoverableStartupIssue(params: {
   teamName: string;
   workerName: string;
@@ -2221,7 +2317,7 @@ async function recordRecoverableStartupIssue(params: {
 }): Promise<void> {
   const { teamName, workerName, taskIds, reason, cwd } = params;
   const updatedAt = new Date().toISOString();
-  const currentTaskId = isStartupEvidenceMissingReason(reason) ? undefined : taskIds[0];
+  const currentTaskId = isStartupEvidenceMissingReason(reason) || isStartupIncompatibleReason(reason) ? undefined : taskIds[0];
   await writeWorkerStatus(
     teamName,
     workerName,
@@ -2360,41 +2456,51 @@ function isPidGone(pid: number): boolean {
   return probePidLiveness(pid) === 'gone';
 }
 
-type ProcessIdentity = {
+interface TrackedProcessRecordV2 {
   pid: number;
-  /** Linux /proc stat start-time ticks; this changes when a PID is reused. */
-  start_time: string;
-};
+  process_identity: SharedProcessIdentity;
+}
 
-async function captureProcessIdentity(pid: number): Promise<ProcessIdentity | null> {
-  // There is no portable process birth identifier exposed by Node. Refuse to
-  // persist replayable PID debt on platforms without Linux's stable proc stat
-  // start-time field rather than later treating a reused PID as authoritative.
-  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return null;
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-    const close = stat.lastIndexOf(')');
-    const fields = close >= 0 ? stat.slice(close + 2).trim().split(/\s+/) : [];
-    // field 22 is starttime; fields begin at field 3 after the comm value.
-    const startTime = fields[19];
-    return typeof startTime === 'string' && /^[0-9]+$/.test(startTime)
-      ? { pid, start_time: startTime }
-      : null;
-  } catch {
-    return null;
+// V1 (legacy, read-only): Linux-only.
+type TrackedProcessRecordV1 = { pid: number; start_time: string };
+type TrackedProcessRecord = TrackedProcessRecordV1 | TrackedProcessRecordV2;
+
+async function captureProcessIdentity(pid: number): Promise<TrackedProcessRecordV2 | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  const observation = defaultProcessInspectionProvider.observeProcess(pid, process.platform);
+  if (observation.kind !== 'identity') return null;
+  return { pid, process_identity: observation.identity };
+}
+
+async function captureProcessIdentities(pids: readonly number[]): Promise<TrackedProcessRecordV2[] | null> {
+  const identities = await Promise.all([...new Set(pids)].map((pid) => captureProcessIdentity(pid)));
+  return identities.every((identity): identity is TrackedProcessRecordV2 => identity !== null) ? identities : null;
+}
+
+async function probeProcessIdentity(identity: TrackedProcessRecord): Promise<'gone' | 'same' | 'reused_or_unknown'> {
+  const recorded: SharedProcessIdentity = 'process_identity' in identity
+    ? identity.process_identity
+    : { platform: 'linux', birth: identity.start_time };
+  const runtimePlatform = 'process_identity' in identity
+    ? identity.process_identity.platform
+    : 'linux'; // V1 is always Linux.
+  if (runtimePlatform !== process.platform && 'process_identity' in identity) {
+    return 'reused_or_unknown';
+  }
+  const classification: IdentityClassification = classifyRecordedIdentity(
+    recorded,
+    process.platform,
+    defaultProcessInspectionProvider,
+    identity.pid,
+  );
+  switch (classification.status) {
+    case 'match': return 'same';
+    case 'gone': return 'gone';
+    case 'birth-mismatch': return 'reused_or_unknown';
+    case 'identity-unavailable': return 'reused_or_unknown';
   }
 }
 
-async function captureProcessIdentities(pids: readonly number[]): Promise<ProcessIdentity[] | null> {
-  const identities = await Promise.all([...new Set(pids)].map((pid) => captureProcessIdentity(pid)));
-  return identities.every((identity): identity is ProcessIdentity => identity !== null) ? identities : null;
-}
-
-async function probeProcessIdentity(identity: ProcessIdentity): Promise<'gone' | 'same' | 'reused_or_unknown'> {
-  const current = await captureProcessIdentity(identity.pid);
-  if (current === null) return probePidLiveness(identity.pid) === 'gone' ? 'gone' : 'reused_or_unknown';
-  return current.start_time === identity.start_time ? 'same' : 'reused_or_unknown';
-}
 
 function probeProcessGroupLiveness(processGroupId: number): 'alive' | 'gone' | 'unknown' {
   if (process.platform === 'win32') return 'gone';
@@ -2605,7 +2711,8 @@ type ExactPaneProcessTreeTeardown = {
   trackedPids: number[];
   authorizedPanePid?: number;
   proofUnavailable?: ExactPaneUnavailableProof;
-  trackedProcessIdentities?: ProcessIdentity[];
+  trackedProcessIdentities?: TrackedProcessRecord[];
+
 };
 
 type ExactPaneProcessProbe =
@@ -2802,14 +2909,16 @@ type GonePaneDescendantCleanupDebtEntry =
   | {
     pane_id: string;
     authorized_pane_pid: number;
-    tracked_processes: ProcessIdentity[];
+    tracked_processes: TrackedProcessRecord[];
+
     evidence: string;
   }
   | {
     pane_id: string;
     authorized_pane_pid: number;
     tracked_pids: number[];
-    tracked_processes?: ProcessIdentity[];
+    tracked_processes?: TrackedProcessRecord[];
+
     evidence: 'process_identity_unavailable';
   };
 
@@ -2881,13 +2990,36 @@ async function persistGonePaneDescendantCleanupDebt(params: {
   await writeAtomic(debtPath, JSON.stringify({ schema_version: 1, operation: 'gone_pane_descendant_cleanup', entries }, null, 2));
 }
 
-function isValidProcessIdentity(value: unknown): value is ProcessIdentity {
-  return typeof value === 'object' && value !== null
-    && Number.isSafeInteger((value as { pid?: unknown }).pid)
-    && (value as { pid: number }).pid > 0
-    && typeof (value as { start_time?: unknown }).start_time === 'string'
-    && /^[0-9]+$/.test((value as { start_time: string }).start_time);
+const TRACKED_PROCESS_PLATFORMS = new Set<NodeJS.Platform>([
+  'aix', 'android', 'darwin', 'freebsd', 'haiku', 'linux', 'openbsd', 'sunos', 'win32', 'cygwin', 'netbsd',
+]);
+const TRACKED_PROCESS_BIRTH_PATTERN = /^\d+(?:\.\d+)?$/;
+const TRACKED_PROCESS_CMDLINE_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+function isValidSharedProcessIdentity(value: unknown): value is SharedProcessIdentity {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const identity = value as Partial<SharedProcessIdentity>;
+  if (Object.keys(identity).some((key) => key !== 'platform' && key !== 'birth' && key !== 'cmdline_hash')) return false;
+  return typeof identity.platform === 'string'
+    && TRACKED_PROCESS_PLATFORMS.has(identity.platform as NodeJS.Platform)
+    && typeof identity.birth === 'string'
+    && TRACKED_PROCESS_BIRTH_PATTERN.test(identity.birth)
+    && (identity.cmdline_hash === undefined
+      || typeof identity.cmdline_hash === 'string' && TRACKED_PROCESS_CMDLINE_HASH_PATTERN.test(identity.cmdline_hash));
 }
+
+function isValidProcessIdentity(value: unknown): value is TrackedProcessRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as {
+    pid?: unknown;
+    start_time?: unknown;
+    process_identity?: unknown;
+  };
+  if (!Number.isSafeInteger(candidate.pid) || (candidate.pid as number) <= 0) return false;
+  if ('process_identity' in candidate) return isValidSharedProcessIdentity(candidate.process_identity);
+  return typeof candidate.start_time === 'string' && /^[0-9]+$/.test(candidate.start_time);
+}
+
 
 function isValidGonePaneDescendantCleanupDebt(value: unknown): value is GonePaneDescendantCleanupDebt {
   if (typeof value !== 'object' || value === null) return false;
@@ -2913,7 +3045,8 @@ function isValidGonePaneDescendantCleanupDebt(value: unknown): value is GonePane
         || new Set(trackedPids).size !== trackedPids.length) return false;
       if (candidate.tracked_processes === undefined) return true;
       if (!Array.isArray(candidate.tracked_processes) || !candidate.tracked_processes.every(isValidProcessIdentity)) return false;
-      const trackedProcesses = candidate.tracked_processes as ProcessIdentity[];
+      const trackedProcesses = candidate.tracked_processes as TrackedProcessRecord[];
+
       return trackedProcesses.every((identity) => trackedPids.includes(identity.pid))
         && new Set(trackedProcesses.map((identity) => identity.pid)).size === trackedProcesses.length;
     }
@@ -2921,7 +3054,8 @@ function isValidGonePaneDescendantCleanupDebt(value: unknown): value is GonePane
       || candidate.tracked_pids !== undefined
       || !Array.isArray(candidate.tracked_processes) || candidate.tracked_processes.length === 0
       || !candidate.tracked_processes.every(isValidProcessIdentity)) return false;
-    const trackedProcesses = candidate.tracked_processes as ProcessIdentity[];
+    const trackedProcesses = candidate.tracked_processes as TrackedProcessRecord[];
+
     return new Set(trackedProcesses.map((identity) => identity.pid)).size === trackedProcesses.length;
 
   });
@@ -2941,7 +3075,7 @@ async function reconcileGonePaneDescendantCleanupDebt(teamName: string, cwd: str
   for (const entry of debt.entries) {
     if ('tracked_pids' in entry) {
       const trackedProcesses = entry.tracked_processes ?? [];
-      const knownIdentities = new Map<number, ProcessIdentity>(
+      const knownIdentities = new Map<number, TrackedProcessRecord>(
         trackedProcesses.map((identity) => [identity.pid, identity]),
       );
       const states: Array<'gone' | 'same' | 'reused_or_unknown'> = await Promise.all(entry.tracked_pids.map((pid: number) => {
@@ -3754,6 +3888,7 @@ export async function startTeam(
       writeWarning: options.writeCleanupWarning,
     });
     const startupTiming = createStartupTimingRecorder(sanitized, leaderCwd);
+    let workerStartupArgs: ReadonlyArray<ReadonlyArray<string>> | undefined;
 
     if (workerLaunchMode === 'interactive') {
       const createdSession = createTeamSession(
@@ -3769,6 +3904,7 @@ export async function startTeam(
       createdWorkerPaneIds.push(...createdSession.workerPaneIds);
       createdLeaderPaneId = createdSession.leaderPaneId;
       applyCreatedInteractiveSessionToConfig(config, createdSession, workerPaneIds);
+      workerStartupArgs = createdSession.workerStartupArgs;
       const createdOwnerId = typeof createdSession.teamPaneOwnerId === 'string'
         ? createdSession.teamPaneOwnerId.trim()
         : '';
@@ -3870,6 +4006,7 @@ export async function startTeam(
           workerIndex,
           paneId,
           workerCli: bootstrapPlan.workerCli,
+          finalArgs: workerStartupArgs?.[workerIndex - 1],
           inbox,
           triggerMessage: trigger,
           intent: triggerIntent,
@@ -3878,12 +4015,47 @@ export async function startTeam(
           timing: startupTiming,
         })
         : null;
+      if (startupDirectOutcome?.reason === 'codex_bypass_mdm_incompatible') {
+        await recordRecoverableStartupIssue({
+          teamName: sanitized,
+          workerName,
+          taskIds: workerTasks.map((task) => task.id),
+          reason: startupDirectOutcome.reason,
+          cwd: leaderCwd,
+        });
+        return {
+          ok: false,
+          workerIndex,
+          workerName,
+          error: new Error(`worker_startup_incompatible:${workerName}:${startupDirectOutcome.reason}`),
+        };
+      }
 
       let startupReadyPromptObserved = false;
       if (workerLaunchMode === 'interactive' && !skipWorkerReadyWait && !initialPrompt && !startupDirectOutcome?.ok) {
         startupTiming.mark('ready_wait_start', { worker: workerName, pane_id: paneId });
-        const ready = await waitForWorkerReadyAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId, config!.workers[workerIndex - 1]?.pid, config!.tmux_pane_owner_id ?? undefined, config!.hud_pane_id ?? undefined);
+        let readinessIncompatibility: string | null = null;
+        const ready = await waitForWorkerReadyDetailedAsync(sessionName, workerIndex, workerReadyTimeoutMs, paneId, config!.workers[workerIndex - 1]?.pid, config!.tmux_pane_owner_id ?? undefined, config!.hud_pane_id ?? undefined, {
+          workerCli: bootstrapPlan.workerCli,
+          finalArgs: workerStartupArgs?.[workerIndex - 1],
+          onIncompatible: (reason) => { readinessIncompatibility = reason; },
+        });
         startupTiming.mark('ready_wait_end', { worker: workerName, pane_id: paneId, ok: ready });
+        if (readinessIncompatibility) {
+          await recordRecoverableStartupIssue({
+            teamName: sanitized,
+            workerName,
+            taskIds: workerTasks.map((task) => task.id),
+            reason: readinessIncompatibility,
+            cwd: leaderCwd,
+          });
+          return {
+            ok: false,
+            workerIndex,
+            workerName,
+            error: new Error(`worker_startup_incompatible:${workerName}:${readinessIncompatibility}`),
+          };
+        }
         if (!ready) {
           const workerAlive = isWorkerPaneOpen(
             sessionName,
@@ -4424,14 +4596,16 @@ export async function monitorTeam(teamName: string, cwd: string): Promise<TeamSn
     cwd,
   });
   const mailboxDeliveryStartMs = performance.now();
-  const mailboxNotifiedByMessageId = await deliverPendingMailboxMessages(
-    sanitized,
-    config,
-    workers,
-    previousSnapshot?.mailboxNotifiedByMessageId ?? {},
-    dispatchPolicy,
-    cwd
-  );
+  const mailboxNotifiedByMessageId = phaseState.terminal_epoch
+    ? {}
+    : await deliverPendingMailboxMessages(
+        sanitized,
+        config,
+        workers,
+        previousSnapshot?.mailboxNotifiedByMessageId ?? {},
+        dispatchPolicy,
+        cwd,
+      );
   const mailboxDeliveryMs = performance.now() - mailboxDeliveryStartMs;
 
   // Prune ephemeral status messages from leader mailbox (TTL: 60s)
@@ -4506,8 +4680,13 @@ export async function assignTask(
   cwd: string,
 ): Promise<void> {
   const sanitized = sanitizeTeamName(teamName);
-  const task = await readTask(sanitized, taskId, cwd);
-  if (!task) throw new Error(`Task ${taskId} not found`);
+  return await withTeamTaskMembershipBarrier(sanitized, cwd, async () => {
+    const phaseState = await readTeamPhaseState(sanitized, cwd);
+    if (phaseState?.terminal_epoch || (phaseState && isTerminalPhase(phaseState.current_phase))) {
+      throw new Error(teamContinuationRequiredDiagnostic(phaseState));
+    }
+    const task = await readTask(sanitized, taskId, cwd);
+    if (!task) throw new Error(`Task ${taskId} not found`);
   const manifest = await readTeamManifestV2(sanitized, cwd);
   const governance = resolveGovernancePolicy(manifest?.governance);
 
@@ -4634,6 +4813,7 @@ export async function assignTask(
     if (reason === 'worker_notify_failed') throw new Error('worker_notify_failed');
     throw new Error(`worker_assignment_failed:${reason}`);
   }
+  });
 }
 
 /**
@@ -4690,6 +4870,7 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
   await reconcileDetachedSessionDestroyReceipt(sanitized, cwd, config);
   config = await readTeamConfig(sanitized, cwd);
   if (!config) throw new Error(`shutdown_config_missing_after_detached_reconciliation:${sanitized}`);
+  config = await reconcileStartupCleanupPanes(config, cwd);
   const restoredHudDebtRoot = join(config.team_state_root ?? resolveCanonicalTeamStateRoot(cwd), 'team', sanitized);
   const configuredRestoredHudPaneId = typeof config.hud_pane_id === 'string' && /^%[0-9]+$/.test(config.hud_pane_id)
     ? config.hud_pane_id
@@ -4741,27 +4922,17 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     manifest?.policy as Partial<TeamGovernance> | undefined,
   );
 
-  if (!force) {
-    const classification = await classifyShutdown({
+  const classification = await withTeamTaskMembershipBarrier(sanitized, cwd, async () => {
+    const current = await classifyShutdown({
       teamName: sanitized,
       cwd,
-      config,
+      config: config!,
       governance,
       confirmIssues,
     });
-    const { gate, dirtyWorkers, requiresIssueConfirmation, useCleanFastPath } = classification;
+    const { gate, requiresIssueConfirmation } = current;
 
-    await appendTeamEvent(
-      sanitized,
-      {
-        type: 'shutdown_gate',
-        worker: 'leader-fixed',
-        reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive} dirty_workers=${dirtyWorkers.join('|') || 'none'} confirm_issues=${confirmIssues} clean_fast_path=${useCleanFastPath}`,
-      },
-      cwd,
-    ).catch(() => {});
-
-    if (!gate.allowed) {
+    if (!force && !gate.allowed) {
       if (requiresIssueConfirmation) {
         throw new Error(
           `shutdown_confirm_issues_required:failed=${gate.failed}:rerun=omx team shutdown ${sanitized} --confirm-issues`,
@@ -4772,19 +4943,52 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       );
     }
 
-    skipWorkerAcks = useCleanFastPath;
+    const now = new Date().toISOString();
+    const existingPhase = await readTeamPhaseState(sanitized, cwd);
+    const terminalReason = force ? 'forced_shutdown' : 'shutdown_gate_passed';
+    await writeTeamPhaseState(sanitized, {
+      current_phase: existingPhase?.current_phase ?? 'team-exec',
+      max_fix_attempts: existingPhase?.max_fix_attempts ?? 3,
+      current_fix_attempt: existingPhase?.current_fix_attempt ?? 0,
+      transitions: existingPhase?.transitions ?? [],
+      updated_at: now,
+      terminal_epoch: existingPhase?.terminal_epoch ?? now,
+      terminal_reason: existingPhase?.terminal_reason ?? terminalReason,
+      final_task_counts: {
+        total: gate.total,
+        pending: gate.pending,
+        blocked: gate.blocked,
+        in_progress: gate.in_progress,
+        completed: gate.completed,
+        failed: gate.failed,
+      },
+    }, cwd);
+    return current;
+  });
+  const terminalPhase = await readTeamPhaseState(sanitized, cwd);
+  if (terminalPhase && terminalEpochStartedHookForTest) {
+    await terminalEpochStartedHookForTest(sanitized, cwd, terminalPhase);
   }
+  const { gate, dirtyWorkers, useCleanFastPath } = classification;
+
+  await appendTeamEvent(
+    sanitized,
+    {
+      type: force ? 'shutdown_gate_forced' : 'shutdown_gate',
+      worker: 'leader-fixed',
+      reason: force
+        ? `force_bypass total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed}`
+        : `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive} dirty_workers=${dirtyWorkers.join('|') || 'none'} confirm_issues=${confirmIssues} clean_fast_path=${useCleanFastPath}`,
+    },
+    cwd,
+  ).catch(() => {});
 
   if (force) {
-    await appendTeamEvent(sanitized, {
-      type: 'shutdown_gate_forced',
-      worker: 'leader-fixed',
-      reason: 'force_bypass',
-    }, cwd).catch(() => {});
-
     // Explicit force means teardown now. Do not spend the graceful ack window
     // waiting for interactive panes or prompt workers that will be killed below.
     skipWorkerAcks = true;
+  } else {
+    skipWorkerAcks = useCleanFastPath;
   }
 
   const sessionName = config.tmux_session;
@@ -5776,6 +5980,7 @@ async function attemptStartupDirectTrigger(params: {
   workerIndex: number;
   paneId?: string;
   workerCli?: TeamWorkerCli;
+  finalArgs?: readonly string[];
   inbox: string;
   triggerMessage: string;
   intent?: TeamReminderIntent;
@@ -5790,6 +5995,7 @@ async function attemptStartupDirectTrigger(params: {
     workerIndex,
     paneId,
     workerCli,
+    finalArgs,
     inbox,
     triggerMessage,
     intent,
@@ -5798,7 +6004,7 @@ async function attemptStartupDirectTrigger(params: {
     timing,
   } = params;
 
-  const safety = await evaluateStartupDirectTriggerSafety(config.tmux_session, workerIndex, paneId, workerCli);
+  const safety = await evaluateStartupDirectTriggerSafety(config.tmux_session, workerIndex, paneId, workerCli, finalArgs);
   if (!safety.safe) {
     timing.mark('startup_direct_bypass', {
       worker: workerName,
@@ -5806,6 +6012,9 @@ async function attemptStartupDirectTrigger(params: {
       ok: false,
       reason: `startup_direct_unsafe:${safety.reason}`,
     });
+    if (safety.reason === 'codex_bypass_mdm_incompatible') {
+      return { ok: false, transport: 'none', reason: safety.reason };
+    }
     return null;
   }
 
