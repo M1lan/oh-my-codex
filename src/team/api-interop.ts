@@ -176,17 +176,20 @@ async function markLatestMailboxDispatchDelivered(
 			kind: "mailbox",
 			to_worker: worker,
 		})
-	)
-		.filter(
-			(request) =>
-				request.status === "pending" || request.status === "notified",
-		)
-		.sort(
-			(left, right) =>
-				Date.parse(right.updated_at) - Date.parse(left.updated_at),
-		);
-	const latest = active[0];
-	if (!latest) return { matched_request_id: null, dispatch_updated: false };
+	).filter(
+		(request) =>
+			request.status === "pending" || request.status === "notified",
+	);
+	if (active.length === 0) {
+		return { matched_request_id: null, dispatch_updated: false };
+	}
+	const matching = active.filter((request) => request.message_id === messageId);
+	const latest = (matching.length > 0 ? matching : active).reduce(
+		(current, request) =>
+			Date.parse(request.updated_at) >= Date.parse(current.updated_at)
+				? request
+				: current,
+	);
 
 	const mailbox = await listMailboxMessages(teamName, worker, cwd);
 	if (mailbox.some((message) => !message.delivered_at)) {

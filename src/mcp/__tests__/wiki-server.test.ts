@@ -30,9 +30,9 @@ describe("mcp/wiki-server module contract", () => {
 			join(process.cwd(), "src/mcp/wiki-server.ts"),
 			"utf8",
 		);
-		const toolNames = Array.from(src.matchAll(/name:\s*'([^']+)'/g)).map(
-			(match) => match[1],
-		);
+		const toolNames = Array.from(
+			src.matchAll(/name:\s*["']([^"']+)["']/g),
+		).map((match) => match[1]);
 
 		for (const tool of REQUIRED_TOOLS) {
 			assert.ok(toolNames.includes(tool), `missing tool declaration: ${tool}`);
@@ -45,7 +45,7 @@ describe("mcp/wiki-server module contract", () => {
 			"utf8",
 		);
 
-		assert.match(src, /autoStartStdioMcpServer\('wiki', server\)/);
+		assert.match(src, /autoStartStdioMcpServer\(["']wiki["'],\s*server\)/);
 		assert.doesNotMatch(src, /new StdioServerTransport\(\)/);
 		assert.doesNotMatch(
 			src,

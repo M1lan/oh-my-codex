@@ -58,6 +58,7 @@ const OMX_PLUGIN_HOOK_COMMAND =
 	'node "${PLUGIN_ROOT}/hooks/codex-native-hook.mjs"';
 // The launcher itself must not shell-wrap node.exe on Windows; see GH #2858.
 const OMX_PLUGIN_HOOK_LAUNCHER_CONTRACT_MARKER = "omx-plugin-hook-launcher:v1";
+const OMX_PLUGIN_HOOK_ROUTING_ONLY_MARKER = "omx-plugin-hook-routing-only:v1";
 // Plugin-scoped Codex hooks intentionally mirror the setup-managed lifecycle
 // roster today while using PLUGIN_ROOT-local launch commands. If plugin and
 // setup hook coverage diverge, split this alias into a plugin-owned roster.
@@ -124,17 +125,33 @@ function assertPluginHookLauncherContractMarkerPresent(
 	path: string,
 	content: string,
 ): void {
-	const requiredMarkers = [OMX_PLUGIN_HOOK_LAUNCHER_CONTRACT_MARKER];
+	const requiredMarkers = [
+		OMX_PLUGIN_HOOK_LAUNCHER_CONTRACT_MARKER,
+		OMX_PLUGIN_HOOK_ROUTING_ONLY_MARKER,
+	];
 	const missingMarkers = requiredMarkers.filter(
 		(marker) => !content.includes(marker),
 	);
-	if (missingMarkers.length > 0) {
+	const prohibitedPatterns = [
+		/\bnative-anchor\b/i,
+		/\bcreateHmac\b/i,
+		/\bhmac\b/i,
+		/\brandomBytes\b/i,
+		/\blaunch-claim\b/i,
+		/\bsignature\b/i,
+		/\bclaim(?:ed)?\b/i,
+	];
+	const prohibitedMarkers = prohibitedPatterns
+		.filter((pattern) => pattern.test(content))
+		.map((pattern) => pattern.source);
+	if (missingMarkers.length > 0 || prohibitedMarkers.length > 0) {
 		throw new Error(
 			[
 				"plugin_bundle_metadata_out_of_sync",
 				"kind=hook-launcher",
 				`path=${path}`,
 				`missingMarkers=${JSON.stringify(missingMarkers)}`,
+				`prohibitedMarkers=${JSON.stringify(prohibitedMarkers)}`,
 			].join("\n"),
 		);
 	}

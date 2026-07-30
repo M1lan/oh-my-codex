@@ -4,7 +4,13 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const ENV_KEYS = ["CODEX_HOME", "TMUX", "TMUX_PANE", "PATH"] as const;
+const ENV_KEYS = [
+	"CODEX_HOME",
+	"TMUX",
+	"TMUX_PANE",
+	"PATH",
+	"OMX_MUX_BINARY",
+] as const;
 
 const originalFetch = globalThis.fetch;
 
@@ -56,6 +62,7 @@ describe("notifyLifecycle tmux tail auto-capture", () => {
 		originalEnv = { ...process.env };
 		process.env.CODEX_HOME = codexHome;
 		process.env.PATH = `${fakeBinDir}:${originalEnv.PATH || ""}`;
+		process.env.OMX_MUX_BINARY = join(fakeBinDir, "tmux");
 		process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
 		process.env.TMUX_PANE = "%42";
 	});
@@ -63,6 +70,7 @@ describe("notifyLifecycle tmux tail auto-capture", () => {
 	beforeEach(() => {
 		process.env.CODEX_HOME = codexHome;
 		process.env.PATH = `${fakeBinDir}:${originalEnv.PATH || ""}`;
+		process.env.OMX_MUX_BINARY = join(fakeBinDir, "tmux");
 		process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
 		process.env.TMUX_PANE = "%42";
 	});

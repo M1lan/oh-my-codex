@@ -1,18 +1,17 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { mkdtempSync } from "node:fs";
-import { arch, platform } from "node:os";
+import { arch, platform, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { describe, it } from "node:test";
 
 type PackageJson = {
 	bin?: string | Record<string, string>;
@@ -109,10 +108,13 @@ describe("sparkshell packaging scaffold", () => {
 			true,
 			"expected test sparkshell helper script to exist",
 		);
-		assert.match(testScriptSource, /'crates', 'omx-sparkshell', 'Cargo\.toml'/);
+		assert.match(
+			testScriptSource,
+			/["']crates["'], ["']omx-sparkshell["'], ["']Cargo\.toml["']/,
+		);
 		assert.doesNotMatch(
 			testScriptSource,
-			/'native', 'omx-sparkshell', 'Cargo\.toml'/,
+			/["']native["'], ["']omx-sparkshell["'], ["']Cargo\.toml["']/,
 		);
 
 		try {

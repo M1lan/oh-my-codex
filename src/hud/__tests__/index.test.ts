@@ -790,7 +790,7 @@ describe("runWatchMode", () => {
 });
 
 describe("hudCommand --tmux", () => {
-	it("removes duplicate same-leader HUD panes and reuses one when launched with --tmux", async () => {
+	it("does not reuse duplicate HUD snapshots without complete current authority", async () => {
 		const tmp = await mkdtemp(join(tmpdir(), "omx-hud-tmux-duplicate-test-"));
 		const logPath = join(tmp, "tmux.log");
 		const fakeBin = join(tmp, "bin");
@@ -804,10 +804,14 @@ if [[ "$1" == "display-message" && "$*" == *'#{session_id}'* ]]; then
   printf '$7\t@3\n'
   exit 0
 fi
+if [[ "$1" == "list-panes" && "\${!#}" == '#{pane_id}' ]]; then
+  printf '%%1\n%%2\n%%3\n'
+  exit 0
+fi
 if [[ "$1" == "list-panes" ]]; then
-  printf '%s\n' '%1	zsh	zsh'
-  printf '%s\n' "%2	node	exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_LEADER_PANE='%1' /node /omx.js hud --watch"
-  printf '%s\n' "%3	node	exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_LEADER_PANE='%1' /node /omx.js hud --watch"
+  printf '%%1\\037zsh\\0370\\0370\\037160\\03740\\03739\\037160\\03740\\037zsh\\037/repo\\0370\\0371001\n'
+  printf '%b\n' "%%2\\037node\\0370\\03737\\037160\\0373\\03739\\037160\\03740\\037exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_OWNER='1' OMX_TMUX_HUD_LEADER_PANE='%1' /node /repo/dist/cli/omx.js hud --watch\\037/repo\\0370\\0371002"
+  printf '%b\n' "%%3\\037node\\0370\\03734\\037160\\0373\\03736\\037160\\03740\\037exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_OWNER='1' OMX_TMUX_HUD_LEADER_PANE='%1' /node /repo/dist/cli/omx.js hud --watch\\037/repo\\0370\\0371003"
   exit 0
 fi
 if [[ "$1" == "resize-pane" || "$1" == "set-hook" || "$1" == "kill-pane" ]]; then
@@ -824,6 +828,7 @@ exit 0
 
 		const previousEnv = {
 			PATH: process.env.PATH,
+			OMX_MUX_BINARY: process.env.OMX_MUX_BINARY,
 			TMUX: process.env.TMUX,
 			TMUX_PANE: process.env.TMUX_PANE,
 			OMX_SESSION_ID: process.env.OMX_SESSION_ID,
@@ -832,6 +837,7 @@ exit 0
 		const logs: string[] = [];
 		try {
 			process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+			process.env.OMX_MUX_BINARY = tmuxPath;
 			process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
 			process.env.TMUX_PANE = "%1";
 			process.env.OMX_SESSION_ID = "sess-a";
@@ -842,19 +848,17 @@ exit 0
 			await hudCommand(["--tmux"]);
 
 			const tmuxLog = await readFile(logPath, "utf8");
+			assert.match(tmuxLog, /list-panes -t %1 -F #\{pane_id\}/);
 			assert.match(
 				tmuxLog,
-				/list-panes -t %1 -F #\{pane_id\}\x1f#\{pane_current_command\}(?:\x1f#\{[^}]+\})*\x1f#\{pane_start_command\}\x1f#\{pane_current_path\}/,
+				/list-panes -t %1 -F #\{pane_id\}\x1f#\{pane_current_command\}\x1f#\{pane_left\}\x1f#\{pane_top\}\x1f#\{pane_width\}\x1f#\{pane_height\}\x1f#\{pane_bottom\}\x1f#\{window_width\}\x1f#\{window_height\}\x1f#\{pane_start_command\}\x1f#\{pane_current_path\}\x1f#\{pane_dead\}\x1f#\{pane_pid\}/,
 			);
-			assert.match(tmuxLog, /kill-pane -t %3/);
-			assert.match(tmuxLog, /resize-pane -t %2 -y \d+/);
-			assert.doesNotMatch(tmuxLog, /split-window/);
-			assert.ok(
-				logs.some((line) =>
-					line.includes(
-						"Removed duplicate HUD panes and reused existing HUD pane",
-					),
-				),
+			assert.doesNotMatch(tmuxLog, /kill-pane -t %3/);
+			assert.doesNotMatch(tmuxLog, /resize-pane -t %2/);
+			assert.match(tmuxLog, /split-window -v -l 2 -t %1/);
+			assert.equal(
+				logs.some((line) => line.includes("Removed duplicate HUD panes")),
+				false,
 			);
 		} finally {
 			console.log = previousLog;
@@ -865,7 +869,7 @@ exit 0
 			await rm(tmp, { recursive: true, force: true });
 		}
 	});
-	it("reuses a same-session HUD pane when TMUX_PANE is empty instead of splitting a duplicate", async () => {
+	it("does not reuse a session HUD snapshot without complete current authority", async () => {
 		const tmp = await mkdtemp(join(tmpdir(), "omx-hud-tmux-test-"));
 		const logPath = join(tmp, "tmux.log");
 		const fakeBin = join(tmp, "bin");
@@ -883,9 +887,13 @@ if [[ "$1" == "display-message" && "$*" == *'#{session_id}'* ]]; then
   printf '$7\\t@3\\n'
   exit 0
 fi
+if [[ "$1" == "list-panes" && "\${!#}" == '#{pane_id}' ]]; then
+  printf '%%1\\n%%2\\n'
+  exit 0
+fi
 if [[ "$1" == "list-panes" ]]; then
-  printf '%s\\n' '%1	codex	codex'
-  printf '%s\\n' "%2	node	exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_LEADER_PANE='%1' /node /omx.js hud --watch"
+  printf '%%1\\037codex\\0370\\0370\\037160\\03737\\03736\\037160\\03740\\037codex\\037/repo\\0370\\0371001\\n'
+  printf '%b\n' "%%2\\037node\\0370\\03737\\037160\\0373\\03739\\037160\\03740\\037exec env OMX_SESSION_ID='sess-a' OMX_TMUX_HUD_OWNER='1' OMX_TMUX_HUD_LEADER_PANE='%1' /node /repo/dist/cli/omx.js hud --watch\\037/repo\\0370\\0371002"
   exit 0
 fi
 if [[ "$1" == "resize-pane" || "$1" == "set-hook" ]]; then
@@ -902,6 +910,7 @@ exit 0
 
 		const previousEnv = {
 			PATH: process.env.PATH,
+			OMX_MUX_BINARY: process.env.OMX_MUX_BINARY,
 			TMUX: process.env.TMUX,
 			TMUX_PANE: process.env.TMUX_PANE,
 			OMX_SESSION_ID: process.env.OMX_SESSION_ID,
@@ -910,6 +919,7 @@ exit 0
 		const logs: string[] = [];
 		try {
 			process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ""}`;
+			process.env.OMX_MUX_BINARY = tmuxPath;
 			process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
 			process.env.TMUX_PANE = "";
 			process.env.OMX_SESSION_ID = "sess-a";
@@ -921,13 +931,17 @@ exit 0
 
 			const tmuxLog = await readFile(logPath, "utf8");
 			assert.match(tmuxLog, /display-message -p #\{pane_id\}/);
+			assert.match(tmuxLog, /list-panes -t %1 -F #\{pane_id\}/);
 			assert.match(
 				tmuxLog,
-				/list-panes -t %1 -F #\{pane_id\}\x1f#\{pane_current_command\}(?:\x1f#\{[^}]+\})*\x1f#\{pane_start_command\}\x1f#\{pane_current_path\}/,
+				/list-panes -t %1 -F #\{pane_id\}\x1f#\{pane_current_command\}\x1f#\{pane_left\}\x1f#\{pane_top\}\x1f#\{pane_width\}\x1f#\{pane_height\}\x1f#\{pane_bottom\}\x1f#\{window_width\}\x1f#\{window_height\}\x1f#\{pane_start_command\}\x1f#\{pane_current_path\}\x1f#\{pane_dead\}\x1f#\{pane_pid\}/,
 			);
-			assert.match(tmuxLog, /resize-pane -t %2 -y \d+/);
-			assert.doesNotMatch(tmuxLog, /split-window/);
-			assert.ok(logs.some((line) => line.includes("Reused existing HUD pane")));
+			assert.doesNotMatch(tmuxLog, /resize-pane -t %2/);
+			assert.match(tmuxLog, /split-window -v -l 2 -t %1/);
+			assert.equal(
+				logs.some((line) => line.includes("Reused existing HUD pane")),
+				false,
+			);
 		} finally {
 			console.log = previousLog;
 			for (const [key, value] of Object.entries(previousEnv)) {

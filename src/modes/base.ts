@@ -3,44 +3,47 @@
  * All execution modes (autopilot, autoresearch, deep-interview, ralph, ultrawork, team, ultraqa, ralplan) share this base.
  */
 
-import { readFile, writeFile, mkdir, readdir } from "fs/promises";
 import { existsSync } from "fs";
+import { mkdir, readdir, readFile, writeFile } from "fs/promises";
+import { join } from "path";
+import { validateAutopilotCompletionTransition } from "../autopilot/completion-gate.js";
+import {
+	buildAutopilotDeepInterviewRalplanGateError,
+	canAdvanceAutopilotDeepInterviewToRalplan,
+} from "../autopilot/deep-interview-gate.js";
+import {
+	type AutopilotChildPhase,
+	deriveAutopilotChildPhase,
+} from "../autopilot/fsm.js";
+import {
+	buildAutopilotRalplanUltragoalGateError,
+	canAdvanceAutopilotRalplanToUltragoal,
+} from "../autopilot/ralplan-gate.js";
+import {
+	createWritableCommitRevalidator,
+	getAuthoritativeActiveStatePaths,
+	getBaseStateDir,
+	getReadScopedStateDirs,
+	getReadScopedStatePaths,
+	getStateFilename,
+	resolveWritableStateScope,
+} from "../mcp/state-paths.js";
+import { validateAndNormalizeRalphState } from "../ralph/contract.js";
+import { readNeutralizedRoutingOverlay } from "../ralplan/documented-leader-preflight.js";
+import { applyRunOutcomeContract } from "../runtime/run-outcome.js";
+import { syncRunStateFromModeState } from "../runtime/run-state.js";
 import { withModeRuntimeContext } from "../state/mode-state-context.js";
+import {
+	completeRalplanSession,
+	validateRalplanTerminalConsensus,
+} from "../state/operations.js";
+import { syncCanonicalSkillStateForMode } from "../state/skill-active.js";
 import {
 	assertWorkflowTransitionAllowed,
 	isTrackedWorkflowMode,
 	readActiveWorkflowModes,
 } from "../state/workflow-transition.js";
 import { reconcileWorkflowTransition } from "../state/workflow-transition-reconcile.js";
-import { syncCanonicalSkillStateForMode } from "../state/skill-active.js";
-import { validateAndNormalizeRalphState } from "../ralph/contract.js";
-import { applyRunOutcomeContract } from "../runtime/run-outcome.js";
-import { validateAutopilotCompletionTransition } from "../autopilot/completion-gate.js";
-import {
-	canAdvanceAutopilotDeepInterviewToRalplan,
-	buildAutopilotDeepInterviewRalplanGateError,
-} from "../autopilot/deep-interview-gate.js";
-import {
-	canAdvanceAutopilotRalplanToUltragoal,
-	buildAutopilotRalplanUltragoalGateError,
-} from "../autopilot/ralplan-gate.js";
-import {
-	deriveAutopilotChildPhase,
-	type AutopilotChildPhase,
-} from "../autopilot/fsm.js";
-import { syncRunStateFromModeState } from "../runtime/run-state.js";
-import {
-	getAuthoritativeActiveStatePaths,
-	getBaseStateDir,
-	getReadScopedStateDirs,
-	getReadScopedStatePaths,
-	getStatePath,
-	resolveWritableStateScope,
-} from "../mcp/state-paths.js";
-import {
-	completeRalplanSession,
-	validateRalplanTerminalConsensus,
-} from "../state/operations.js";
 
 export interface ModeState {
 	active: boolean;
@@ -70,10 +73,6 @@ export type ModeName =
 
 /** @deprecated These mode names were removed in v4.6. Use the canonical modes instead. */
 export type DeprecatedModeName = "ultrapilot" | "pipeline" | "ecomode";
-
-export interface UpdateModeStateOptions {
-	trustedPipelineProgress?: boolean;
-}
 
 const DEPRECATED_MODES: Record<DeprecatedModeName, string> = {
 	ultrapilot: 'Use "team" instead. ultrapilot has been merged into team mode.',
@@ -113,6 +112,22 @@ function isNextAutopilotPhase(
 	const currentOrder = autopilotPhaseOrder(currentPhase);
 	const nextOrder = autopilotPhaseOrder(nextPhase);
 	return currentOrder >= 0 && nextOrder === currentOrder + 1;
+}
+
+function assertAutopilotRalplanUltragoalGate(
+	currentState: Record<string, unknown>,
+	nextState: Record<string, unknown>,
+	cwd: string,
+	sessionId: string | undefined,
+): void {
+	const gate = canAdvanceAutopilotRalplanToUltragoal({
+		cwd,
+		sessionId,
+		currentState,
+		nextState,
+	});
+	if (!gate.allowed)
+		throw new Error(buildAutopilotRalplanUltragoalGateError(gate));
 }
 
 /**
@@ -184,12 +199,20 @@ export async function startMode(
 	taskDescription: string,
 	maxIterations: number = 50,
 	projectRoot?: string,
+	explicitSessionId?: string,
 ): Promise<ModeState> {
-	const scope = await resolveWritableStateScope(projectRoot);
+	const scope = await resolveWritableStateScope(projectRoot, explicitSessionId);
 	const dir = stateDir(projectRoot);
 	await mkdir(dir, { recursive: true });
 
 	const baseStateDir = getBaseStateDir(projectRoot);
+	const beforeCommit = createWritableCommitRevalidator({
+		operation: "startMode",
+		cwd: projectRoot ?? process.cwd(),
+		explicitSessionId,
+		capturedScope: scope,
+		baseStateDir,
+	});
 	let transitionMessage: string | undefined;
 	if (isTrackedWorkflowMode(mode)) {
 		const transition = await reconcileWorkflowTransition(
@@ -200,6 +223,7 @@ export async function startMode(
 				sessionId: scope.sessionId,
 				source: "startMode",
 				baseStateDir,
+				beforeCommit,
 			},
 		);
 		transitionMessage = transition.transitionMessage;
@@ -222,11 +246,14 @@ export async function startMode(
 
 	const withContext = withModeRuntimeContext({}, stateBase) as ModeState;
 	const state = normalizeModeStateOrThrow(mode, withContext);
-	await writeFile(
-		getStatePath(mode, projectRoot, scope.sessionId),
-		JSON.stringify(state, null, 2),
-	);
-	await syncRunStateFromModeState(state, projectRoot, scope.sessionId);
+	const payload = JSON.stringify(state, null, 2);
+	const path = join(scope.stateDir, getStateFilename(mode));
+	await beforeCommit({ site: "mode.primary", kind: "write", path });
+	await writeFile(path, payload);
+	await syncRunStateFromModeState(state, projectRoot, scope.sessionId, {
+		beforeCommit,
+		targetPath: join(scope.stateDir, "run-state.json"),
+	});
 	if (isTrackedWorkflowMode(mode)) {
 		await syncCanonicalSkillStateForMode({
 			cwd: projectRoot ?? process.cwd(),
@@ -239,6 +266,7 @@ export async function startMode(
 					: undefined,
 			sessionId: scope.sessionId,
 			source: "startMode",
+			beforeCommit,
 		});
 	}
 	return state;
@@ -261,7 +289,12 @@ async function readModeStateFromPaths(
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
 		try {
-			return JSON.parse(await readFile(path, "utf-8"));
+			const canonical = JSON.parse(await readFile(path, "utf-8")) as ModeState;
+			if (canonical.mode === "ralplan") {
+				const overlay = await readNeutralizedRoutingOverlay(path, "ralplan");
+				if (overlay) return overlay as ModeState;
+			}
+			return canonical;
 		} catch {
 			return null;
 		}
@@ -281,6 +314,16 @@ export async function readModeStateForSession(
 		return null;
 	}
 	return readModeStateFromPaths(paths);
+}
+
+export async function readModeStateForExplicitSession(
+	mode: string,
+	sessionId: string,
+	projectRoot?: string,
+): Promise<ModeState | null> {
+	const scope = await resolveWritableStateScope(projectRoot, sessionId);
+	if (!scope.sessionId) return null;
+	return readModeStateFromPaths([join(scope.stateDir, getStateFilename(mode))]);
 }
 
 export async function readModeStateForActiveDecision(
@@ -336,15 +379,56 @@ export async function updateModeState(
 	updates: Partial<ModeState>,
 	projectRoot?: string,
 	explicitSessionId?: string,
-	options: UpdateModeStateOptions = {},
+): Promise<ModeState> {
+	return updateModeStateInternal(
+		mode,
+		updates,
+		projectRoot,
+		explicitSessionId,
+		false,
+	);
+}
+
+/** Persists Autopilot pipeline bookkeeping while enforcing the ralplan-to-ultragoal gate. */
+export async function updateAutopilotPipelineState(
+	updates: Partial<ModeState>,
+	projectRoot?: string,
+	explicitSessionId?: string,
+): Promise<ModeState> {
+	return updateModeStateInternal(
+		"autopilot",
+		updates,
+		projectRoot,
+		explicitSessionId,
+		true,
+	);
+}
+
+async function updateModeStateInternal(
+	mode: string,
+	updates: Partial<ModeState>,
+	projectRoot: string | undefined,
+	explicitSessionId: string | undefined,
+	pipelineProgressWrite: boolean,
 ): Promise<ModeState> {
 	const scope = await resolveWritableStateScope(projectRoot, explicitSessionId);
 	const baseStateDir = getBaseStateDir(projectRoot);
+	const beforeCommit = createWritableCommitRevalidator({
+		operation: "updateModeState",
+		cwd: projectRoot ?? process.cwd(),
+		explicitSessionId,
+		capturedScope: scope,
+		baseStateDir,
+	});
 	const current =
 		mode === "ralph" && scope.sessionId
 			? await readModeStateForActiveDecision(mode, scope.sessionId, projectRoot)
 			: explicitSessionId
-				? await readModeStateForSession(mode, explicitSessionId, projectRoot)
+				? await readModeStateForExplicitSession(
+						mode,
+						explicitSessionId,
+						projectRoot,
+					)
 				: await readModeState(mode, projectRoot);
 	if (!current) throw new Error(`Mode ${mode} not found`);
 	await mkdir(scope.stateDir, { recursive: true });
@@ -378,8 +462,6 @@ export async function updateModeState(
 		if (validationError) throw new Error(validationError);
 	}
 	if (mode === "autopilot") {
-		const isPipelineOrchestratorProgressWrite =
-			options.trustedPipelineProgress === true;
 		const currentAutopilotChildPhase = deriveAutopilotChildPhase({
 			...current,
 			mode: "autopilot",
@@ -391,13 +473,22 @@ export async function updateModeState(
 		const completionTransitionError = validateAutopilotCompletionTransition(
 			current as Record<string, unknown>,
 			normalizedBase as Record<string, unknown>,
-			{
-				allowUnknownActivePhaseCompletion:
-					options.trustedPipelineProgress === true,
-			},
+			{ allowUnknownActivePhaseCompletion: pipelineProgressWrite },
 		);
 		if (completionTransitionError) throw new Error(completionTransitionError);
-		if (!isPipelineOrchestratorProgressWrite) {
+		if (pipelineProgressWrite) {
+			if (
+				currentAutopilotChildPhase === "ralplan" &&
+				nextAutopilotChildPhase === "ultragoal"
+			) {
+				assertAutopilotRalplanUltragoalGate(
+					current as Record<string, unknown>,
+					normalizedBase as Record<string, unknown>,
+					projectRoot ?? process.cwd(),
+					scope.sessionId,
+				);
+			}
+		} else {
 			if (
 				currentAutopilotChildPhase === "deep-interview" &&
 				isForwardAutopilotPhase(
@@ -452,23 +543,24 @@ export async function updateModeState(
 					nextAutopilotChildPhase,
 				)
 			) {
-				const gate = canAdvanceAutopilotRalplanToUltragoal({
-					cwd: projectRoot ?? process.cwd(),
-					sessionId: scope.sessionId,
-					currentState: current as Record<string, unknown>,
-					nextState: normalizedBase as Record<string, unknown>,
-				});
-				if (!gate.allowed)
-					throw new Error(buildAutopilotRalplanUltragoalGateError(gate));
+				assertAutopilotRalplanUltragoalGate(
+					current as Record<string, unknown>,
+					normalizedBase as Record<string, unknown>,
+					projectRoot ?? process.cwd(),
+					scope.sessionId,
+				);
 			}
 		}
 	}
 	const updated = withModeRuntimeContext(current, normalizedBase) as ModeState;
-	await writeFile(
-		getStatePath(mode, projectRoot, scope.sessionId),
-		JSON.stringify(updated, null, 2),
-	);
-	await syncRunStateFromModeState(updated, projectRoot, scope.sessionId);
+	const payload = JSON.stringify(updated, null, 2);
+	const path = join(scope.stateDir, getStateFilename(mode));
+	await beforeCommit({ site: "mode.primary", kind: "write", path });
+	await writeFile(path, payload);
+	await syncRunStateFromModeState(updated, projectRoot, scope.sessionId, {
+		beforeCommit,
+		targetPath: join(scope.stateDir, "run-state.json"),
+	});
 	if (isTrackedWorkflowMode(mode)) {
 		const cwd = projectRoot ?? process.cwd();
 		const ralplanCompletionHandled =
@@ -478,6 +570,8 @@ export async function updateModeState(
 				baseStateDir,
 				state: updated as Record<string, unknown>,
 				explicitSessionId,
+				beforeCommit,
+				capturedScope: scope,
 			}));
 		if (!ralplanCompletionHandled) {
 			await syncCanonicalSkillStateForMode({
@@ -491,6 +585,7 @@ export async function updateModeState(
 						: undefined,
 				sessionId: scope.sessionId,
 				source: "updateModeState",
+				beforeCommit,
 			});
 		}
 	}

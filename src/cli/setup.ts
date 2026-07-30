@@ -3,98 +3,77 @@
  * Installs skills, prompts, MCP servers config, and AGENTS.md
  */
 
+import TOML from "@iarna/toml";
+import { spawnSync } from "child_process";
+import { createHash } from "crypto";
+import { constants, existsSync } from "fs";
 import {
-	mkdir,
-	cp,
+	chmod,
 	copyFile,
+	cp,
+	lstat,
+	mkdir,
+	open,
 	readdir,
 	readFile,
 	rename,
-	writeFile,
-	stat,
-	lstat,
 	rm,
-	open,
-	chmod,
+	stat,
+	writeFile,
 } from "fs/promises";
-
+import { homedir } from "os";
 import {
-	join,
-	dirname,
-	relative,
 	basename,
+	dirname,
 	isAbsolute,
+	join,
+	relative,
 	sep,
 	win32,
 } from "path";
-
-import { constants, existsSync } from "fs";
-import { spawnSync } from "child_process";
 import { createInterface } from "readline/promises";
-import { homedir } from "os";
-import TOML from "@iarna/toml";
-import { createHash } from "crypto";
+import { AGENT_DEFINITIONS } from "../agents/definitions.js";
+import { generateAgentToml } from "../agents/native-config.js";
 import {
-	clearNativeHookClaimJournal as clearNativeHookClaimJournalWithDurability,
-	createNativeHookClaimJournalDurability,
-	persistNativeHookClaimJournal as persistNativeHookClaimJournalWithDurability,
-	recoverNativeHookClaimJournal,
-	syncNativeHookClaimParent as syncNativeHookClaimParentWithDurability,
-	restoreNativeHookClaimNoClobber as restoreNativeHookClaimNoClobberWithDurability,
-	type NativeHookClaimJournalDurability,
-} from "./native-hook-claim-journal.js";
-import {
-	codexHome,
-	codexConfigPath,
-	codexPromptsDir,
-	codexAgentsDir,
-	userSkillsDir,
-	omxStateDir,
-	detectLegacySkillRootOverlap,
-	omxPlansDir,
-	omxLogsDir,
-} from "../utils/paths.js";
-import {
-	emitDegradedDurabilityWarning,
-	recordRegularFileSyncOutcome,
-	syncRegularFile,
-	type RegularFileDurabilityTracker,
-	type RegularFileSyncOutcome,
-} from "../utils/file-durability.js";
-import {
-	buildMergedConfig,
-	getRootModelName,
-	getRootTomlArray,
-	hasLegacyOmxTeamRunTable,
-	isOmxManagedNotifyCommand,
-	sanitizePreviousNotifyCommand,
-	stripExistingOmxBlocks,
-	stripExistingSharedMcpRegistryBlock,
-	mergeSharedMcpRegistryBlock,
-	stripOmxEnvSettings,
-	stripOmxFeatureFlags,
-	stripOmxSeededBehavioralDefaults,
-	upsertPluginModeRuntimeFeatureFlags,
-	upsertManagedCodexHookTrustState,
-	stripManagedCodexHookTrustState,
-	OMX_DEVELOPER_INSTRUCTIONS,
-	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
-	hasFirstPartyOmxMcpRegistrations,
-	extractFirstPartyOmxMcpSections,
-	stripFirstPartyOmxMcpSections,
-} from "../config/generator.js";
+	getCatalogAgentStatusByName,
+	getInstallableNativeAgentNames,
+	isNativeAgentInstallableStatus,
+	isSetupPromptAssetName,
+} from "../agents/policy.js";
+import { tryReadCatalogManifest } from "../catalog/reader.js";
 import type { CodexHookFeatureFlag } from "../config/codex-feature-flags.js";
 import {
 	buildManagedCodexNativeHookWindowsShimContent,
 	buildManagedCodexNativeHookWindowsShimPath,
-	planManagedCodexHooksMerge,
-	planManagedCodexHooksRemoval,
 	classifyManagedCodexNativeHookWindowsShimOwnership,
 	ManagedCodexHooksPlanError,
 	type ManagedCodexHookTrustState,
+	planManagedCodexHooksMerge,
+	planManagedCodexHooksRemoval,
 	validateCodexHooksConfigStrict,
 } from "../config/codex-hooks.js";
-
+import {
+	buildMergedConfig,
+	extractFirstPartyOmxMcpSections,
+	getRootModelName,
+	getRootTomlArray,
+	hasFirstPartyOmxMcpRegistrations,
+	hasLegacyOmxTeamRunTable,
+	isOmxManagedNotifyCommand,
+	mergeSharedMcpRegistryBlock,
+	OMX_DEVELOPER_INSTRUCTIONS,
+	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
+	sanitizePreviousNotifyCommand,
+	stripExistingOmxBlocks,
+	stripExistingSharedMcpRegistryBlock,
+	stripFirstPartyOmxMcpSections,
+	stripManagedCodexHookTrustState,
+	stripOmxEnvSettings,
+	stripOmxFeatureFlags,
+	stripOmxSeededBehavioralDefaults,
+	upsertManagedCodexHookTrustState,
+	upsertPluginModeRuntimeFeatureFlags,
+} from "../config/generator.js";
 import {
 	getLegacyUnifiedMcpRegistryCandidate,
 	getUnifiedMcpRegistryCandidates,
@@ -102,20 +81,14 @@ import {
 	planClaudeCodeMcpSettingsSync,
 	type UnifiedMcpRegistryLoadResult,
 } from "../config/mcp-registry.js";
-import { generateAgentToml } from "../agents/native-config.js";
-import { AGENT_DEFINITIONS } from "../agents/definitions.js";
-import {
-	getCatalogAgentStatusByName,
-	getInstallableNativeAgentNames,
-	isNativeAgentInstallableStatus,
-	isSetupPromptAssetName,
-} from "../agents/policy.js";
-import { getPackageRoot } from "../utils/package.js";
-import { readSessionState, isSessionStale } from "../hooks/session.js";
-import { getCatalogHeadlineCounts } from "./catalog-contract.js";
-import { tryReadCatalogManifest } from "../catalog/reader.js";
 import { DEFAULT_FRONTIER_MODEL } from "../config/models.js";
-import { teamModeEnabled, type SetupTeamMode } from "../config/team-mode.js";
+import { type SetupTeamMode, teamModeEnabled } from "../config/team-mode.js";
+import {
+	readSessionPointer,
+	resolveSessionPointerContext,
+	type SessionState,
+} from "../hooks/session.js";
+import { DEFAULT_HUD_CONFIG, type HudPreset } from "../hud/types.js";
 import {
 	addGeneratedAgentsMarker,
 	hasOmxAgentsContract,
@@ -124,32 +97,60 @@ import {
 	preserveUserOmxPolicyBlocks,
 	upsertManagedAgentsBlock,
 } from "../utils/agents-md.js";
-import { DEFAULT_HUD_CONFIG, type HudPreset } from "../hud/types.js";
 import {
-	SETUP_INSTALL_MODES,
-	SETUP_MCP_MODES,
-	SETUP_SCOPES,
-	getSetupScopeFilePath,
-	readPersistedSetupPreferences,
-	resolvePersistedSetupMergeAgents,
-	writePersistedSetupPreferences,
-	type PersistedSetupScope,
-	type SetupInstallMode,
-	type SetupMcpMode,
-	type SetupScope,
-} from "./setup-preferences.js";
+	emitDegradedDurabilityWarning,
+	type RegularFileDurabilityTracker,
+	type RegularFileSyncOutcome,
+	recordRegularFileSyncOutcome,
+	syncRegularFile,
+} from "../utils/file-durability.js";
+import { getPackageRoot } from "../utils/package.js";
 import {
+	codexAgentsDir,
+	codexConfigPath,
+	codexHome,
+	codexPromptsDir,
+	detectLegacySkillRootOverlap,
+	omxLogsDir,
+	omxPlansDir,
+	omxStateDir,
+	userSkillsDir,
+} from "../utils/paths.js";
+import { getCatalogHeadlineCounts } from "./catalog-contract.js";
+import { resolveCodexHookFeatureSupportForCli } from "./codex-feature-probe.js";
+import {
+	clearNativeHookClaimJournal as clearNativeHookClaimJournalWithDurability,
+	createNativeHookClaimJournalDurability,
+	type NativeHookClaimJournalDurability,
+	persistNativeHookClaimJournal as persistNativeHookClaimJournalWithDurability,
+	recoverNativeHookClaimJournal,
+	restoreNativeHookClaimNoClobber as restoreNativeHookClaimNoClobberWithDurability,
+	syncNativeHookClaimParent as syncNativeHookClaimParentWithDurability,
+} from "./native-hook-claim-journal.js";
+import {
+	hasLocalOmxPluginMcpServerRegistrations,
+	materializePackagedOmxPluginCache,
 	OMX_LOCAL_MARKETPLACE_NAME,
 	OMX_PLUGIN_NAME,
-	materializePackagedOmxPluginCache,
+	pluginHookCacheMatchesPackaged,
 	resolvePackagedOmxMarketplace,
 	upsertLocalOmxMarketplaceRegistration,
 	upsertLocalOmxPluginEnablement,
 	upsertLocalOmxPluginMcpServerEnablement,
-	hasLocalOmxPluginMcpServerRegistrations,
-	pluginHookCacheMatchesPackaged,
 } from "./plugin-marketplace.js";
-import { resolveCodexHookFeatureSupportForCli } from "./codex-feature-probe.js";
+import {
+	getSetupScopeFilePath,
+	type PersistedSetupScope,
+	readPersistedSetupPreferences,
+	resolvePersistedSetupMergeAgents,
+	SETUP_INSTALL_MODES,
+	SETUP_MCP_MODES,
+	SETUP_SCOPES,
+	type SetupInstallMode,
+	type SetupMcpMode,
+	type SetupScope,
+	writePersistedSetupPreferences,
+} from "./setup-preferences.js";
 
 async function resolveStatusLinePresetForSetup(
 	projectRoot: string,
@@ -173,6 +174,7 @@ async function resolveStatusLinePresetForSetup(
 	}
 	return undefined;
 }
+
 import {
 	resolveAgentsModelTableContext,
 	upsertAgentsModelTable,
@@ -222,9 +224,9 @@ interface SetupOptions {
 	mcpRegistryCandidates?: string[];
 }
 
-export { SETUP_INSTALL_MODES, SETUP_MCP_MODES, SETUP_SCOPES };
 export { SETUP_TEAM_MODES, type SetupTeamMode } from "../config/team-mode.js";
 export type { SetupInstallMode, SetupMcpMode, SetupScope };
+export { SETUP_INSTALL_MODES, SETUP_MCP_MODES, SETUP_SCOPES };
 
 export interface ScopeDirectories {
 	codexConfigFile: string;
@@ -4694,11 +4696,21 @@ export async function setup(options: SetupOptions = {}): Promise<void> {
 
 	// Step 6: Generate AGENTS.md
 	console.log("[6/8] Generating AGENTS.md...");
-	const activeSession =
-		resolvedScope.scope === "project"
-			? await readSessionState(projectRoot)
-			: null;
-	const sessionIsActive = activeSession && !isSessionStale(activeSession);
+	let activeSession: SessionState | null = null;
+	let sessionIsActive = false;
+	if (resolvedScope.scope === "project") {
+		try {
+			const sessionPointer = await readSessionPointer(
+				resolveSessionPointerContext(projectRoot),
+			);
+			activeSession = sessionPointer.state ?? null;
+			sessionIsActive =
+				sessionPointer.status === "usable" ||
+				sessionPointer.status === "identity-indeterminate";
+		} catch {
+			// Preserve legacy fail-open behavior when session state cannot be read.
+		}
+	}
 	if (isPluginInstallMode) {
 		const agentsMdSrc = join(pkgRoot, "templates", "AGENTS.md");
 		const pluginAgentsMdExists = pluginAgentsMdPathExists;

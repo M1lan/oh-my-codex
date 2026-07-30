@@ -166,6 +166,7 @@ function runNotifyHookAsWorker(
 			env: {
 				...process.env,
 				PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+				OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 				OMX_TEAM_WORKER: workerEnv,
 				OMX_TEAM_WORKER_IDLE_COOLDOWN_MS: "500",
 				OMX_TEAM_ALL_IDLE_COOLDOWN_MS: "600000", // suppress all-idle to isolate per-worker
@@ -1271,6 +1272,7 @@ exit 0
 					env: {
 						...process.env,
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 						OMX_TEAM_WORKER: "",
 						TMUX: "",
 						TMUX_PANE: "",

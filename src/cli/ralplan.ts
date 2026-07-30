@@ -1,13 +1,14 @@
+import { neutralizeOwnedRoutingRalplan } from "../ralplan/documented-leader-preflight.js";
 import { resolveInstalledRoleName } from "../subagents/tracker.js";
-import { cancelMode } from "../modes/base.js";
 
-export const RALPLAN_HELP = `omx ralplan - RALPLAN consensus support commands
+export const RALPLAN_HELP = `omx ralplan - fail-closed adapted-authority diagnostics
 
 Usage:
   omx ralplan preflight [--json]
+                Required only when native role routing is unavailable and adapted Ralplan authority is requested.
+                Ordinary work remains under its own workflow gates.
   omx ralplan role-intent write --role <role> --parent-thread <id> [--session <id>] [--ttl-ms <n>] [--json]
-
-preflight and role-intent write fail closed on adapted Codex surfaces because Codex 0.144.5 does not document leader proof.
+                Compatibility diagnostic only: installed roles are denied with unsupported_documented_leader_proof.
 `;
 
 type RoleIntentFailureReason =
@@ -23,10 +24,11 @@ interface ParsedRoleIntentWriteArgs {
 }
 
 export interface RalplanCommandDependencies {
+	cwd?: () => string;
 	stdout?: (line: string) => void;
 	stderr?: (line: string) => void;
 	resolveInstalledRoleName?: typeof resolveInstalledRoleName;
-	cancelRalplan?: (cwd?: string) => Promise<void>;
+	neutralizeOwnedRoutingRalplan?: (cwd: string) => Promise<boolean>;
 }
 
 export async function ralplanCommand(
@@ -48,9 +50,10 @@ export async function ralplanCommand(
 			throw new Error(
 				`Unknown ralplan preflight argument: ${args.slice(1).join(" ")}`,
 			);
-		await (
-			deps.cancelRalplan ?? ((cwd?: string) => cancelMode("ralplan", cwd))
-		)(process.cwd());
+		await (deps.neutralizeOwnedRoutingRalplan ?? neutralizeOwnedRoutingRalplan)(
+			(deps.cwd ?? process.cwd)(),
+		);
+
 		const failure = {
 			ok: false,
 			reason: "unsupported_documented_leader_proof" as const,
@@ -61,19 +64,22 @@ export async function ralplanCommand(
 		process.exitCode = 1;
 		return;
 	}
-
-	if (args[0] !== "role-intent" || args[1] !== "write") {
+	if (args[0] !== "role-intent" || args[1] !== "write")
 		throw new Error(
 			`Unknown ralplan command: ${args.join(" ")}\n${RALPLAN_HELP}`,
 		);
-	}
 
 	const parsed = parseRoleIntentWriteArgs(args.slice(2));
-	const role = (deps.resolveInstalledRoleName ?? resolveInstalledRoleName)(
-		parsed.role,
-	);
+	const cwd = (deps.cwd ?? process.cwd)();
+	const installedRole = (
+		deps.resolveInstalledRoleName ?? resolveInstalledRoleName
+	)(parsed.role, undefined, cwd);
+	if (!installedRole) {
+		emitRoleIntentFailure("unknown_role", parsed.json, stdout, stderr);
+		return;
+	}
 	emitRoleIntentFailure(
-		role ? "unsupported_documented_leader_proof" : "unknown_role",
+		"unsupported_documented_leader_proof",
 		parsed.json,
 		stdout,
 		stderr,
@@ -86,7 +92,6 @@ function parseRoleIntentWriteArgs(args: string[]): ParsedRoleIntentWriteArgs {
 	let sessionId: string | undefined;
 	let ttlMs: number | undefined;
 	let json = false;
-
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		if (arg === "--json") {
@@ -109,25 +114,15 @@ function parseRoleIntentWriteArgs(args: string[]): ParsedRoleIntentWriteArgs {
 			index += 1;
 			continue;
 		}
-		if (arg.startsWith("--role=")) {
-			role = arg.slice("--role=".length);
-			continue;
-		}
-		if (arg.startsWith("--parent-thread=")) {
+		if (arg.startsWith("--role=")) role = arg.slice("--role=".length);
+		else if (arg.startsWith("--parent-thread="))
 			parentThreadId = arg.slice("--parent-thread=".length);
-			continue;
-		}
-		if (arg.startsWith("--session=")) {
+		else if (arg.startsWith("--session="))
 			sessionId = arg.slice("--session=".length);
-			continue;
-		}
-		if (arg.startsWith("--ttl-ms=")) {
+		else if (arg.startsWith("--ttl-ms="))
 			ttlMs = parseTtlMs(arg.slice("--ttl-ms=".length));
-			continue;
-		}
-		throw new Error(`Unknown role-intent write argument: ${arg}`);
+		else throw new Error(`Unknown role-intent write argument: ${arg}`);
 	}
-
 	if (!role?.trim()) throw new Error("Missing --role.");
 	if (!parentThreadId?.trim()) throw new Error("Missing --parent-thread.");
 	return {
@@ -141,9 +136,8 @@ function parseRoleIntentWriteArgs(args: string[]): ParsedRoleIntentWriteArgs {
 
 function parseTtlMs(value: string): number {
 	const ttlMs = Number(value);
-	if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+	if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0)
 		throw new Error("--ttl-ms must be a positive integer.");
-	}
 	return ttlMs;
 }
 

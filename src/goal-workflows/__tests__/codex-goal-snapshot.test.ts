@@ -1,8 +1,8 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
 import {
 	CodexGoalSnapshotError,
 	parseCodexGoalSnapshot,
@@ -131,6 +131,65 @@ describe("codex goal snapshot reconciliation", () => {
 
 		assert.equal(result.ok, true);
 		assert.deepEqual(result.errors, []);
+	});
+	it("preserves native blocked status instead of coercing it to unknown", () => {
+		const snapshot = parseCodexGoalSnapshot({
+			goal: { objective: "Ship blocked path", status: "blocked" },
+		});
+
+		assert.equal(snapshot.available, true);
+		assert.equal(snapshot.status, "blocked");
+		assert.equal(
+			(snapshot.raw as { goal?: { status?: string } }).goal?.status,
+			"blocked",
+		);
+	});
+
+	it("reconciles blocked when allowed and fails closed without calling it unknown", () => {
+		const allowed = reconcileCodexGoalSnapshot(
+			parseCodexGoalSnapshot({
+				goal: { objective: "Expected objective", status: "blocked" },
+			}),
+			{
+				expectedObjective: "Expected objective",
+				requireSnapshot: true,
+				allowedStatuses: ["blocked"],
+			},
+		);
+		assert.equal(allowed.ok, true);
+		assert.equal(allowed.snapshot.status, "blocked");
+
+		const excluded = reconcileCodexGoalSnapshot(
+			parseCodexGoalSnapshot({
+				goal: { objective: "Expected objective", status: "blocked" },
+			}),
+			{
+				expectedObjective: "Expected objective",
+				requireSnapshot: true,
+				allowedStatuses: ["active", "complete"],
+			},
+		);
+		assert.equal(excluded.ok, false);
+		assert.match(excluded.errors.join("\n"), /got blocked/);
+		assert.doesNotMatch(excluded.errors.join("\n"), /got unknown/);
+		assert.equal(
+			(excluded.snapshot.raw as { goal?: { status?: string } }).goal?.status,
+			"blocked",
+		);
+	});
+
+	it("preserves normalized blocked status when a parsed snapshot is re-parsed", () => {
+		const first = parseCodexGoalSnapshot({
+			goal: { objective: "Ship blocked path", status: "blocked" },
+		});
+		const second = parseCodexGoalSnapshot(first);
+		assert.equal(second.status, "blocked");
+		assert.equal((second.raw as { status?: string }).status, "blocked");
+		assert.equal(
+			(second.raw as { raw?: { goal?: { status?: string } } }).raw?.goal
+				?.status,
+			"blocked",
+		);
 	});
 
 	it("reads inline JSON and path input but rejects malformed sources", async () => {

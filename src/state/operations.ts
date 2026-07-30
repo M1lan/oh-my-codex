@@ -11,6 +11,8 @@ import { dirname, join } from "node:path";
 
 import { withModeRuntimeContext } from "./mode-state-context.js";
 import {
+	createWritableCommitRevalidator,
+	getStateFilename,
 	getAllScopedStatePaths,
 	getAuthoritativeActiveStateDirs,
 	getBaseStateDir,
@@ -24,6 +26,8 @@ import {
 	resolveWorkingDirectoryForState,
 	validateSessionId,
 	validateStateModeSegment,
+	type BeforeWritableCommit,
+	type ResolvedStateScope,
 	type StateRootSource,
 } from "../mcp/state-paths.js";
 import { evaluateRalphCompletionAuditEvidence } from "../ralph/completion-audit.js";
@@ -176,6 +180,7 @@ async function writeClearedSessionScopedModeState(
 	path: string,
 	mode: string,
 	sessionId: string,
+	beforeCommit?: BeforeWritableCommit,
 ): Promise<void> {
 	const nowIso = new Date().toISOString();
 	const clearedState = withModeRuntimeContext(
@@ -189,19 +194,28 @@ async function writeClearedSessionScopedModeState(
 			session_id: sessionId,
 		},
 	);
-	await writeAtomicFile(path, JSON.stringify(clearedState, null, 2));
+	const payload = JSON.stringify(clearedState, null, 2);
+	await beforeCommit?.({ site: "state-clear.primary", kind: "write", path });
+	await writeAtomicFile(path, payload);
 }
 
 async function clearSessionNativeStopState(
 	baseStateDir: string,
 	sessionId: string,
+	beforeCommit?: BeforeWritableCommit,
 ): Promise<string[]> {
 	const paths = [
-		join(baseStateDir, "native-stop-state.json"),
-		join(baseStateDir, "sessions", sessionId, "native-stop-state.json"),
+		{
+			path: join(baseStateDir, "native-stop-state.json"),
+			site: "native-stop.root" as const,
+		},
+		{
+			path: join(baseStateDir, "sessions", sessionId, "native-stop-state.json"),
+			site: "native-stop.session" as const,
+		},
 	];
 	const changed: string[] = [];
-	for (const path of paths) {
+	for (const { path, site } of paths) {
 		if (!existsSync(path)) continue;
 		let state: Record<string, unknown>;
 		try {
@@ -222,7 +236,9 @@ async function clearSessionNativeStopState(
 			continue;
 		delete sessions[sessionId];
 		state.sessions = sessions;
-		await writeAtomicFile(path, JSON.stringify(state, null, 2));
+		const payload = JSON.stringify(state, null, 2);
+		await beforeCommit?.({ site, kind: "write", path });
+		await writeAtomicFile(path, payload);
 		changed.push(path);
 	}
 	return changed;
@@ -647,10 +663,16 @@ function collectCompletedRalplanSessionEntries(
 	return [...entries.values()];
 }
 
-async function writeAtomicJson(path: string, value: unknown): Promise<void> {
+function serializeAtomicJson(value: unknown): string {
 	const serialized = JSON.stringify(value, null, 2);
 	JSON.parse(serialized);
-	await mkdir(dirname(path), { recursive: true });
+	return serialized;
+}
+
+async function writeAtomicJson(
+	path: string,
+	serialized: string,
+): Promise<void> {
 	await writeAtomicFile(path, serialized);
 }
 
@@ -680,12 +702,18 @@ export async function completeRalplanSession(options: {
 	state: Record<string, unknown>;
 	explicitSessionId?: string;
 	requireNativeSubagents?: boolean;
+	beforeCommit?: BeforeWritableCommit;
+	capturedScope?: ResolvedStateScope;
 }): Promise<boolean> {
+	if (options.beforeCommit && !options.capturedScope) {
+		throw new Error(
+			"completeRalplanSession requires capturedScope when beforeCommit is provided",
+		);
+	}
 	if (!isCompleteRalplanTerminalState(options.state)) return false;
-	const writableScope = await resolveWritableStateScope(
-		options.cwd,
-		options.explicitSessionId,
-	);
+	const writableScope =
+		options.capturedScope ??
+		(await resolveWritableStateScope(options.cwd, options.explicitSessionId));
 	const sessionId = writableScope.sessionId;
 	const validationError = validateRalplanTerminalConsensus(
 		options.cwd,
@@ -697,13 +725,22 @@ export async function completeRalplanSession(options: {
 	);
 	if (validationError) throw new Error(validationError);
 
+	const beforeCommit =
+		options.beforeCommit ??
+		createWritableCommitRevalidator({
+			operation: "completeRalplanSession",
+			cwd: options.cwd,
+			explicitSessionId: options.explicitSessionId,
+			capturedScope: writableScope,
+			baseStateDir: options.baseStateDir,
+		});
 	const completedSessionId =
 		sessionId ?? optionalSessionId(options.state.session_id);
 	const rootScopeCompletion = !sessionId;
 
 	const nowIso = new Date().toISOString();
 	const rootState = buildRalplanTerminalState(options.state, sessionId, nowIso);
-	const rootStatePath = getStatePath("ralplan", options.cwd);
+	const rootStatePath = join(options.baseStateDir, getStateFilename("ralplan"));
 	const existingRootState = await readJsonRecordIfExists(rootStatePath);
 	const shouldWriteRootState = shouldWriteRootRalplanTerminalState(
 		existingRootState,
@@ -711,13 +748,33 @@ export async function completeRalplanSession(options: {
 	);
 
 	if (shouldWriteRootState) {
-		await writeAtomicJson(rootStatePath, rootState);
+		const rootStatePayload = serializeAtomicJson(rootState);
+		await mkdir(dirname(rootStatePath), { recursive: true });
+		await beforeCommit({
+			site: "ralplan.root-state",
+			kind: "write",
+			path: rootStatePath,
+		});
+		await writeAtomicJson(rootStatePath, rootStatePayload);
 	}
 	if (sessionId) {
-		await writeAtomicJson(
-			getStatePath("ralplan", options.cwd, sessionId),
-			buildRalplanTerminalState(options.state, sessionId, nowIso),
+		const sessionStatePath = join(
+			writableScope.stateDir,
+			getStateFilename("ralplan"),
 		);
+		const sessionState = buildRalplanTerminalState(
+			options.state,
+			sessionId,
+			nowIso,
+		);
+		const sessionStatePayload = serializeAtomicJson(sessionState);
+		await mkdir(dirname(sessionStatePath), { recursive: true });
+		await beforeCommit({
+			site: "ralplan.session-state",
+			kind: "write",
+			path: sessionStatePath,
+		});
+		await writeAtomicJson(sessionStatePath, sessionStatePayload);
 	}
 
 	const { rootPath, sessionPath } = getSkillActiveStatePathsForStateDir(
@@ -734,21 +791,33 @@ export async function completeRalplanSession(options: {
 		rootEntries.length > 0 ||
 		(shouldWriteRootState && rootSkillState !== null)
 	) {
-		await writeAtomicJson(
-			rootPath,
-			buildRalplanSkillStateFromEntries(
-				rootSkillState,
-				rootState,
-				rootEntries,
-				undefined,
-				nowIso,
-			),
+		const nextRootSkillState = buildRalplanSkillStateFromEntries(
+			rootSkillState,
+			rootState,
+			rootEntries,
+			undefined,
+			nowIso,
 		);
+		const rootSkillStatePayload = serializeAtomicJson(nextRootSkillState);
+		await mkdir(dirname(rootPath), { recursive: true });
+		await beforeCommit({
+			site: "ralplan.root-skill-write",
+			kind: "write",
+			path: rootPath,
+		});
+		await writeAtomicJson(rootPath, rootSkillStatePayload);
 	} else if (
 		rootSkillState !== null &&
 		!isTerminalSkillActiveTombstone(rootSkillState)
 	) {
-		await unlink(rootPath).catch(() => {});
+		await beforeCommit({
+			site: "ralplan.root-skill-unlink",
+			kind: "unlink",
+			path: rootPath,
+		});
+		await unlink(rootPath).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+		});
 	}
 	if (sessionPath && sessionId) {
 		const sessionSkillState = await readSkillActiveState(sessionPath);
@@ -758,8 +827,7 @@ export async function completeRalplanSession(options: {
 			sessionId,
 		);
 		if (sessionEntries.length > 0 || sessionSkillState !== null) {
-			await writeAtomicJson(
-				sessionPath,
+			const nextSessionSkillState =
 				sessionEntries.length > 0
 					? buildRalplanSkillStateFromEntries(
 							sessionSkillState ?? rootSkillState,
@@ -773,8 +841,17 @@ export async function completeRalplanSession(options: {
 							rootState,
 							sessionId,
 							nowIso,
-						),
+						);
+			const sessionSkillStatePayload = serializeAtomicJson(
+				nextSessionSkillState,
 			);
+			await mkdir(dirname(sessionPath), { recursive: true });
+			await beforeCommit({
+				site: "ralplan.session-skill-write",
+				kind: "write",
+				path: sessionPath,
+			});
+			await writeAtomicJson(sessionPath, sessionSkillStatePayload);
 		}
 	}
 	return true;
@@ -980,7 +1057,16 @@ export async function executeStateOperation(
 				const mode = validateStateModeSegment(rawArgs.mode);
 				const { baseStateDir, rootSource } = getBaseStateDirWithSource(cwd);
 				await initializeStateEnvironment(cwd, effectiveSessionId, rootSource);
-				const path = getStatePath(mode, cwd, effectiveSessionId);
+				const beforeCommit = createWritableCommitRevalidator({
+					operation: "state_write",
+					cwd,
+					explicitSessionId,
+					capturedScope: stateScope,
+					baseStateDir,
+				});
+				// Write to the exact resolved scope directory; never recompute the
+				// target root/path after authorization.
+				const path = join(stateScope.stateDir, getStateFilename(mode));
 
 				const {
 					mode: _mode,
@@ -1262,6 +1348,7 @@ export async function executeStateOperation(
 								sessionId: effectiveSessionId,
 								source: "state-operations",
 								baseStateDir,
+								beforeCommit,
 								...(transitionCurrentModes
 									? { currentModes: transitionCurrentModes }
 									: {}),
@@ -1274,7 +1361,9 @@ export async function executeStateOperation(
 					}
 
 					const merged = withModeRuntimeContext(existing, mergedRaw);
-					await writeAtomicFile(path, JSON.stringify(merged, null, 2));
+					const payload = JSON.stringify(merged, null, 2);
+					await beforeCommit({ site: "mode.primary", kind: "write", path });
+					await writeAtomicFile(path, payload);
 				});
 
 				if (validationError) {
@@ -1291,6 +1380,8 @@ export async function executeStateOperation(
 							baseStateDir,
 							state,
 							effectiveSessionId,
+							undefined,
+							{ beforeCommit },
 						);
 					}
 				} else {
@@ -1313,6 +1404,8 @@ export async function executeStateOperation(
 							state: data,
 							explicitSessionId,
 							requireNativeSubagents: true,
+							beforeCommit,
+							capturedScope: stateScope,
 						}));
 
 					if (!ralplanCompletionHandled) {
@@ -1327,6 +1420,7 @@ export async function executeStateOperation(
 									: undefined,
 							sessionId: effectiveSessionId,
 							source: "state-operations",
+							beforeCommit,
 						});
 					}
 				}
@@ -1388,7 +1482,14 @@ export async function executeStateOperation(
 				);
 				const effectiveSessionId = stateScope.sessionId;
 				await initializeStateEnvironment(cwd, effectiveSessionId, rootSource);
-				const path = getStatePath(mode, cwd, effectiveSessionId);
+				const beforeCommit = createWritableCommitRevalidator({
+					operation: "state_clear",
+					cwd,
+					explicitSessionId,
+					capturedScope: stateScope,
+					baseStateDir,
+				});
+				const path = join(stateScope.stateDir, getStateFilename(mode));
 				if (
 					mode !== SKILL_ACTIVE_STATE_MODE &&
 					effectiveSessionId &&
@@ -1398,12 +1499,22 @@ export async function executeStateOperation(
 						path,
 						mode,
 						effectiveSessionId,
+						beforeCommit,
 					);
 				} else if (existsSync(path)) {
+					await beforeCommit({
+						site: "state-clear.primary",
+						kind: "unlink",
+						path,
+					});
 					await unlink(path);
 				}
 				const nativeStopCleared = effectiveSessionId
-					? await clearSessionNativeStopState(baseStateDir, effectiveSessionId)
+					? await clearSessionNativeStopState(
+							baseStateDir,
+							effectiveSessionId,
+							beforeCommit,
+						)
 					: [];
 				if (mode !== SKILL_ACTIVE_STATE_MODE) {
 					await syncCanonicalSkillStateForMode({
@@ -1413,6 +1524,7 @@ export async function executeStateOperation(
 						active: false,
 						sessionId: effectiveSessionId,
 						source: "state-operations",
+						beforeCommit,
 					});
 				}
 				return {

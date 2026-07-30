@@ -1,7 +1,7 @@
 import { randomBytes } from "crypto";
-import { dirname } from "path";
-import { readFile, rename, rm, writeFile, chmod } from "fs/promises";
 import { existsSync } from "fs";
+import { chmod, readFile, rename, rm, writeFile } from "fs/promises";
+import { dirname } from "path";
 import {
 	AUTH_FILE_MODE,
 	assertNoSymlink,
@@ -154,11 +154,11 @@ export async function useSlot(
 	const safeSlot = validateSlotName(slot);
 	const slotPath = resolveSlotPath(safeSlot, home);
 	await assertReadableFile(slotPath, `auth slot ${safeSlot}`);
+	const metadata = await readAuthMetadata(home);
 	await ensurePrivateDir(dirname(liveAuthPath));
 	await assertNoSymlink(liveAuthPath, "live Codex auth.json");
 	const data = await readFile(slotPath);
 	await atomicWriteFile(liveAuthPath, data, { mode: AUTH_FILE_MODE });
-	const metadata = await readAuthMetadata(home);
 	const record = upsertSlotRecord(metadata, safeSlot, now.toISOString());
 	record.lastUsedAt = now.toISOString();
 	delete record.exhaustedAt;

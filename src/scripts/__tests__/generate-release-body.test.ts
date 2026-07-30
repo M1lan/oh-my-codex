@@ -16,7 +16,12 @@ function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = {}): string {
 	const result = spawnSync("git", args, {
 		cwd,
 		encoding: "utf-8",
-		env: { ...process.env, ...env },
+		env: {
+			...process.env,
+			GIT_CONFIG_GLOBAL: join(cwd, ".gitconfig-global-disabled"),
+			GIT_CONFIG_NOSYSTEM: "1",
+			...env,
+		},
 	});
 	assert.equal(result.status, 0, result.stderr || result.stdout);
 	return String(result.stdout || "").trim();

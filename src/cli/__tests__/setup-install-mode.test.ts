@@ -1,4 +1,3 @@
-import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
 	existsSync,
@@ -15,42 +14,43 @@ import {
 	lstat,
 	mkdir,
 	mkdtemp,
-	readFile,
 	readdir,
+	readFile,
 	rm,
+	stat,
 	symlink,
 	writeFile,
-	stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { after, before, describe, it } from "node:test";
 import { parse as parseToml } from "@iarna/toml";
 import {
-	decideWindowsNativeHookShimReference,
-	setNativeHookTransactionFailureInjectorForTest,
-	setSetupLatePhaseFailureInjectorForTest,
-	setNativeHookTransactionPlatformForTest,
-	setNativeHookTransactionRegularFileSyncForTest,
-	setNativeHookTransactionTemporaryPathForTest,
-	setup,
-} from "../setup.js";
-import { resolveSetupRefreshArgs } from "../update.js";
-import { uninstall } from "../uninstall.js";
-import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../../config/omx-first-party-mcp.js";
+	buildManagedCodexHooksConfig,
+	buildManagedCodexHookTrustState,
+	buildManagedCodexNativeHookWindowsShimContent,
+	buildManagedCodexNativeHookWindowsShimPath,
+} from "../../config/codex-hooks.js";
 import {
 	OMX_DEVELOPER_INSTRUCTIONS,
 	OMX_PLUGIN_DEVELOPER_INSTRUCTIONS,
 } from "../../config/generator.js";
+import { OMX_FIRST_PARTY_MCP_SERVER_NAMES } from "../../config/omx-first-party-mcp.js";
 import {
 	materializePackagedOmxPluginCache,
 	resolvePackagedOmxMarketplace,
 } from "../plugin-marketplace.js";
 import {
-	buildManagedCodexHookTrustState,
-	buildManagedCodexHooksConfig,
-	buildManagedCodexNativeHookWindowsShimContent,
-	buildManagedCodexNativeHookWindowsShimPath,
-} from "../../config/codex-hooks.js";
+	decideWindowsNativeHookShimReference,
+	setNativeHookTransactionFailureInjectorForTest,
+	setNativeHookTransactionPlatformForTest,
+	setNativeHookTransactionRegularFileSyncForTest,
+	setNativeHookTransactionTemporaryPathForTest,
+	setSetupLatePhaseFailureInjectorForTest,
+	setup,
+} from "../setup.js";
+import { uninstall } from "../uninstall.js";
+import { resolveSetupRefreshArgs } from "../update.js";
 
 const packageRoot = process.cwd();
 let previousPathForFakeCodex: string | undefined;
@@ -2122,11 +2122,22 @@ describe("omx setup install mode behavior", () => {
 						config,
 						/When the native surface exposes `agent_type` role routing, set `agent_type` to an installed role and never omit it for OMX work/i,
 					);
-					assert.match(config, /role_routing_unavailable/i);
+					assert.match(
+						config,
+						/When it reports `role_routing_unavailable` and adapted Ralplan authority is requested/i,
+					);
 					assert.match(config, /do not fabricate `agent_type`/i);
 					assert.match(config, /omx ralplan preflight --json/i);
 					assert.match(config, /unsupported_documented_leader_proof/i);
+					assert.match(
+						config,
+						/Ordinary work remains under its own workflow gates/i,
+					);
 					assert.match(config, /never fake the role via a prompt label/i);
+					assert.doesNotMatch(
+						config,
+						/before Ralplan planning, state, HUD, runtime, or delegation work, run `omx ralplan preflight --json`/i,
+					);
 					assert.doesNotMatch(
 						config,
 						/Native subagents live in \.codex\/agents/,
@@ -2317,8 +2328,20 @@ describe("omx setup install mode behavior", () => {
 						config,
 						/When the native surface exposes `agent_type` role routing, set `agent_type` to an installed role and never omit it for OMX work/i,
 					);
-					assert.match(config, /role_routing_unavailable/i);
+					assert.match(
+						config,
+						/When it reports `role_routing_unavailable` and adapted Ralplan authority is requested/i,
+					);
+					assert.match(
+						config,
+						/Ordinary work remains under its own workflow gates/i,
+					);
 					assert.match(config, /omx ralplan preflight --json/i);
+					assert.match(config, /unsupported_documented_leader_proof/i);
+					assert.doesNotMatch(
+						config,
+						/before Ralplan planning, state, HUD, runtime, or delegation work, run `omx ralplan preflight --json`/i,
+					);
 					assert.equal(
 						(config.match(/^developer_instructions\s*=/gm) ?? []).length,
 						1,

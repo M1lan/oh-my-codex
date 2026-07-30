@@ -22,6 +22,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildTmuxSessionName } from "../../cli/index.js";
+import { defaultProcessInspectionProvider } from "../session.js";
 
 const NOTIFY_HOOK_SCRIPT = new URL(
 	"../../../dist/scripts/notify-hook.js",
@@ -167,14 +168,25 @@ async function setupFixture(
 	await mkdir(logsDir, { recursive: true });
 	await mkdir(fakeBinDir, { recursive: true });
 
+	const observation = defaultProcessInspectionProvider.observeProcess(
+		process.pid,
+		process.platform,
+	);
 	await writeJson(join(stateDir, "session.json"), {
 		session_id: sessionId,
 		started_at: new Date().toISOString(),
 		cwd,
 		pid: process.pid,
 		platform: process.platform,
-		pid_start_ticks: readLinuxStartTicks(process.pid),
-		pid_cmdline: readLinuxCmdline(process.pid),
+		...(observation.kind === "identity"
+			? {
+					identity_schema_version: 2,
+					process_identity: observation.identity,
+				}
+			: {
+					pid_start_ticks: readLinuxStartTicks(process.pid),
+					pid_cmdline: readLinuxCmdline(process.pid),
+				}),
 	});
 	await writeJson(join(sessionStateDir, "ralph-state.json"), {
 		active: true,
@@ -220,6 +232,7 @@ function runNotifyHook(cwd: string, fakeBinDir: string, threadId: string) {
 			env: {
 				...process.env,
 				PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+				OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 				OMX_TEAM_WORKER: "",
 				OMX_SESSION_ID: "omx-scroll-test",
 				OMX_TEST_TMUX_SESSION_NAME: buildTmuxSessionName(

@@ -393,6 +393,7 @@ function runNotifyHook(
 			env: {
 				...process.env,
 				PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+				OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 				OMX_TEAM_LEADER_NUDGE_MS: "10000",
 				OMX_TEAM_LEADER_STALE_MS: "10000",
 				OMX_TEAM_WORKER: "",
@@ -1648,6 +1649,7 @@ exit 0
 				await withProcessEnv(
 					{
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 						OMX_TEAM_LEADER_NUDGE_MS: "10000",
 						OMX_TEAM_LEADER_STALE_MS: "10000",
 					},
@@ -1740,6 +1742,7 @@ exit 0
 				await withProcessEnv(
 					{
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 						OMX_TEAM_LEADER_NUDGE_MS: "10000",
 						OMX_TEAM_LEADER_STALE_MS: "10000",
 					},
@@ -1817,6 +1820,7 @@ exit 0
 				await withProcessEnv(
 					{
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: join(fakeBinDir, "tmux"),
 						OMX_TEAM_LEADER_NUDGE_MS: "10000",
 						OMX_TEAM_LEADER_STALE_MS: "10000",
 					},
@@ -1978,7 +1982,10 @@ exit 0
 			const tmuxLog = await readFile(tmuxLogPath, "utf-8");
 			assert.match(tmuxLog, /display-message -p -t %93 #\{pane_in_mode\}/);
 			assert.match(tmuxLog, /capture-pane -t %93 -p -S -80/);
-			assert.match(tmuxLog, /send-keys -t %93 -l .*Team busy-live-pane:/);
+			assert.match(
+				tmuxLog,
+				/send-keys -t %93 -l \[omx:team-notice-ledger:[a-f0-9]{24}\] Review current Team notices\./,
+			);
 			assert.match(tmuxLog, /send-keys -t %93 Tab/);
 			assert.match(tmuxLog, /send-keys -t %93 C-m/);
 			assert.ok(
@@ -1990,6 +1997,27 @@ exit 0
 				tmuxLog,
 				/\[OMX_TMUX_INJECT\]/,
 				"should keep the injection marker on busy-pane sends",
+			);
+			assert.doesNotMatch(
+				tmuxLog,
+				/send-keys -t %93 -l .*busy-live-pane/,
+				"busy queued wake must not retain a Team reference in model-visible input",
+			);
+			const ledger = JSON.parse(
+				await readFile(join(stateDir, "team", "notice-ledger.json"), "utf-8"),
+			) as {
+				notices?: Record<
+					string,
+					{ teamName?: string; noticeClass?: string; presentedAt?: string }
+				>;
+			};
+			assert.ok(
+				Object.values(ledger.notices ?? {}).some(
+					(notice) =>
+						notice.teamName === teamName &&
+						notice.noticeClass === "mailbox" &&
+						notice.presentedAt === undefined,
+				),
 			);
 
 			const eventsPath = join(teamDir, "events", "events.ndjson");

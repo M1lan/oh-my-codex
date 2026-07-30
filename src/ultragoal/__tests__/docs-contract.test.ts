@@ -69,6 +69,10 @@ describe("ultragoal docs contract", () => {
 			doc,
 			/must not be used to bypass active-goal mismatch protection/i,
 		);
+		assert.match(
+			doc,
+			/matching native Codex `blocked`|matching native Codex blocked|truthfully `blocked`/i,
+		);
 	});
 
 	it("documents the mandatory final cleanup and review gate", () => {

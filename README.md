@@ -65,7 +65,7 @@ It keeps Codex as the execution engine and makes it easier to:
 
 If you want the default OMX experience, start here:
 
-Choose one install path. If Codex CLI is already installed (Homebrew, npm, or another supported method):
+Choose one install path. If Codex CLI is already installed (Homebrew, pnpm, or another supported method):
 
 ```bash
 codex --version
@@ -74,18 +74,18 @@ pnpm add -g oh-my-codex
 omx --worktree=feat/task --madmax --xhigh
 ```
 
-If you do not have Codex CLI yet and want npm to manage it:
+If you do not have Codex CLI yet and want pnpm to manage it:
 
 ```bash
-npm install -g @openai/codex
+pnpm add -g @openai/codex
 pnpm add -g oh-my-codex
 ```
 
-Do not run a combined `npm install -g @openai/codex oh-my-codex` over an existing Homebrew-owned `codex` binary such as `/opt/homebrew/bin/codex`; npm may fail with `EEXIST` when `@openai/codex` tries to create the same binary. OMX only needs a working, authenticated `codex` command on `PATH`; it does not require Codex to be installed through npm.
+Do not run a combined `pnpm add -g @openai/codex oh-my-codex` over an existing Homebrew-owned `codex` binary such as `/opt/homebrew/bin/codex`; pnpm may fail with `EEXIST` when `@openai/codex` tries to create the same binary. OMX only needs a working, authenticated `codex` command on `PATH`; it does not require Codex to be installed through pnpm.
 
-On a real `oh-my-codex` version bump, the global npm install now prints an explicit reminder instead of launching setup automatically. When you're ready, run the scoped setup command below or use `omx update` to check npm and then run the same setup refresh path.
+On a real `oh-my-codex` version bump, the global pnpm install now prints an explicit reminder instead of launching setup automatically. When you're ready, run the scoped setup command below or use `omx update` to check for updates and then run the same setup refresh path.
 
-OMX also checks for npm updates at launch on a throttled cadence and prompts before scheduling the update after the current session exits. Set `OMX_AUTO_UPDATE=0` to disable the launch-time check, or set `OMX_AUTO_UPDATE=defer` to schedule the same deferred update without prompting.
+OMX also checks for package updates at launch on a throttled cadence and prompts before scheduling the pnpm update after the current session exits. Set `OMX_AUTO_UPDATE=0` to disable the launch-time check, or set `OMX_AUTO_UPDATE=defer` to schedule the same deferred update without prompting.
 
 Choose the setup scope deliberately:
 - Use `omx setup --scope project --merge-agents` from the git project you want OMX to operate on when that repository should own the durable `AGENTS.md` guidance.
@@ -306,8 +306,8 @@ Most users should think of OMX as **better task routing + better workflow + bett
 
 ## Start here if you are new
 
-1. If Codex CLI already exists, verify it with `codex --version` and install or update OMX with `pnpm add -g oh-my-codex`; otherwise install `@openai/codex` separately first if you want npm to manage Codex
-2. After install or real OMX version bumps, run `omx setup --scope project --merge-agents` from the target git project or `omx setup --scope user` for user-level Codex setup, or use `omx update` when you also want npm to check for and install the latest build before refreshing setup
+1. If Codex CLI already exists, verify it with `codex --version` and install or update OMX with `pnpm add -g oh-my-codex`; otherwise install `@openai/codex` separately first if you want pnpm to manage Codex
+2. After install or real OMX version bumps, run `omx setup --scope project --merge-agents` from the target git project or `omx setup --scope user` for user-level Codex setup, or use `omx update` when you also want pnpm to check for and install the latest build before refreshing setup
 3. Run `omx doctor`
 4. Run a real execution smoke test: `codex login status` and `omx exec --skip-git-repo-check -C . "Reply with exactly OMX-EXEC-OK"`
 5. Launch with a named worktree from a git repo, for example `omx --worktree=feat/task --madmax --xhigh`; if you run concurrent `--madmax` sessions, use distinct named worktrees such as `--worktree=feature/auth`

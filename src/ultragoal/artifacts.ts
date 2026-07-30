@@ -8,7 +8,13 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
+import {
+	normalizeSessionId,
+	resolveWritableStateScope,
+	WRITABLE_STATE_SCOPE_ERRORS,
+} from "../mcp/state-paths.js";
+import type { ResolvedStateScope } from "../mcp/state-paths.js";
 import {
 	formatCodexGoalReconciliation,
 	buildCompletedCodexGoalRemediation,
@@ -21,12 +27,22 @@ import {
 	buildUnsupportedNativeSubagentGuidance,
 	type NativeSubagentSupportEvidence,
 } from "../leader/contract.js";
+import { findGitLayout } from "../utils/git-layout.js";
 
 export const ULTRAGOAL_DIR = ".omx/ultragoal";
 export const ULTRAGOAL_BRIEF = "brief.md";
 export const ULTRAGOAL_GOALS = "goals.json";
 export const ULTRAGOAL_LEDGER = "ledger.jsonl";
 const ULTRAGOAL_MUTATION_LOCK = ".mutation.lock";
+
+export type UltragoalWritableAuthority =
+	| {
+			kind: "resolved";
+			source: ResolvedStateScope["source"];
+			sessionId: string | undefined;
+			stateDir: string;
+	  }
+	| { kind: "no-pointer-compat" };
 
 export type UltragoalStatus =
 	| "pending"
@@ -189,6 +205,7 @@ export interface UltragoalPlan {
 	codexGoalMode?: UltragoalCodexGoalMode;
 	codexObjective?: string;
 	codexObjectiveAliases?: string[];
+	statePathPrefix?: string;
 	aggregateCompletion?: UltragoalAggregateCompletion;
 	activeGoalId?: string;
 	goals: UltragoalItem[];
@@ -325,6 +342,31 @@ export function ultragoalLedgerPath(cwd: string): string {
 
 function repoRelative(cwd: string, path: string): string {
 	return relative(cwd, path).split("\\").join("/");
+}
+
+/**
+ * Repo-root-relative prefix for the Ultragoal state directory selected by `cwd`.
+ *
+ * Returns `''` for repository-root launches and for any cwd we cannot bind to a
+ * git worktree root, so root-level behavior stays byte-identical to a plain
+ * `.omx/ultragoal` reference.
+ */
+export function ultragoalStatePathPrefix(cwd: string): string {
+	const worktreeRoot = findGitLayout(cwd)?.worktreeRoot;
+	if (!worktreeRoot) return "";
+	const prefix = repoRelative(worktreeRoot, cwd);
+	if (
+		!prefix ||
+		prefix.startsWith("../") ||
+		prefix === ".." ||
+		isAbsolute(prefix)
+	)
+		return "";
+	return prefix;
+}
+
+function prefixedStatePath(prefix: string, artifact: string): string {
+	return `${prefix ? `${prefix}/` : ""}${ULTRAGOAL_DIR}/${artifact}`;
 }
 
 function cleanLine(line: string): string {
@@ -702,6 +744,7 @@ function isDesignatedReviewBlockerResolver(
 ): boolean {
 	return (
 		parent?.status === "review_blocked" &&
+		parent.id !== goal.id &&
 		goal.resolvesReviewBlockedGoalId === parent.id &&
 		parent.reviewBlockerResolution?.resolverGoalId === goal.id
 	);
@@ -719,6 +762,46 @@ function canUseCleanFinalResolverPathForReviewBlockedParent(
 		finalRunCheckpoint &&
 		!allowActiveFinalCodexGoal &&
 		isDesignatedReviewBlockerResolver(goal, unresolvedReviewBlocked[0])
+	);
+}
+
+function hasReciprocalReviewBlockerResolver(
+	goal: UltragoalItem,
+	plan: UltragoalPlan,
+): boolean {
+	const resolverId = goal.reviewBlockerResolution?.resolverGoalId;
+	if (!resolverId) return false;
+	const resolvers = plan.goals.filter(
+		(candidate) => candidate.id === resolverId,
+	);
+	if (resolvers.length !== 1) return false;
+	return resolvers[0]!.resolvesReviewBlockedGoalId === goal.id;
+}
+
+function hasUniqueGoalIds(plan: UltragoalPlan): boolean {
+	return (
+		new Set(plan.goals.map((candidate) => candidate.id)).size ===
+		plan.goals.length
+	);
+}
+
+function canPersistNormalFinalAggregateCompletion(
+	plan: UltragoalPlan,
+	goal: UltragoalItem,
+	finalRunCheckpoint: boolean,
+	allowActiveFinalCodexGoal: boolean | undefined,
+): boolean {
+	if (!finalRunCheckpoint || allowActiveFinalCodexGoal) return false;
+	if (!hasUniqueGoalIds(plan)) return false;
+	if (!isScheduleEligible(goal)) return false;
+	if (goal.status !== "in_progress" || plan.activeGoalId !== goal.id)
+		return false;
+	if (unresolvedReviewBlockedGoals(plan).length === 0) return true;
+	return canUseCleanFinalResolverPathForReviewBlockedParent(
+		plan,
+		goal,
+		finalRunCheckpoint,
+		allowActiveFinalCodexGoal,
 	);
 }
 
@@ -800,11 +883,16 @@ function isScheduleEligibleGoal(goal: UltragoalItem): boolean {
 	);
 }
 
-export const ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE = `Complete the durable ultragoal plan in ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}, including later accepted/appended stories, under the original brief constraints; use ${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER} as the audit trail.`;
+export const ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE =
+	buildAggregateCodexObjective("");
 
-function aggregateCodexObjective(_goals: readonly UltragoalItem[]): string {
-	if (ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE.length <= 4000)
-		return ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE;
+function buildAggregateCodexObjective(statePathPrefix: string): string {
+	return `Complete the durable ultragoal plan in ${prefixedStatePath(statePathPrefix, ULTRAGOAL_GOALS)}, including later accepted/appended stories, under the original brief constraints; use ${prefixedStatePath(statePathPrefix, ULTRAGOAL_LEDGER)} as the audit trail.`;
+}
+
+function aggregateCodexObjective(statePathPrefix: string): string {
+	const objective = buildAggregateCodexObjective(statePathPrefix);
+	if (objective.length <= 4000) return objective;
 	throw new UltragoalError(
 		"Generated aggregate Codex objective exceeds the 4,000 character goal limit.",
 	);
@@ -824,8 +912,10 @@ function isLegacyEnumeratedAggregateObjective(
 }
 
 function compatibleCodexObjectives(plan: UltragoalPlan): string[] {
-	return (plan.codexObjectiveAliases ?? []).filter((objective) =>
-		isLegacyEnumeratedAggregateObjective(objective),
+	return (plan.codexObjectiveAliases ?? []).filter(
+		(objective) =>
+			isLegacyEnumeratedAggregateObjective(objective) ||
+			objective === ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE,
 	);
 }
 
@@ -834,7 +924,8 @@ function expectedCodexObjective(
 	goal: UltragoalItem,
 ): string {
 	return codexGoalMode(plan) === "aggregate"
-		? (plan.codexObjective ?? aggregateCodexObjective(plan.goals))
+		? (plan.codexObjective ??
+				aggregateCodexObjective(plan.statePathPrefix ?? ""))
 		: goal.objective;
 }
 
@@ -859,6 +950,7 @@ function isReviewBlockedResolved(
 	const resolverId = goal.reviewBlockerResolution?.resolverGoalId;
 	if (!resolverId || goal.reviewBlockerResolution?.status !== "complete")
 		return false;
+	if (!hasReciprocalReviewBlockerResolver(goal, plan)) return false;
 	const resolver = plan.goals.find((candidate) => candidate.id === resolverId);
 	return resolver?.status === "complete";
 }
@@ -1004,10 +1096,89 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Mutation entry and post-lock acquisition each perform a point-in-time
+ * writable-authority check. A SessionStart publication can still occur after
+ * the second check and before a filesystem write; unrelated resolver failures
+ * propagate and block the mutation.
+ */
+export async function assertUltragoalWritableLifecycleAuthority(
+	cwd: string,
+	options: { allowUnboundEnvironment?: boolean } = {},
+): Promise<UltragoalWritableAuthority> {
+	try {
+		const suppliedEnvironmentSessionId = process.env.OMX_SESSION_ID?.trim();
+		const scope = await resolveWritableStateScope(cwd);
+		if (
+			options.allowUnboundEnvironment === false &&
+			suppliedEnvironmentSessionId &&
+			!normalizeSessionId(suppliedEnvironmentSessionId)
+		) {
+			throw new Error(WRITABLE_STATE_SCOPE_ERRORS.unboundEnvironment);
+		}
+		return {
+			kind: "resolved",
+			source: scope.source,
+			sessionId: scope.sessionId,
+			stateDir: scope.stateDir,
+		};
+	} catch (error) {
+		// Existing-plan mutators keep the documented unbound compatibility path.
+		// Bootstrap callers opt out so failed state activation cannot create a new durable plan.
+		if (
+			error instanceof Error &&
+			error.message === WRITABLE_STATE_SCOPE_ERRORS.unboundEnvironment &&
+			options.allowUnboundEnvironment !== false
+		) {
+			return { kind: "no-pointer-compat" };
+		}
+		if (
+			error instanceof Error &&
+			(error.message === WRITABLE_STATE_SCOPE_ERRORS.unusableSession ||
+				error.message === WRITABLE_STATE_SCOPE_ERRORS.unboundEnvironment)
+		) {
+			throw new UltragoalError(
+				`Refusing a durable ultragoal mutation before writable lifecycle authority is restored: ${error.message} Restore the authoritative session binding so OMX_SESSION_ID matches the current session.json before retrying; see docs/troubleshooting.md (stale session pointer recovery).`,
+			);
+		}
+		throw error;
+	}
+}
+
+function writableAuthorityEquals(
+	beforeLock: UltragoalWritableAuthority,
+	afterLock: UltragoalWritableAuthority,
+): boolean {
+	if (beforeLock.kind !== afterLock.kind) return false;
+	if (beforeLock.kind === "no-pointer-compat") return true;
+	const resolvedAfterLock = afterLock as Extract<
+		UltragoalWritableAuthority,
+		{ kind: "resolved" }
+	>;
+	return (
+		beforeLock.source === resolvedAfterLock.source &&
+		beforeLock.sessionId === resolvedAfterLock.sessionId &&
+		beforeLock.stateDir === resolvedAfterLock.stateDir
+	);
+}
+
+function describeWritableAuthority(
+	authority: UltragoalWritableAuthority,
+): string {
+	return authority.kind === "no-pointer-compat"
+		? "no-pointer-compat"
+		: `resolved(source=${authority.source}, sessionId=${authority.sessionId ?? "undefined"}, stateDir=${authority.stateDir})`;
+}
+
 async function withUltragoalMutationLock<T>(
 	cwd: string,
 	operation: () => Promise<T>,
+	options: { allowUnboundEnvironment?: boolean } = {},
 ): Promise<T> {
+	const beforeLock = await assertUltragoalWritableLifecycleAuthority(
+		cwd,
+		options,
+	);
 	await mkdir(ultragoalDir(cwd), { recursive: true });
 	const lockPath = join(ultragoalDir(cwd), ULTRAGOAL_MUTATION_LOCK);
 	let handle: Awaited<ReturnType<typeof open>> | undefined;
@@ -1030,6 +1201,18 @@ async function withUltragoalMutationLock<T>(
 		);
 	}
 	try {
+		// The post-lock comparison addresses pointer changes while waiting for this
+		// lock only. A SessionStart publication can still land after it and before
+		// the operation's filesystem writes.
+		const afterLock = await assertUltragoalWritableLifecycleAuthority(
+			cwd,
+			options,
+		);
+		if (!writableAuthorityEquals(beforeLock, afterLock)) {
+			throw new UltragoalError(
+				`Refusing durable ultragoal mutation after writable lifecycle authority drift while waiting for the mutation lock: before lock ${describeWritableAuthority(beforeLock)}; after lock ${describeWritableAuthority(afterLock)}.`,
+			);
+		}
 		return await operation();
 	} finally {
 		await handle.close().catch(() => undefined);
@@ -1046,7 +1229,8 @@ async function appendLedger(
 	await appendFile(path, `${JSON.stringify(entry)}\n`);
 }
 
-export async function readUltragoalPlan(cwd: string): Promise<UltragoalPlan> {
+/** Pure plan read: no durable writes, no migration. */
+async function readUltragoalPlanFile(cwd: string): Promise<UltragoalPlan> {
 	const path = ultragoalGoalsPath(cwd);
 	let raw: string;
 	try {
@@ -1062,33 +1246,100 @@ export async function readUltragoalPlan(cwd: string): Promise<UltragoalPlan> {
 			`Invalid ultragoal plan at ${repoRelative(cwd, path)}.`,
 		);
 	}
-	if (
-		codexGoalMode(parsed) === "aggregate" &&
-		isLegacyEnumeratedAggregateObjective(parsed.codexObjective)
-	) {
-		const previousObjective = parsed.codexObjective;
-		const now = iso();
-		parsed.codexObjective = aggregateCodexObjective(parsed.goals);
-		parsed.codexObjectiveAliases = Array.from(
-			new Set(
-				[...(parsed.codexObjectiveAliases ?? []), previousObjective].filter(
-					(value): value is string =>
-						typeof value === "string" && value.length > 0,
-				),
-			),
-		);
-		parsed.updatedAt = now;
-		await writePlan(cwd, parsed);
-		await appendLedger(cwd, {
-			ts: now,
-			event: "aggregate_objective_migrated",
-			message:
-				"Migrated legacy enumerated aggregate Codex objective to the stable pointer objective.",
-			before: { codexObjective: previousObjective },
-			after: { codexObjective: parsed.codexObjective },
-		});
-	}
 	return parsed;
+}
+
+/**
+ * Pure, lock-free plan read for read-only surfaces such as
+ * `omx ultragoal status`: never migrates, never writes, and is therefore safe
+ * for Team workers. Durable legacy migration only happens through
+ * readUltragoalPlan or the mutators, under the mutation lock and authority gate.
+ */
+export async function readUltragoalPlanSnapshot(
+	cwd: string,
+): Promise<UltragoalPlan> {
+	return readUltragoalPlanFile(cwd);
+}
+
+function requiresCanonicalStatePathMigration(
+	plan: UltragoalPlan,
+	statePathPrefix: string,
+): boolean {
+	return (
+		statePathPrefix !== "" &&
+		plan.codexObjective === ULTRAGOAL_AGGREGATE_CODEX_OBJECTIVE
+	);
+}
+
+function requiresAggregateObjectiveMigration(
+	plan: UltragoalPlan,
+	statePathPrefix: string,
+): boolean {
+	if (codexGoalMode(plan) !== "aggregate") return false;
+	return (
+		isLegacyEnumeratedAggregateObjective(plan.codexObjective) ||
+		requiresCanonicalStatePathMigration(plan, statePathPrefix)
+	);
+}
+
+/** Durable legacy-objective migration; caller MUST hold the mutation lock. */
+async function migrateAggregateObjectiveUnderLock(
+	cwd: string,
+	parsed: UltragoalPlan,
+): Promise<UltragoalPlan> {
+	const statePathPrefix = ultragoalStatePathPrefix(cwd);
+	if (!requiresAggregateObjectiveMigration(parsed, statePathPrefix))
+		return parsed;
+	const canonicalStatePathMigration = requiresCanonicalStatePathMigration(
+		parsed,
+		statePathPrefix,
+	);
+	const previousObjective = parsed.codexObjective;
+	const now = iso();
+	parsed.codexObjective = aggregateCodexObjective(statePathPrefix);
+	parsed.statePathPrefix = statePathPrefix === "" ? undefined : statePathPrefix;
+	parsed.codexObjectiveAliases = Array.from(
+		new Set(
+			[...(parsed.codexObjectiveAliases ?? []), previousObjective].filter(
+				(value): value is string =>
+					typeof value === "string" && value.length > 0,
+			),
+		),
+	);
+	parsed.updatedAt = now;
+	await writePlan(cwd, parsed);
+	await appendLedger(cwd, {
+		ts: now,
+		event: "aggregate_objective_migrated",
+		message: canonicalStatePathMigration
+			? "Migrated the cwd-relative aggregate Codex objective to canonical repo-root-relative state paths."
+			: "Migrated legacy enumerated aggregate Codex objective to the stable pointer objective.",
+		before: { codexObjective: previousObjective },
+		after: { codexObjective: parsed.codexObjective },
+	});
+	return parsed;
+}
+
+/** Locked plan read for mutators that already hold the mutation lock. */
+async function readUltragoalPlanUnderLock(cwd: string): Promise<UltragoalPlan> {
+	return migrateAggregateObjectiveUnderLock(
+		cwd,
+		await readUltragoalPlanFile(cwd),
+	);
+}
+
+export async function readUltragoalPlan(cwd: string): Promise<UltragoalPlan> {
+	const parsed = await readUltragoalPlanFile(cwd);
+	if (
+		!requiresAggregateObjectiveMigration(parsed, ultragoalStatePathPrefix(cwd))
+	)
+		return parsed;
+	// The legacy objective migration is a durable story transition: it requires
+	// writable lifecycle authority and the mutation lock, and re-reads the plan
+	// under the lock so a concurrent mutator cannot be clobbered or duplicated.
+	return withUltragoalMutationLock(cwd, async () =>
+		readUltragoalPlanUnderLock(cwd),
+	);
 }
 
 async function writePlan(cwd: string, plan: UltragoalPlan): Promise<void> {
@@ -1103,64 +1354,73 @@ export async function createUltragoalPlan(
 	cwd: string,
 	options: CreateUltragoalOptions,
 ): Promise<UltragoalPlan> {
-	return withUltragoalMutationLock(cwd, async () => {
-		if (!options.force && existsSync(ultragoalGoalsPath(cwd))) {
-			throw new UltragoalError(
-				`Refusing to overwrite existing ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}; pass --force to recreate it.`,
+	return withUltragoalMutationLock(
+		cwd,
+		async () => {
+			if (!options.force && existsSync(ultragoalGoalsPath(cwd))) {
+				throw new UltragoalError(
+					`Refusing to overwrite existing ${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}; pass --force to recreate it.`,
+				);
+			}
+			const now = iso(options.now);
+			const sourceGoals: Array<{
+				title?: string;
+				objective: string;
+				tokenBudget?: number;
+			}> = options.goals?.length
+				? options.goals
+				: deriveGoalCandidates(options.brief);
+			const candidates = sourceGoals.map(
+				(goal, index): UltragoalItem => ({
+					id: normalizeGoalId(
+						goal.title ??
+							titleFromObjective(goal.objective, `Goal ${index + 1}`),
+						index,
+					),
+					title:
+						goal.title ??
+						titleFromObjective(goal.objective, `Goal ${index + 1}`),
+					objective: goal.objective.trim(),
+					status: "pending",
+					tokenBudget: goal.tokenBudget,
+					attempt: 0,
+					createdAt: now,
+					updatedAt: now,
+				}),
 			);
-		}
-		const now = iso(options.now);
-		const sourceGoals: Array<{
-			title?: string;
-			objective: string;
-			tokenBudget?: number;
-		}> = options.goals?.length
-			? options.goals
-			: deriveGoalCandidates(options.brief);
-		const candidates = sourceGoals.map(
-			(goal, index): UltragoalItem => ({
-				id: normalizeGoalId(
-					goal.title ?? titleFromObjective(goal.objective, `Goal ${index + 1}`),
-					index,
-				),
-				title:
-					goal.title ?? titleFromObjective(goal.objective, `Goal ${index + 1}`),
-				objective: goal.objective.trim(),
-				status: "pending",
-				tokenBudget: goal.tokenBudget,
-				attempt: 0,
+
+			const plan: UltragoalPlan = {
+				version: 1,
 				createdAt: now,
 				updatedAt: now,
-			}),
-		);
+				briefPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_BRIEF}`,
+				goalsPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}`,
+				ledgerPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER}`,
+				codexGoalMode: options.codexGoalMode ?? "aggregate",
+				goals: candidates,
+			};
+			if (plan.codexGoalMode === "aggregate") {
+				const statePathPrefix = ultragoalStatePathPrefix(cwd);
+				if (statePathPrefix !== "") plan.statePathPrefix = statePathPrefix;
+				plan.codexObjective = aggregateCodexObjective(statePathPrefix);
+			}
 
-		const plan: UltragoalPlan = {
-			version: 1,
-			createdAt: now,
-			updatedAt: now,
-			briefPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_BRIEF}`,
-			goalsPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_GOALS}`,
-			ledgerPath: `${ULTRAGOAL_DIR}/${ULTRAGOAL_LEDGER}`,
-			codexGoalMode: options.codexGoalMode ?? "aggregate",
-			goals: candidates,
-		};
-		if (plan.codexGoalMode === "aggregate")
-			plan.codexObjective = aggregateCodexObjective(candidates);
-
-		await mkdir(ultragoalDir(cwd), { recursive: true });
-		await writeFile(
-			ultragoalBriefPath(cwd),
-			options.brief.endsWith("\n") ? options.brief : `${options.brief}\n`,
-		);
-		await writePlan(cwd, plan);
-		await writeFile(ultragoalLedgerPath(cwd), "");
-		await appendLedger(cwd, {
-			ts: now,
-			event: "plan_created",
-			message: `${candidates.length} goal(s) created`,
-		});
-		return plan;
-	});
+			await mkdir(ultragoalDir(cwd), { recursive: true });
+			await writeFile(
+				ultragoalBriefPath(cwd),
+				options.brief.endsWith("\n") ? options.brief : `${options.brief}\n`,
+			);
+			await writePlan(cwd, plan);
+			await writeFile(ultragoalLedgerPath(cwd), "");
+			await appendLedger(cwd, {
+				ts: now,
+				event: "plan_created",
+				message: `${candidates.length} goal(s) created`,
+			});
+			return plan;
+		},
+		{ allowUnboundEnvironment: false },
+	);
 }
 
 export function summarizeUltragoalPlan(plan: UltragoalPlan): {
@@ -1273,7 +1533,12 @@ export async function addUltragoalGoal(
 	options: AddUltragoalGoalOptions,
 ): Promise<{ plan: UltragoalPlan; goal: UltragoalItem }> {
 	return withUltragoalMutationLock(cwd, async () => {
-		const plan = await readUltragoalPlan(cwd);
+		const plan = await readUltragoalPlanUnderLock(cwd);
+		if (plan.aggregateCompletion?.status === "complete") {
+			throw new UltragoalError(
+				"Cannot add a goal to an already completed aggregate ultragoal plan; start a new plan for post-terminal work.",
+			);
+		}
 		const now = iso(options.now);
 		const goal = appendGoalToPlan(plan, options);
 		await writePlan(cwd, plan);
@@ -1331,6 +1596,7 @@ function hasProtectedSteeringPayload(value: unknown): boolean {
 		"codexObjective",
 		"constraints",
 		"completedAt",
+		"statePathPrefix",
 		"qualityGate",
 		"status",
 	]);
@@ -1711,7 +1977,7 @@ export async function steerUltragoal(
 	options: { now?: Date; directiveText?: string } = {},
 ): Promise<SteerUltragoalResult> {
 	return withUltragoalMutationLock(cwd, async () => {
-		const plan = await readUltragoalPlan(cwd);
+		const plan = await readUltragoalPlanUnderLock(cwd);
 		const existing = proposal.idempotencyKey
 			? (await readSteeringLedgerEntries(cwd)).find(
 					(entry) =>
@@ -2195,7 +2461,7 @@ export async function startNextUltragoal(
 	done: boolean;
 }> {
 	return withUltragoalMutationLock(cwd, async () => {
-		const plan = await readUltragoalPlan(cwd);
+		const plan = await readUltragoalPlanUnderLock(cwd);
 		const now = iso(options.now);
 		if (plan.aggregateCompletion?.status === "complete")
 			return { plan, goal: null, resumed: false, done: true };
@@ -2261,12 +2527,20 @@ export async function checkpointUltragoal(
 	options: CheckpointOptions,
 ): Promise<UltragoalPlan> {
 	return withUltragoalMutationLock(cwd, async () => {
-		const plan = await readUltragoalPlan(cwd);
+		const plan = await readUltragoalPlanUnderLock(cwd);
 		const goal = plan.goals.find(
 			(candidate) => candidate.id === options.goalId,
 		);
 		if (!goal)
 			throw new UltragoalError(`Unknown ultragoal id: ${options.goalId}`);
+		if (
+			plan.aggregateCompletion?.status === "complete" &&
+			options.status !== "complete"
+		) {
+			throw new UltragoalError(
+				`Cannot record a ${options.status} checkpoint for ${goal.id} after the aggregate ultragoal plan is complete; the terminal aggregate receipt is immutable.`,
+			);
+		}
 		const now = iso(options.now);
 		if (options.status === "blocked") {
 			if (goal.status !== "in_progress") {
@@ -2298,17 +2572,48 @@ export async function checkpointUltragoal(
 			}
 			if (!snapshot?.available) {
 				throw new UltragoalError(
-					"Blocked ultragoal checkpoints require either a get_goal snapshot for the completed legacy Codex goal that blocked create_goal, or an unavailable get_goal error JSON for a Codex DB/schema/context failure; pass --codex-goal-json.",
-				);
-			}
-			if (snapshot.status !== "complete") {
-				throw new UltragoalError(
-					`Cannot record a blocked ultragoal checkpoint while the existing Codex goal is ${snapshot.status ?? "unknown"}; strict objective mismatch protection remains required for active or incomplete goals.`,
+					"Blocked ultragoal checkpoints require either a get_goal snapshot for the completed legacy Codex goal that blocked create_goal, an unavailable get_goal error JSON for a Codex DB/schema/context failure, or a matching native blocked snapshot; pass --codex-goal-json.",
 				);
 			}
 			if (!snapshot.objective) {
 				throw new UltragoalError(
 					"Blocked ultragoal checkpoint Codex snapshot is missing objective text.",
+				);
+			}
+			const blockedSnapshotMatchesExpected = [
+				expectedCodexObjective(plan, goal),
+				...compatibleCodexObjectives(plan),
+			].some(
+				(objective) =>
+					normalizeObjective(objective) ===
+					normalizeObjective(snapshot.objective ?? ""),
+			);
+			if (snapshot.status === "blocked") {
+				if (!blockedSnapshotMatchesExpected) {
+					throw new UltragoalError(
+						`Blocked ultragoal checkpoint objective mismatch: expected one of [${[expectedCodexObjective(plan, goal), ...compatibleCodexObjectives(plan)].join(" | ")}], got ${snapshot.objective}. Matching native blocked checkpoints require the expected/compatible Codex objective; finish or clear the foreign goal, or pass a matching blocked get_goal snapshot with --evidence.`,
+					);
+				}
+				const evidence = assertNonEmpty(options.evidence, "--evidence");
+				goal.updatedAt = now;
+				plan.activeGoalId = goal.id;
+				plan.updatedAt = now;
+				await writePlan(cwd, plan);
+				await appendLedger(cwd, {
+					ts: now,
+					event: "goal_blocked",
+					goalId: goal.id,
+					status: goal.status,
+					evidence,
+					codexGoal: options.codexGoal,
+					message:
+						"Native Codex goal status is blocked for the matching objective; recorded a non-terminal goal_blocked checkpoint. Continue work without treating this as complete or failed; re-check get_goal when the blocker clears.",
+				});
+				return plan;
+			}
+			if (snapshot.status !== "complete") {
+				throw new UltragoalError(
+					`Cannot record a blocked ultragoal checkpoint while the existing Codex goal is ${snapshot.status ?? "unknown"}; strict objective mismatch protection remains required for active or incomplete goals.`,
 				);
 			}
 			const safeCompletedAggregateBlocker =
@@ -2318,14 +2623,6 @@ export async function checkpointUltragoal(
 					snapshot,
 					options.evidence,
 				);
-			const blockedSnapshotMatchesExpected = [
-				expectedCodexObjective(plan, goal),
-				...compatibleCodexObjectives(plan),
-			].some(
-				(objective) =>
-					normalizeObjective(objective) ===
-					normalizeObjective(snapshot.objective ?? ""),
-			);
 			if (!safeCompletedAggregateBlocker && blockedSnapshotMatchesExpected) {
 				throw new UltragoalError(
 					"Blocked ultragoal checkpoint is only for a different completed legacy Codex goal unless an aggregate Codex goal is already complete and unreconcilable while the active repo-native microgoal remains in progress.",
@@ -2436,19 +2733,14 @@ export async function checkpointUltragoal(
 					);
 				}
 			}
-			const designatedReviewBlockerResolver = goal.resolvesReviewBlockedGoalId
-				? isDesignatedReviewBlockerResolver(
-						goal,
-						plan.goals.find(
-							(candidate) => candidate.id === goal.resolvesReviewBlockedGoalId,
-						),
-					)
-				: false;
 			if (
 				aggregateMode &&
-				finalRunCheckpoint &&
-				!options.allowActiveFinalCodexGoal &&
-				designatedReviewBlockerResolver
+				canPersistNormalFinalAggregateCompletion(
+					plan,
+					goal,
+					finalRunCheckpoint,
+					options.allowActiveFinalCodexGoal,
+				)
 			) {
 				normalFinalAggregateCompletion = {
 					status: "complete",
@@ -2636,7 +2928,7 @@ export async function recordFinalReviewBlockers(
 	addedGoal: UltragoalItem;
 }> {
 	return withUltragoalMutationLock(cwd, async () => {
-		const plan = await readUltragoalPlan(cwd);
+		const plan = await readUltragoalPlanUnderLock(cwd);
 		const goal = plan.goals.find(
 			(candidate) => candidate.id === options.goalId,
 		);
@@ -2801,7 +3093,9 @@ function buildPerStoryCodexGoalInstruction(
 		finalStory
 			? "- After the final checkpoint command succeeds, treat `/goal clear` as the explicit terminal cleanup step before another same-thread goal."
 			: null,
-		"- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.",
+		"- If blocked on a matching native Codex goal status, record a non-terminal blocker with: omx ultragoal checkpoint --goal-id " +
+			goal.id +
+			' --status blocked --evidence "<blocker evidence>" --codex-goal-json "<matching blocked get_goal JSON or path>". If failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
 		"",
 		"create_goal payload:",
 		JSON.stringify(createPayload, null, 2),
@@ -2818,7 +3112,9 @@ function buildAggregateCodexGoalInstruction(
 	plan: UltragoalPlan,
 	options: CodexGoalInstructionOptions,
 ): string {
-	const objective = plan.codexObjective ?? aggregateCodexObjective(plan.goals);
+	const statePathPrefix = plan.statePathPrefix ?? "";
+	const objective =
+		plan.codexObjective ?? aggregateCodexObjective(statePathPrefix);
 	const finalStory = isFinalRunCompletionCandidate(plan, goal);
 	const createPayload = { objective };
 	const checkpointStatus = finalStory ? "complete" : "active";
@@ -2826,8 +3122,8 @@ function buildAggregateCodexGoalInstruction(
 		codexGoalConductorGuidance(options),
 		"",
 		"Ultragoal aggregate-goal handoff",
-		`Plan: ${plan.goalsPath}`,
-		`Ledger: ${plan.ledgerPath}`,
+		`Plan: ${prefixedStatePath(statePathPrefix, ULTRAGOAL_GOALS)}`,
+		`Ledger: ${prefixedStatePath(statePathPrefix, ULTRAGOAL_LEDGER)}`,
 		`Goal: ${goal.id} — ${goal.title}`,
 		"",
 		"Codex goal integration constraints:",
@@ -2859,7 +3155,9 @@ function buildAggregateCodexGoalInstruction(
 		finalStory
 			? `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh complete get_goal JSON or path>" --quality-gate-json "<quality gate JSON or path>"`
 			: `  omx ultragoal checkpoint --goal-id ${goal.id} --status complete --evidence "<tests/files/PR evidence>" --codex-goal-json "<fresh get_goal JSON or path>"`,
-		"- If blocked or failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.",
+		"- If blocked on a matching native Codex goal status, record a non-terminal blocker with: omx ultragoal checkpoint --goal-id " +
+			goal.id +
+			' --status blocked --evidence "<blocker evidence>" --codex-goal-json "<matching blocked get_goal JSON or path>". If failed, checkpoint with --status failed and the failure evidence; rerun complete-goals --retry-failed to resume.',
 		"",
 		"create_goal payload:",
 		JSON.stringify(createPayload, null, 2),

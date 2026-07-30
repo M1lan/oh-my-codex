@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+	buildCodexGoalTerminalCleanupNotice,
 	CodexGoalSnapshotError,
 	formatCodexGoalReconciliation,
-	buildCodexGoalTerminalCleanupNotice,
 	readCodexGoalSnapshotInput,
 	reconcileCodexGoalSnapshot,
 } from "../goal-workflows/codex-goal-snapshot.js";
@@ -19,18 +19,19 @@ import {
 	checkpointUltragoal,
 	createUltragoalPlan,
 	readUltragoalPlan,
+	readUltragoalPlanSnapshot,
 	recordFinalReviewBlockers,
 	startNextUltragoal,
 	steerUltragoal,
 	summarizeUltragoalPlan,
+	ULTRAGOAL_STEERING_MUTATION_KINDS,
+	ULTRAGOAL_STEERING_SOURCES,
+	UltragoalError,
 	type UltragoalItem,
 	type UltragoalSteeringAfterPayload,
 	type UltragoalSteeringMutationKind,
 	type UltragoalSteeringProposal,
 	type UltragoalSteeringSource,
-	ULTRAGOAL_STEERING_MUTATION_KINDS,
-	ULTRAGOAL_STEERING_SOURCES,
-	UltragoalError,
 } from "../ultragoal/artifacts.js";
 
 export const ULTRAGOAL_HELP = `omx ultragoal - Durable repo-native multi-goal workflow over Codex goal mode
@@ -546,7 +547,7 @@ export async function ultragoalCommand(
 		}
 
 		if (command === "status") {
-			const plan = await readUltragoalPlan(cwd);
+			const plan = await readUltragoalPlanSnapshot(cwd);
 			const snapshot = await readCodexGoalSnapshotInput(
 				readValue(rest, "--codex-goal-json"),
 				cwd,

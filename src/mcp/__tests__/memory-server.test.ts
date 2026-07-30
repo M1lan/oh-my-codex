@@ -22,9 +22,9 @@ describe("mcp/memory-server module contract", () => {
 			join(process.cwd(), "src/mcp/memory-server.ts"),
 			"utf8",
 		);
-		const toolNames = Array.from(src.matchAll(/name:\s*'([^']+)'/g)).map(
-			(m) => m[1],
-		);
+		const toolNames = Array.from(
+			src.matchAll(/name:\s*["']([^"']+)["']/g),
+		).map((m) => m[1]);
 
 		for (const tool of REQUIRED_TOOLS) {
 			assert.ok(toolNames.includes(tool), `missing tool declaration: ${tool}`);
@@ -44,13 +44,16 @@ describe("mcp/memory-server module contract", () => {
 		);
 		assert.match(
 			src,
-			/function replaceSection\(content: string, section: string, newContent: string\): string/,
+			/function replaceSection\(\s*content: string,\s*section: string,\s*newContent: string,\s*\): string/,
 		);
 		assert.match(
 			src,
-			/function appendToSection\(content: string, section: string, entry: string\): string/,
+			/function appendToSection\(\s*content: string,\s*section: string,\s*entry: string,\s*\): string/,
 		);
-		assert.match(src, /autoStartStdioMcpServer\('memory', server\)/);
+		assert.match(
+			src,
+			/autoStartStdioMcpServer\(["']memory["'],\s*server\)/,
+		);
 		assert.doesNotMatch(src, /new StdioServerTransport\(\)/);
 		assert.doesNotMatch(
 			src,

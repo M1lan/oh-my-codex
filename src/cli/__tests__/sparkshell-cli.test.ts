@@ -1,13 +1,22 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
-import { createServer } from "node:http";
-import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { buildCapturePaneArgv as buildNotificationCapturePaneArgv } from "../../notifications/tmux-detector.js";
+import { resolveTmuxBinaryForPlatform } from "../../utils/platform-command.js";
 import {
 	isSparkShellNativeCompatibilityFailure,
 	nestedRepoLocalSparkShellBinaryPath,
@@ -19,7 +28,6 @@ import {
 	resolveSparkShellBinaryPathWithHydration,
 	runSparkShellBinary,
 } from "../sparkshell.js";
-import { buildCapturePaneArgv as buildNotificationCapturePaneArgv } from "../../notifications/tmux-detector.js";
 
 function runOmx(
 	cwd: string,
@@ -46,6 +54,8 @@ function shouldSkipForSpawnPermissions(err?: string): boolean {
 	return typeof err === "string" && /(EPERM|EACCES)/i.test(err);
 }
 
+const fixturePackageRoot = join(tmpdir(), "omx-sparkshell-package-root");
+
 describe("resolveSparkShellBinaryPath", () => {
 	it("prefers OMX_SPARKSHELL_BIN override", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-sparkshell-override-"));
@@ -55,7 +65,7 @@ describe("resolveSparkShellBinaryPath", () => {
 				resolveSparkShellBinaryPath({
 					cwd,
 					env: { OMX_SPARKSHELL_BIN: "./bin/custom-sparkshell" },
-					packageRoot: "/unused",
+					packageRoot: fixturePackageRoot,
 				}),
 				binary,
 			);
@@ -65,19 +75,18 @@ describe("resolveSparkShellBinaryPath", () => {
 	});
 
 	it("falls back from packaged binary to repo-local build artifact", () => {
-		const packageRoot = "/repo";
 		const packaged = join(
-			packageRoot,
+			fixturePackageRoot,
 			"bin",
 			"native",
 			`${process.platform}-${process.arch}`,
 			process.platform === "win32" ? "omx-sparkshell.exe" : "omx-sparkshell",
 		);
-		const repoLocal = repoLocalSparkShellBinaryPath(packageRoot);
+		const repoLocal = repoLocalSparkShellBinaryPath(fixturePackageRoot);
 
 		assert.equal(
 			resolveSparkShellBinaryPath({
-				packageRoot,
+				packageRoot: fixturePackageRoot,
 				exists: (path) => path === repoLocal,
 			}),
 			repoLocal,
@@ -87,26 +96,52 @@ describe("resolveSparkShellBinaryPath", () => {
 
 	it("checks Linux musl packaged paths before glibc and legacy paths", () => {
 		assert.deepEqual(
-			packagedSparkShellBinaryCandidatePaths("/repo", "linux", "x64", {}, [
-				"musl",
-				"glibc",
-			]),
+			packagedSparkShellBinaryCandidatePaths(
+				fixturePackageRoot,
+				"linux",
+				"x64",
+				{},
+				["musl", "glibc"],
+			),
 			[
-				"/repo/bin/native/linux-x64-musl/omx-sparkshell",
-				"/repo/bin/native/linux-x64-glibc/omx-sparkshell",
-				"/repo/bin/native/linux-x64/omx-sparkshell",
+				join(
+					fixturePackageRoot,
+					"bin",
+					"native",
+					"linux-x64-musl",
+					"omx-sparkshell",
+				),
+				join(
+					fixturePackageRoot,
+					"bin",
+					"native",
+					"linux-x64-glibc",
+					"omx-sparkshell",
+				),
+				join(
+					fixturePackageRoot,
+					"bin",
+					"native",
+					"linux-x64",
+					"omx-sparkshell",
+				),
 			],
 		);
 	});
 
 	it("tries Linux musl packaged binaries before glibc fallbacks", () => {
-		const packageRoot = "/repo";
 		const seen: string[] = [];
-		const glibcPath = "/repo/bin/native/linux-x64-glibc/omx-sparkshell";
+		const glibcPath = join(
+			fixturePackageRoot,
+			"bin",
+			"native",
+			"linux-x64-glibc",
+			"omx-sparkshell",
+		);
 
 		assert.equal(
 			resolveSparkShellBinaryPath({
-				packageRoot,
+				packageRoot: fixturePackageRoot,
 				platform: "linux",
 				arch: "x64",
 				linuxLibcPreference: ["musl", "glibc"],
@@ -118,18 +153,30 @@ describe("resolveSparkShellBinaryPath", () => {
 			glibcPath,
 		);
 		assert.deepEqual(seen.slice(0, 2), [
-			"/repo/bin/native/linux-x64-musl/omx-sparkshell",
-			"/repo/bin/native/linux-x64-glibc/omx-sparkshell",
+			join(
+				fixturePackageRoot,
+				"bin",
+				"native",
+				"linux-x64-musl",
+				"omx-sparkshell",
+			),
+			join(
+				fixturePackageRoot,
+				"bin",
+				"native",
+				"linux-x64-glibc",
+				"omx-sparkshell",
+			),
 		]);
 	});
 
 	it("falls back to nested repo-local native build artifact when present", () => {
-		const packageRoot = "/repo";
-		const nestedRepoLocal = nestedRepoLocalSparkShellBinaryPath(packageRoot);
+		const nestedRepoLocal =
+			nestedRepoLocalSparkShellBinaryPath(fixturePackageRoot);
 
 		assert.equal(
 			resolveSparkShellBinaryPath({
-				packageRoot,
+				packageRoot: fixturePackageRoot,
 				exists: (path) => path === nestedRepoLocal,
 			}),
 			nestedRepoLocal,
@@ -140,11 +187,87 @@ describe("resolveSparkShellBinaryPath", () => {
 		assert.throws(
 			() =>
 				resolveSparkShellBinaryPath({
-					packageRoot: "/repo",
+					packageRoot: fixturePackageRoot,
 					exists: () => false,
 				}),
 			/native binary not found/,
 		);
+	});
+
+	it("reports the first rejected cache entry instead of an earlier missing candidate", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "omx-sparkshell-rejected-cache-"));
+		try {
+			await writeFile(
+				join(cwd, "package.json"),
+				JSON.stringify({ version: "0.8.15" }),
+			);
+			const cacheDir = join(cwd, "cache");
+			const rejected = join(
+				cacheDir,
+				"0.8.15",
+				"linux-x64-glibc",
+				"omx-sparkshell",
+				"omx-sparkshell",
+			);
+			await mkdir(dirname(rejected), { recursive: true });
+			await writeFile(rejected, "unverified");
+			await assert.rejects(
+				() =>
+					resolveSparkShellBinaryPathWithHydration({
+						packageRoot: cwd,
+						platform: "linux",
+						arch: "x64",
+						linuxLibcPreference: ["musl", "glibc"],
+						env: { OMX_NATIVE_CACHE_DIR: cacheDir, OMX_NATIVE_AUTO_FETCH: "0" },
+					}),
+				(error: Error) =>
+					error.message.includes(rejected) &&
+					error.message.includes("legacy-unverified"),
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a sidecarless managed cache binary before selecting packaged sparkshell", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "omx-sparkshell-sidecarless-"));
+		try {
+			await writeFile(
+				join(cwd, "package.json"),
+				JSON.stringify({ version: "0.8.15" }),
+			);
+			const cacheDir = join(cwd, "cache");
+			const cachedDir = join(
+				cacheDir,
+				"0.8.15",
+				"linux-x64-musl",
+				"omx-sparkshell",
+			);
+			const cachedBinary = join(cachedDir, "omx-sparkshell");
+			const packaged = join(
+				cwd,
+				"bin",
+				"native",
+				"linux-x64-musl",
+				"omx-sparkshell",
+			);
+			await mkdir(cachedDir, { recursive: true });
+			await mkdir(dirname(packaged), { recursive: true });
+			await writeFile(cachedBinary, "#!/bin/sh\necho untrusted\n");
+			await writeFile(packaged, "#!/bin/sh\necho packaged\n");
+			assert.equal(
+				await resolveSparkShellBinaryPathWithHydration({
+					packageRoot: cwd,
+					platform: "linux",
+					arch: "x64",
+					linuxLibcPreference: ["musl"],
+					env: { OMX_NATIVE_CACHE_DIR: cacheDir, OMX_NATIVE_AUTO_FETCH: "0" },
+				}),
+				packaged,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
 	});
 
 	it("hydrates a native binary when packaged and repo-local binaries are absent", async () => {
@@ -242,6 +365,8 @@ describe("resolveSparkShellBinaryPath", () => {
 					join(assetRoot, "native-release-manifest.json"),
 					JSON.stringify(
 						{
+							manifest_version: 1,
+							tag: "v0.8.15",
 							version: "0.8.15",
 							assets: [
 								{
@@ -249,11 +374,13 @@ describe("resolveSparkShellBinaryPath", () => {
 									version: "0.8.15",
 									platform: process.platform === "win32" ? "win32" : "linux",
 									arch: "x64",
-									archive: archiveName,
-									binary:
+									target:
 										process.platform === "win32"
-											? "omx-sparkshell.exe"
-											: "omx-sparkshell",
+											? "x86_64-pc-windows-msvc"
+											: "x86_64-unknown-linux-musl",
+									...(process.platform === "win32" ? {} : { libc: "musl" }),
+									archive: archiveName,
+									binary: "omx-sparkshell",
 									binary_path:
 										process.platform === "win32"
 											? "omx-sparkshell.exe"
@@ -507,10 +634,54 @@ describe("parseSparkShellFallbackInvocation", () => {
 		);
 	});
 
+	it("strips native-only summary flags before raw command fallback", () => {
+		assert.deepEqual(
+			parseSparkShellFallbackInvocation([
+				"--json",
+				"--budget",
+				"4096",
+				"--cache=off",
+				"node",
+				"-e",
+				'console.log("ok")',
+			]),
+			{ kind: "command", argv: ["node", "-e", 'console.log("ok")'] },
+		);
+	});
+
+	it("strips native-only flags before explicit shell fallback", () => {
+		assert.deepEqual(
+			parseSparkShellFallbackInvocation(
+				["--json", "--budget=4096", "--shell", "printf ok"],
+				{ platform: "linux" },
+			),
+			{ kind: "command", argv: ["sh", "-lc", "printf ok"] },
+		);
+	});
+
 	it("translates explicit shell fallback through sh -lc", () => {
 		assert.deepEqual(
-			parseSparkShellFallbackInvocation(["--shell", "printf ok"]),
+			parseSparkShellFallbackInvocation(["--shell", "printf ok"], {
+				platform: "linux",
+			}),
 			{ kind: "command", argv: ["sh", "-lc", "printf ok"] },
+		);
+	});
+
+	it("rejects extra argv after explicit --shell fallback", () => {
+		assert.throws(
+			() =>
+				parseSparkShellFallbackInvocation(["--shell", "printf ok", "--help"], {
+					platform: "linux",
+				}),
+			/--shell does not accept additional arguments/,
+		);
+		assert.throws(
+			() =>
+				parseSparkShellFallbackInvocation(["--shell=printf ok", "extra"], {
+					platform: "linux",
+				}),
+			/--shell does not accept additional arguments/,
 		);
 	});
 
@@ -563,7 +734,10 @@ describe("parseSparkShellFallbackInvocation", () => {
 		]);
 		assert.deepEqual(parsed, {
 			kind: "tmux-pane",
-			argv: ["tmux", ...buildNotificationCapturePaneArgv("%12", 400)],
+			argv: [
+				resolveTmuxBinaryForPlatform() || "tmux",
+				...buildNotificationCapturePaneArgv("%12", 400),
+			],
 		});
 	});
 
@@ -577,7 +751,15 @@ describe("parseSparkShellFallbackInvocation", () => {
 			]),
 			{
 				kind: "tmux-pane",
-				argv: ["tmux", "capture-pane", "-t", "%12", "-p", "-S", "-400"],
+				argv: [
+					resolveTmuxBinaryForPlatform() || "tmux",
+					"capture-pane",
+					"-t",
+					"%12",
+					"-p",
+					"-S",
+					"-400",
+				],
 			},
 		);
 	});
@@ -637,27 +819,14 @@ describe("omx sparkshell", () => {
 	it("preserves child stdout, stderr, and exit code through the JS bridge", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-sparkshell-bridge-"));
 		try {
-			const binDir = join(cwd, "bin");
-			const stubPath = join(
-				binDir,
-				process.platform === "win32" ? "omx-sparkshell.cmd" : "omx-sparkshell",
+			const stubPath = join(cwd, "sparkshell-stub.cjs");
+			await writeFile(
+				stubPath,
+				'process.stdout.write("spark-stdout\\n"); process.stderr.write("spark-stderr\\n"); process.exit(7);\n',
 			);
-			await mkdir(binDir, { recursive: true });
-			if (process.platform === "win32") {
-				await writeFile(
-					stubPath,
-					"@echo off\r\necho spark-stdout\r\n>&2 echo spark-stderr\r\nexit /b 7\r\n",
-				);
-			} else {
-				await writeFile(
-					stubPath,
-					"#!/bin/sh\necho spark-stdout\necho spark-stderr 1>&2\nexit 7\n",
-				);
-				await chmod(stubPath, 0o755);
-			}
 
-			const result = runOmx(cwd, ["sparkshell", "git", "status"], {
-				OMX_SPARKSHELL_BIN: stubPath,
+			const result = runOmx(cwd, ["sparkshell", stubPath], {
+				OMX_SPARKSHELL_BIN: process.execPath,
 			});
 			if (shouldSkipForSpawnPermissions(result.error)) return;
 
@@ -684,18 +853,18 @@ describe("omx sparkshell", () => {
 				`${process.platform}-${process.arch}`,
 				"omx-sparkshell",
 			);
+			if (process.platform === "win32") return;
 			await mkdir(binDir, { recursive: true });
-			const stubPath = join(
-				binDir,
-				process.platform === "win32" ? "omx-sparkshell.exe" : "omx-sparkshell",
-			);
+			const stubPath = join(binDir, "omx-sparkshell");
 			await writeFile(
 				stubPath,
-				process.platform === "win32"
-					? "@echo off\r\n>&2 echo omx-sparkshell: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found\r\nexit /b 1\r\n"
-					: '#!/bin/sh\necho "omx-sparkshell: /lib/x86_64-linux-gnu/libc.so.6: version \\`GLIBC_2.39\' not found" 1>&2\nexit 1\n',
+				'#!/bin/sh\necho "omx-sparkshell: /lib/x86_64-linux-gnu/libc.so.6: version \\`GLIBC_2.39\' not found" 1>&2\nexit 1\n',
 			);
-			if (process.platform !== "win32") await chmod(stubPath, 0o755);
+			await chmod(stubPath, 0o755);
+			const stubDigest = createHash("sha256")
+				.update(await readFile(stubPath))
+				.digest("hex");
+			await writeFile(`${stubPath}.sha256`, `${stubDigest}\n`);
 
 			const result = runOmx(
 				cwd,
@@ -708,8 +877,16 @@ describe("omx sparkshell", () => {
 
 			assert.equal(result.status, 0, result.stderr || result.stdout);
 			assert.equal(result.stdout, "raw-fallback\n");
-			assert.match(result.stderr, /GLIBC-incompatible/i);
-			assert.doesNotMatch(result.stderr, /version `GLIBC_2\.39' not found/);
+			assert.match(result.stderr, /cause=.*GLIBC_2\.39/i);
+			const canonicalStubPath = await realpath(stubPath);
+			assert.match(
+				result.stderr,
+				new RegExp(
+					`path=${canonicalStubPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+				),
+			);
+			assert.match(result.stderr, /state=glibc-incompatible/i);
+			assert.match(result.stderr, /remediation=/i);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}

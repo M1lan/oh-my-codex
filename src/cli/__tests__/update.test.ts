@@ -1,10 +1,11 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { describe, it } from "node:test";
 import {
+	formatDeferredSetupCommand,
 	isInstallVersionBump,
 	isNewerVersion,
 	maybeCheckAndPromptUpdate,
@@ -12,7 +13,6 @@ import {
 	resolveAutoUpdateMode,
 	resolveGlobalInstallRoot,
 	resolveInstalledCliEntry,
-	formatDeferredSetupCommand,
 	resolveSetupRefreshArgs,
 	runDeferredGlobalUpdate,
 	runGlobalUpdate,

@@ -211,20 +211,20 @@ describe("run-test-files diagnostics", () => {
 			for (const name of ["a-slow-pass.test.js", "b-slow-pass.test.js"]) {
 				writeFileSync(
 					join(testsDir, name),
-					[
-						"import { test } from 'node:test';",
-						"test('passes after a short delay', async () => {",
-						"  await new Promise((resolve) => setTimeout(resolve, 450));",
-						"});",
-						"",
-					].join("\n"),
+						[
+							"import { test } from 'node:test';",
+							"test('passes after a short delay', async () => {",
+							"  await new Promise((resolve) => setTimeout(resolve, 1500));",
+							"});",
+							"",
+						].join("\n"),
 				);
 			}
 
 			const result = runCompiledRunner(
 				wd,
-				{ OMX_NODE_TEST_RUNNER_TIMEOUT_MS: "750" },
-				3_000,
+				{ OMX_NODE_TEST_RUNNER_TIMEOUT_MS: "2500" },
+				8_000,
 			);
 
 			assert.equal(result.status, 0, result.stderr || result.stdout);

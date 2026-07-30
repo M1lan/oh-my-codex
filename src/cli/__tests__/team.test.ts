@@ -1,13 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-	afterEach,
-	beforeEach,
-	describe,
-	it,
-	type TestContext,
-} from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
 	chmod,
@@ -17,24 +10,33 @@ import {
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
 import {
-	buildLeaderMonitoringHints,
-	parseTeamStartArgs,
-	teamCommand,
-} from "../team.js";
+	afterEach,
+	beforeEach,
+	describe,
+	it,
+	type TestContext,
+} from "node:test";
+import { fileURLToPath } from "node:url";
 import { readModeState } from "../../modes/base.js";
 import { readApprovedExecutionLaunchHint } from "../../planning/artifacts.js";
+import {
+	isRealTmuxAvailable,
+	type TempTmuxSessionFixture,
+	withTempTmuxSession,
+} from "../../team/__tests__/tmux-test-fixture.js";
+import {
+	buildApprovedTeamExecutionBinding,
+	writePersistedApprovedTeamExecutionBinding,
+} from "../../team/approved-execution.js";
 import { buildRepoAwareTeamExecutionPlan } from "../../team/repo-aware-decomposition.js";
-import { DEFAULT_MAX_WORKERS } from "../../team/state.js";
 import { shutdownTeam } from "../../team/runtime.js";
-import { sameFilePath } from "../../utils/paths.js";
 import {
 	appendTeamEvent,
 	createTask,
+	DEFAULT_MAX_WORKERS,
 	initTeamState,
 	readTeamConfig,
 	saveTeamConfig,
@@ -43,16 +45,13 @@ import {
 	writeTaskApproval,
 	writeWorkerStatus,
 } from "../../team/state.js";
-import {
-	buildApprovedTeamExecutionBinding,
-	writePersistedApprovedTeamExecutionBinding,
-} from "../../team/approved-execution.js";
 import { writePersistedTeamUltragoalContext } from "../../team/ultragoal-context.js";
+import { sameFilePath } from "../../utils/paths.js";
 import {
-	isRealTmuxAvailable,
-	withTempTmuxSession,
-	type TempTmuxSessionFixture,
-} from "../../team/__tests__/tmux-test-fixture.js";
+	buildLeaderMonitoringHints,
+	parseTeamStartArgs,
+	teamCommand,
+} from "../team.js";
 
 const OMX_CLI_PATH = fileURLToPath(new URL("../omx.js", import.meta.url));
 const ORIGINAL_OMX_TEAM_WORKER = process.env.OMX_TEAM_WORKER;
@@ -1803,7 +1802,11 @@ describe("teamCommand shutdown --force parsing", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			await writeFile(
 				join(wd, ".omx", "state", "session.json"),
-				JSON.stringify({ session_id: "sess-team-shutdown-state" }),
+				JSON.stringify({
+					session_id: "sess-team-shutdown-state",
+					cwd: wd,
+					state_root: join(wd, ".omx", "state"),
+				}),
 			);
 			await initTeamState(
 				"team-shutdown-mode-state",
@@ -2166,6 +2169,7 @@ esac
 					env: {
 						...process.env,
 						PATH: `${binDir}:${previousPath ?? ""}`,
+						OMX_MUX_BINARY: "tmux",
 						OMX_TEAM_STATE_ROOT: join(wd, ".omx", "state"),
 					},
 				},
@@ -3096,6 +3100,8 @@ describe("teamCommand status", () => {
 	it("prints pane ids and raw inspect hints when tmux panes are recorded", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-team-status-panes-"));
 		const previousCwd = process.cwd();
+		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 		const logs: string[] = [];
 		const originalLog = console.log;
 		try {
@@ -3295,6 +3301,24 @@ describe("teamCommand status", () => {
 				`${JSON.stringify(config, null, 2)}\n`,
 			);
 			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+			const tmuxPath = join(wd, "tmux");
+			await writeFile(
+				tmuxPath,
+				`#!/bin/sh
+if [ "$1" = "display-message" ]; then
+  case "$4" in
+    %21) printf '%%21\\t1\\t101\\t${config.tmux_pane_owner_id}\\n' ;;
+    %22) printf '%%22\\t1\\t102\\t${config.tmux_pane_owner_id}\\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+exit 1
+`,
+			);
+			await chmod(tmuxPath, 0o755);
+			process.env.PATH = `${wd}:${previousPath ?? ""}`;
+			process.env.OMX_MUX_BINARY = "tmux";
 
 			console.log = (...args: unknown[]) =>
 				logs.push(args.map(String).join(" "));
@@ -3344,6 +3368,11 @@ describe("teamCommand status", () => {
 				/inspect_summary: [\s\S]*command=omx sparkshell --tmux-pane %21 --tail-lines 400/,
 			);
 		} finally {
+			if (typeof previousPath === "string") process.env.PATH = previousPath;
+			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			console.log = originalLog;
 			process.chdir(previousCwd);
 			await rm(wd, { recursive: true, force: true });
@@ -3355,11 +3384,13 @@ describe("teamCommand status", () => {
 		const previousCwd = process.cwd();
 		const previousTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
 		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 		const logs: string[] = [];
 		const originalLog = console.log;
 		try {
 			delete process.env.OMX_TEAM_STATE_ROOT;
 			process.env.PATH = wd;
+			process.env.OMX_MUX_BINARY = "tmux";
 			process.chdir(wd);
 			const config = await withoutTeamTestWorkerEnv(() =>
 				initTeamState(
@@ -3494,6 +3525,18 @@ describe("teamCommand status", () => {
 				`${JSON.stringify(config, null, 2)}\n`,
 			);
 			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+			const tmuxPath = join(wd, "tmux");
+			await writeFile(
+				tmuxPath,
+				`#!/bin/sh
+if [ "$1" = "display-message" ] && [ "$4" = "%41" ]; then
+  printf '%%41\\t1\\t201\\t${config.tmux_pane_owner_id}\\n'
+  exit 0
+fi
+exit 1
+`,
+			);
+			await chmod(tmuxPath, 0o755);
 
 			console.log = (...args: unknown[]) =>
 				logs.push(args.map(String).join(" "));
@@ -4037,6 +4080,9 @@ describe("teamCommand status", () => {
 			else delete process.env.OMX_TEAM_STATE_ROOT;
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			console.log = originalLog;
 			process.chdir(previousCwd);
 			await rm(wd, { recursive: true, force: true });
@@ -4483,6 +4529,8 @@ describe("teamCommand status", () => {
 	it("supports custom tail lines for generated raw inspect commands", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-team-status-tail-lines-"));
 		const previousCwd = process.cwd();
+		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 		const logs: string[] = [];
 		const originalLog = console.log;
 		try {
@@ -4497,6 +4545,7 @@ describe("teamCommand status", () => {
 				),
 			);
 			config.workers[0]!.pane_id = "%51";
+			config.workers[0]!.pid = process.pid;
 			const manifestPath = join(
 				wd,
 				".omx",
@@ -4517,6 +4566,20 @@ describe("teamCommand status", () => {
 				`${JSON.stringify(config, null, 2)}\n`,
 			);
 			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+			const tmuxPath = join(wd, "tmux");
+			await writeFile(
+				tmuxPath,
+				`#!/bin/sh
+if [ "$1" = "display-message" ] && [ "$4" = "%51" ]; then
+  printf '%%51\\t0\\t${process.pid}\\t${config.tmux_pane_owner_id}\\n'
+  exit 0
+fi
+exit 1
+`,
+			);
+			await chmod(tmuxPath, 0o755);
+			process.env.PATH = `${wd}:${previousPath ?? ""}`;
+			process.env.OMX_MUX_BINARY = "tmux";
 
 			console.log = (...args: unknown[]) =>
 				logs.push(args.map(String).join(" "));
@@ -4557,6 +4620,11 @@ describe("teamCommand status", () => {
 				"omx sparkshell --tmux-pane %51 --tail-lines 550",
 			);
 		} finally {
+			if (typeof previousPath === "string") process.env.PATH = previousPath;
+			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			console.log = originalLog;
 			process.chdir(previousCwd);
 			await rm(wd, { recursive: true, force: true });

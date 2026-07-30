@@ -1,19 +1,19 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import {
-	mkdtemp,
 	mkdir,
-	readFile,
+	mkdtemp,
 	readdir,
+	readFile,
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
 import { setup } from "../setup.js";
 
-describe("omx setup skills overwrite behavior", () => {
+describe("omx setup legacy skills overwrite behavior", () => {
 	it("installs wiki during setup even though it is omitted from the current manifest", async () => {
 		const wd = await mkdtemp(join(tmpdir(), "omx-setup-skills-"));
 		const previousCwd = process.cwd();
@@ -21,7 +21,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const wikiSkill = join(wd, ".codex", "skills", "wiki", "SKILL.md");
 			assert.equal(existsSync(wikiSkill), true);
@@ -41,7 +41,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const installedSetupSkill = join(
 				wd,
@@ -75,7 +75,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const skillsDir = join(wd, ".codex", "skills");
 			const installed = new Set(await readdir(skillsDir));
@@ -119,7 +119,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const staleWebCloneDir = join(wd, ".codex", "skills", "web-clone");
 			await mkdir(staleWebCloneDir, { recursive: true });
@@ -129,7 +129,7 @@ describe("omx setup skills overwrite behavior", () => {
 			);
 			assert.equal(existsSync(staleWebCloneDir), true);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			assert.equal(existsSync(staleWebCloneDir), false);
 			assert.equal(
@@ -149,7 +149,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const staleSkills = [
 				"swarm",
@@ -166,7 +166,7 @@ describe("omx setup skills overwrite behavior", () => {
 				assert.equal(existsSync(staleDir), true);
 			}
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			for (const staleSkill of staleSkills) {
 				assert.equal(
@@ -188,12 +188,12 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const pipelinePath = join(wd, ".codex", "skills", "pipeline", "SKILL.md");
 			await writeFile(pipelinePath, "# stale pipeline\n");
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			assert.match(
 				await readFile(pipelinePath, "utf-8"),
@@ -213,7 +213,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const wikiDir = join(wd, ".codex", "skills", "wiki");
 			const staleSwarmDir = join(wd, ".codex", "skills", "swarm");
@@ -222,7 +222,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(staleSwarmDir, { recursive: true });
 			await writeFile(join(staleSwarmDir, "SKILL.md"), "# stale swarm\n");
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			assert.equal(existsSync(wikiDir), true);
 			assert.equal(existsSync(join(wikiDir, "SKILL.md")), true);
@@ -240,7 +240,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const skillPath = join(wd, ".codex", "skills", "omx-setup", "SKILL.md");
 			assert.equal(existsSync(skillPath), true);
@@ -249,13 +249,13 @@ describe("omx setup skills overwrite behavior", () => {
 			const customized = `${installed}\n\n# local customization\n`;
 			await writeFile(skillPath, customized);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 			assert.equal(await readFile(skillPath, "utf-8"), installed);
 
 			const backupsRoot = join(wd, ".omx", "backups", "setup");
 			assert.equal(existsSync(backupsRoot), true);
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 			assert.equal(await readFile(skillPath, "utf-8"), installed);
 		} finally {
 			process.chdir(previousCwd);
@@ -270,7 +270,7 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const customSkillDir = join(wd, ".codex", "skills", "my-custom-skill");
 			const customSkillPath = join(customSkillDir, "SKILL.md");
@@ -280,13 +280,13 @@ describe("omx setup skills overwrite behavior", () => {
 				"---\nname: my-custom-skill\ndescription: local custom skill\n---\n",
 			);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 			assert.equal(
 				await readFile(customSkillPath, "utf-8"),
 				"---\nname: my-custom-skill\ndescription: local custom skill\n---\n",
 			);
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 			assert.equal(
 				await readFile(customSkillPath, "utf-8"),
 				"---\nname: my-custom-skill\ndescription: local custom skill\n---\n",
@@ -304,8 +304,8 @@ describe("omx setup skills overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const installedSetupSkill = join(
 				wd,
@@ -339,13 +339,22 @@ describe("omx setup skills overwrite behavior", () => {
 				logs.push(args.map((arg) => String(arg)).join(" "));
 			};
 
-			await setup({ scope: "project", verbose: true });
+			await setup({
+				scope: "project",
+				installMode: "legacy",
+				verbose: true,
+			});
 			await mkdir(join(wd, ".codex", "skills", "swarm"), { recursive: true });
 			await writeFile(
 				join(wd, ".codex", "skills", "swarm", "SKILL.md"),
 				"# stale swarm\n",
 			);
-			await setup({ scope: "project", force: true, verbose: true });
+			await setup({
+				scope: "project",
+				installMode: "legacy",
+				force: true,
+				verbose: true,
+			});
 
 			const output = logs.join("\n");
 			assert.match(output, /skipped review\/ \(status: deprecated\)/);
@@ -387,7 +396,7 @@ describe("omx setup skills overwrite behavior", () => {
 				logs.push(args.map((arg) => String(arg)).join(" "));
 			};
 
-			await setup({ scope: "user" });
+			await setup({ scope: "user", installMode: "legacy" });
 
 			const output = logs.join("\n");
 			assert.match(

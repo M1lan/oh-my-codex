@@ -285,7 +285,7 @@ describe("buildTmuxSplitArgs – shell injection hardening", () => {
 			undefined,
 			"sess-managed",
 			undefined,
-			"%leader",
+			"%1",
 		);
 		const cmd = args.at(-1) ?? "";
 		assert.deepEqual(args.slice(0, 7), [
@@ -294,27 +294,28 @@ describe("buildTmuxSplitArgs – shell injection hardening", () => {
 			"-l",
 			String(HUD_TMUX_HEIGHT_LINES),
 			"-t",
-			"%leader",
+			"%1",
 			"-c",
 		]);
 		assert.equal(
 			cmd,
-			`exec env OMX_SESSION_ID='sess-managed' OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%leader' ${runtimePrefix} '/usr/bin/omx.js' hud --watch`,
+			`exec env OMX_SESSION_ID='sess-managed' OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%1' ${runtimePrefix} '/usr/bin/omx.js' hud --watch`,
 		);
 	});
 });
 
 describe("buildHudWatchCommand", () => {
-	it("forwards OMX_ROOT and OMX_TMUX_HUD_OWNER for reconciled HUD panes with shell-safe quoting", () => {
+	it("forwards exact leader binding, OMX_ROOT, and OMX_TMUX_HUD_OWNER for reconciled HUD panes with shell-safe quoting", () => {
 		const cmd = buildHudWatchCommand(
 			"/usr/bin/omx.js",
 			"minimal",
 			"sess managed",
 			"/tmp/boxed root/it's/$(literal)",
+			"%42",
 		);
 		assert.equal(
 			cmd,
-			`exec env OMX_SESSION_ID='sess managed' OMX_TMUX_HUD_OWNER='1' OMX_ROOT='/tmp/boxed root/it'\\''s/$(literal)' ${runtimePrefix} '/usr/bin/omx.js' hud --watch --preset=minimal`,
+			`exec env OMX_SESSION_ID='sess managed' OMX_TMUX_HUD_OWNER='1' OMX_TMUX_HUD_LEADER_PANE='%42' OMX_ROOT='/tmp/boxed root/it'\\''s/$(literal)' ${runtimePrefix} '/usr/bin/omx.js' hud --watch '--preset=minimal'`,
 		);
 	});
 

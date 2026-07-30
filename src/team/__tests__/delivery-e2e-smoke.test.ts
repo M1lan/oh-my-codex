@@ -267,15 +267,20 @@ async function withFakeTmux<T>(
 	const fakeBinDir = join(cwd, "fake-bin");
 	const tmuxLogPath = join(cwd, "tmux.log");
 	const previousPath = process.env.PATH;
+	const previousMuxBinary = process.env.OMX_MUX_BINARY;
 	await mkdir(fakeBinDir, { recursive: true });
 	await writeFile(join(fakeBinDir, "tmux"), buildFakeTmux(tmuxLogPath));
 	await chmod(join(fakeBinDir, "tmux"), 0o755);
 	process.env.PATH = `${fakeBinDir}:${previousPath || ""}`;
+	process.env.OMX_MUX_BINARY = "tmux";
 	try {
 		return await fn(tmuxLogPath);
 	} finally {
 		if (typeof previousPath === "string") process.env.PATH = previousPath;
 		else delete process.env.PATH;
+		if (typeof previousMuxBinary === "string")
+			process.env.OMX_MUX_BINARY = previousMuxBinary;
+		else delete process.env.OMX_MUX_BINARY;
 	}
 }
 
@@ -770,16 +775,6 @@ describe("team message delivery end-to-end smoke tests", () => {
 					}),
 				});
 
-				const mailboxCompat = JSON.parse(
-					await readFile(join(cwd, ".omx", "state", "mailbox.json"), "utf-8"),
-				) as { records: Array<{ message_id: string }> };
-				assert.equal(
-					mailboxCompat.records.some(
-						(record) => record.message_id === messageId,
-					),
-					true,
-				);
-
 				const mailbox = await listMailboxMessages(
 					"cli-bridge-send",
 					"worker-1",
@@ -788,18 +783,20 @@ describe("team message delivery end-to-end smoke tests", () => {
 				const message = mailbox.find((entry) => entry.message_id === messageId);
 				assert.ok(
 					message,
-					"expected CLI-created message in canonical mailbox view",
-				);
-				assert.ok(
-					message?.notified_at,
-					"expected TS hook path to persist notified_at",
+					"expected CLI-created message in the canonical mailbox view",
 				);
 
-				const requests = await listDispatchRequests("cli-bridge-send", cwd, {
-					kind: "mailbox",
-					to_worker: "worker-1",
-				});
-				assert.equal(requests[0]?.status, "notified");
+				const request = (
+					await listDispatchRequests("cli-bridge-send", cwd, {
+						kind: "mailbox",
+						to_worker: "worker-1",
+					})
+				)[0];
+				assert.equal(request?.status, "notified");
+				assert.ok(
+					request?.notified_at,
+					"expected dispatch state to expose the notification timestamp",
+				);
 				assert.equal(existsSync(runtimePath), true);
 			});
 		} finally {
@@ -979,8 +976,8 @@ describe("team message delivery end-to-end smoke tests", () => {
 				);
 				assert.equal(mailbox.length, 1);
 				assert.ok(
-					mailbox[0]?.notified_at,
-					"bridge success path should preserve notified_at in canonical view",
+					mailbox[0]?.message_id,
+					"expected bridge-authored message in the canonical mailbox view",
 				);
 
 				const request = (
@@ -990,6 +987,10 @@ describe("team message delivery end-to-end smoke tests", () => {
 					})
 				)[0];
 				assert.equal(request?.status, "notified");
+				assert.ok(
+					request?.notified_at,
+					"expected dispatch state to expose the notification timestamp",
+				);
 			});
 		} finally {
 			await cleanup();

@@ -1,9 +1,9 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { readModeState, startMode } from "../../modes/base.js";
 import { getBaseStateDir, getStatePath } from "../../state/paths.js";
 import { writeRoleRoutingMarker } from "../../subagents/role-routing-marker.js";
@@ -12,6 +12,22 @@ import { cancelRalplanConsensus, runRalplanConsensus } from "../runtime.js";
 
 function sessionStatePath(cwd: string, sessionId: string): string {
 	return getStatePath("ralplan", cwd, sessionId);
+}
+
+async function writeSessionPointer(
+	cwd: string,
+	sessionId: string,
+): Promise<void> {
+	const stateDir = join(cwd, ".omx", "state");
+	await mkdir(stateDir, { recursive: true });
+	await writeFile(
+		join(stateDir, "session.json"),
+		JSON.stringify({
+			session_id: sessionId,
+			cwd,
+			state_root: stateDir,
+		}),
+	);
 }
 
 async function readScopedRalplanState(
@@ -156,23 +172,14 @@ describe("ralplan runtime", () => {
 		}
 	});
 
-	it("persists a successful session-scoped lifecycle through complete", async () => {
+	it("retains authored lifecycle evidence but fails closed without a host receipt verifier", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-ralplan-runtime-"));
 		const sessionId = "sess-ralplan-success";
 		try {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const seenPhases: string[] = [];
 			const result = await runRalplanConsensus(
@@ -223,10 +230,14 @@ describe("ralplan runtime", () => {
 				{ task: "implement live ralplan runtime", cwd },
 			);
 
-			assert.equal(result.status, "completed");
-			assert.equal(result.phase, "complete");
+			assert.equal(result.status, "failed");
+			assert.equal(result.phase, "failed");
 			assert.equal(result.iteration, 1);
-			assert.equal(result.planningComplete, true);
+			assert.equal(result.planningComplete, false);
+			assert.equal(
+				result.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
 			assert.deepEqual(seenPhases, [
 				"draft",
 				"architect-review",
@@ -240,55 +251,23 @@ describe("ralplan runtime", () => {
 
 			const finalState = await readModeState("ralplan", cwd);
 			assert.equal(finalState?.active, false);
-			assert.equal(finalState?.current_phase, "complete");
+			assert.equal(finalState?.current_phase, "failed");
 			assert.equal(finalState?.iteration, 1);
-			assert.equal(finalState?.planning_complete, true);
+			assert.equal(finalState?.planning_complete, false);
 			assert.match(
 				String(finalState?.status_message || ""),
-				/Status: complete/,
+				/official host consensus receipt verifier/,
 			);
 			assert.equal(finalState?.latest_architect_verdict, "approve");
 			assert.equal(finalState?.latest_critic_verdict, "approve");
-			assert.deepEqual(finalState?.ralplan_consensus_gate, {
-				required: true,
-				complete: true,
-				sequence: ["architect-review", "critic-review"],
-				planning_artifacts_are_not_consensus: true,
-				required_review_roles: ["architect", "critic"],
-				ralplan_architect_review: {
-					agent_role: "architect",
-					iteration: 1,
-					sequence_index: 1,
-					verdict: "approve",
-					summary: "architect-ok",
-					artifacts: { architected: true },
-				},
-				ralplan_critic_review: {
-					agent_role: "critic",
-					iteration: 1,
-					sequence_index: 2,
-					verdict: "approve",
-					summary: "critic-ok",
-					artifacts: { critiqued: true },
-				},
-				architect_review: {
-					agent_role: "architect",
-					iteration: 1,
-					sequence_index: 1,
-					verdict: "approve",
-					summary: "architect-ok",
-					artifacts: { architected: true },
-				},
-				critic_review: {
-					agent_role: "critic",
-					iteration: 1,
-					sequence_index: 2,
-					verdict: "approve",
-					summary: "critic-ok",
-					artifacts: { critiqued: true },
-				},
-				blocked_reason: null,
-			});
+			assert.equal(
+				(
+					finalState?.ralplan_consensus_gate as
+						| { blocked_reason?: string }
+						| undefined
+				)?.blocked_reason,
+				"documented_host_consensus_receipt_unavailable",
+			);
 			assert.equal(Array.isArray(finalState?.review_history), true);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
@@ -303,47 +282,59 @@ describe("ralplan runtime", () => {
 			const result = await runRalplanConsensus(
 				{
 					async draft() {
-						const plansDir = join(cwd, ".omx", "plans");
-						await mkdir(plansDir, { recursive: true });
-						const prdPath = join(plansDir, "prd-planning-only.md");
-						await writeFile(prdPath, "# plan\n");
-						await writeFile(
-							join(plansDir, "test-spec-planning-only.md"),
-							"# tests\n",
-						);
-						return { summary: "draft", planPath: prdPath };
+						return { summary: "draft lifecycle evidence" };
 					},
 					async architectReview() {
-						return { verdict: "approve", summary: "architect ok" };
+						return {
+							agent_role: "architect",
+							verdict: "approve",
+							thread_id: "architect-thread",
+							sequence_index: 1,
+						};
 					},
 					async criticReview() {
-						return { verdict: "approve", summary: "critic ok" };
+						return {
+							agent_role: "critic",
+							verdict: "approve",
+							thread_id: "critic-thread",
+							sequence_index: 2,
+						};
 					},
 				},
-				{ task: "planning only approval", cwd, maxIterations: 1 },
+				{
+					task: "fail closed without host receipt verifier",
+					cwd,
+					maxIterations: 1,
+					selectedExecutionLane: "ultragoal",
+				},
 			);
 
-			assert.equal(result.status, "completed");
-			assert.equal(result.executionHandoffStarted, false);
-			const finalState = await readModeState("ralplan", cwd);
-			const ralplanHandoff = (
-				finalState?.handoff_artifacts as
-					| { ralplan?: Record<string, unknown> }
-					| undefined
-			)?.ralplan;
-			assert.equal(finalState?.selected_execution_lane, "none");
+			assert.equal(result.status, "failed");
+			assert.equal(result.phase, "failed");
 			assert.equal(
-				ralplanHandoff?.execution_handoff_status,
-				"planning_only_terminal",
+				result.error,
+				"documented_host_consensus_receipt_unavailable",
 			);
-			assert.equal(ralplanHandoff?.planning_only_terminal, true);
+			assert.equal(result.ralplanConsensusGate.complete, false);
+			assert.equal(
+				result.ralplanConsensusGate.blocked_reason,
+				"documented_host_consensus_receipt_unavailable",
+			);
+			assert.equal(
+				result.ralplanConsensusGate.ralplan_architect_review?.agent_role,
+				"architect",
+			);
+			assert.equal(
+				result.ralplanConsensusGate.ralplan_critic_review?.agent_role,
+				"critic",
+			);
 			assert.equal(existsSync(getStatePath("ultragoal", cwd)), false);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});
 
-	it("starts the selected execution handoff only after Critic approval completes consensus", async () => {
+	it("does not start execution handoff from local lifecycle approval", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-ralplan-runtime-execution-handoff-"),
 		);
@@ -378,21 +369,15 @@ describe("ralplan runtime", () => {
 				},
 			);
 
-			assert.equal(result.status, "completed");
-			assert.equal(result.executionHandoffStarted, true);
-			const ultragoalState = JSON.parse(
-				await readFile(getStatePath("ultragoal", cwd), "utf-8"),
-			) as Record<string, unknown>;
-			assert.equal(ultragoalState.active, true);
-			assert.equal(ultragoalState.current_phase, "starting");
+			assert.equal(result.status, "failed");
+			assert.equal(
+				result.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
+			assert.equal(result.executionHandoffStarted, undefined);
+			assert.equal(existsSync(getStatePath("ultragoal", cwd)), false);
 			const finalState = await readModeState("ralplan", cwd);
-			const ralplanHandoff = (
-				finalState?.handoff_artifacts as
-					| { ralplan?: Record<string, unknown> }
-					| undefined
-			)?.ralplan;
-			assert.equal(ralplanHandoff?.selected_execution_lane, "ultragoal");
-			assert.equal(ralplanHandoff?.execution_handoff_status, "started");
+			assert.equal(finalState?.handoff_artifacts, undefined);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -435,7 +420,7 @@ describe("ralplan runtime", () => {
 				{ task: "reuse architect lane", cwd, maxIterations: 3 },
 			);
 
-			assert.equal(result.status, "completed");
+			assert.equal(result.status, "failed");
 			assert.deepEqual(architectThreads, [undefined, "thread-architect"]);
 			assert.deepEqual(
 				result.architectReviews.map((review) => review.thread_id),
@@ -501,16 +486,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -566,16 +542,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -637,16 +604,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			await writeNativeSubagentTracking(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
@@ -712,16 +670,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			await writeNativeSubagentTracking(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
@@ -762,7 +711,11 @@ describe("ralplan runtime", () => {
 				},
 			);
 
-			assert.equal(result.status, "completed");
+			assert.equal(result.status, "failed");
+			assert.equal(
+				result.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
 			const tracking = JSON.parse(
 				await readFile(subagentTrackingPath(cwd), "utf-8"),
 			) as {
@@ -795,16 +748,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -898,16 +842,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			await writeNativeSubagentTracking(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
@@ -957,9 +892,12 @@ describe("ralplan runtime", () => {
 				},
 			);
 
-			assert.equal(result.status, "completed");
-			assert.equal(result.ralplanConsensusGate.complete, true);
-			assert.equal(result.ralplanConsensusGate.blocked_reason, null);
+			assert.equal(result.status, "failed");
+			assert.equal(result.ralplanConsensusGate.complete, false);
+			assert.equal(
+				result.ralplanConsensusGate.blocked_reason,
+				"documented_host_consensus_receipt_unavailable",
+			);
 			assert.equal(
 				result.ralplanConsensusGate.ralplan_architect_review?.thread_id,
 				"thread-architect",
@@ -982,16 +920,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			await writeAdaptedSubagentTracking(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
@@ -1011,7 +940,7 @@ describe("ralplan runtime", () => {
 						return {
 							verdict: "approve",
 							summary: "adapted architect ok",
-							provenance_kind: "omx_adapted",
+							provenance_kind: "omx_adapted" as never,
 							session_id: sessionId,
 							thread_id: "thread-architect",
 							artifact_path: ".omx/artifacts/architect.md",
@@ -1023,7 +952,7 @@ describe("ralplan runtime", () => {
 						return {
 							verdict: "approve",
 							summary: "adapted critic ok",
-							provenance_kind: "omx_adapted",
+							provenance_kind: "omx_adapted" as never,
 							session_id: sessionId,
 							thread_id: "thread-critic",
 							artifact_path: ".omx/artifacts/critic.md",
@@ -1045,7 +974,7 @@ describe("ralplan runtime", () => {
 			assert.equal(result.ralplanConsensusGate.complete, false);
 			assert.equal(
 				result.ralplanConsensusGate.blocked_reason,
-				"native_subagent_consensus_evidence_missing",
+				"architect_review_missing_or_not_approved",
 			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
@@ -1061,16 +990,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			await writeNativeSubagentTracking(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
@@ -1142,10 +1062,7 @@ describe("ralplan runtime", () => {
 		const sessionId = "sess-ralplan-architect-reject";
 		try {
 			await mkdir(join(cwd, ".omx", "state"), { recursive: true });
-			await writeFile(
-				join(cwd, ".omx", "state", "session.json"),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			let criticCalls = 0;
 			const result = await runRalplanConsensus(
@@ -1207,16 +1124,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const draftIterations: number[] = [];
 			const criticVerdicts: string[] = [];
@@ -1259,13 +1167,17 @@ describe("ralplan runtime", () => {
 				{ task: "loop until approval", cwd, maxIterations: 3 },
 			);
 
-			assert.equal(result.status, "completed");
+			assert.equal(result.status, "failed");
 			assert.equal(result.iteration, 2);
+			assert.equal(
+				result.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
 			assert.deepEqual(draftIterations, [1, 2]);
 			assert.deepEqual(criticVerdicts, ["iterate", "approve"]);
 
 			const finalState = await readModeState("ralplan", cwd);
-			assert.equal(finalState?.current_phase, "complete");
+			assert.equal(finalState?.current_phase, "failed");
 			assert.equal(finalState?.iteration, 2);
 			assert.equal((finalState?.review_history as Array<unknown>).length, 2);
 		} finally {
@@ -1282,16 +1194,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 			const plansDir = join(cwd, ".omx", "plans");
 			await mkdir(plansDir, { recursive: true });
 			await writeFile(join(plansDir, "prd-reject.md"), "# plan\n");
@@ -1334,16 +1237,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -1373,9 +1267,9 @@ describe("ralplan runtime", () => {
 			assert.equal(result.planningComplete, false);
 			assert.equal(
 				result.error,
-				"ralplan_planning_artifacts_missing_after_consensus",
+				"documented_host_consensus_receipt_unavailable",
 			);
-			assert.equal(result.ralplanConsensusGate.complete, true);
+			assert.equal(result.ralplanConsensusGate.complete, false);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -1390,16 +1284,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -1421,16 +1306,16 @@ describe("ralplan runtime", () => {
 			assert.equal(result.planningComplete, false);
 			assert.equal(
 				result.error,
-				"ralplan_planning_artifacts_missing_after_consensus",
+				"documented_host_consensus_receipt_unavailable",
 			);
-			assert.equal(result.ralplanConsensusGate.complete, true);
+			assert.equal(result.ralplanConsensusGate.complete, false);
 
 			const finalState = await readModeState("ralplan", cwd);
 			assert.equal(finalState?.current_phase, "failed");
 			assert.equal(finalState?.planning_complete, false);
 			assert.equal(
 				finalState?.error,
-				"ralplan_planning_artifacts_missing_after_consensus",
+				"documented_host_consensus_receipt_unavailable",
 			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
@@ -1444,16 +1329,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			const result = await runRalplanConsensus(
 				{
@@ -1490,16 +1366,7 @@ describe("ralplan runtime", () => {
 			await mkdir(join(sessionStatePath(cwd, sessionId), ".."), {
 				recursive: true,
 			});
-			await writeFile(
-				join(
-					sessionStatePath(cwd, sessionId),
-					"..",
-					"..",
-					"..",
-					"session.json",
-				),
-				JSON.stringify({ session_id: sessionId }),
-			);
+			await writeSessionPointer(cwd, sessionId);
 
 			await startMode("ralplan", "cancel me", 2, cwd);
 			await cancelRalplanConsensus(cwd);

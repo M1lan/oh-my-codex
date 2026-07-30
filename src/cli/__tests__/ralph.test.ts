@@ -1,10 +1,10 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, it } from "node:test";
+import type { ApprovedExecutionLaunchHint } from "../../planning/artifacts.js";
 import {
-	RALPH_HELP,
 	assertRequiredRalphPrdJson,
 	buildRalphAppendInstructions,
 	buildRalphChangedFilesSeedContents,
@@ -12,10 +12,10 @@ import {
 	filterRalphCodexArgs,
 	isRalphPrdMode,
 	normalizeRalphCliArgs,
+	RALPH_HELP,
 	readMatchedApprovedRalphExecutionHint,
 	resolveApprovedRalphExecutionHint,
 } from "../ralph.js";
-import type { ApprovedExecutionLaunchHint } from "../../planning/artifacts.js";
 
 describe("extractRalphTaskDescription", () => {
 	it("returns plain task text from positional args", () => {
@@ -407,8 +407,14 @@ describe("ralph deslop launch wiring", () => {
 		assert.match(instructions, /never omit `agent_type` for generic OMX work/);
 		assert.match(instructions, /role_routing_unavailable/);
 		assert.match(instructions, /do not fabricate `agent_type`/);
-		assert.match(instructions, /omx ralplan preflight --json/);
-		assert.match(instructions, /unsupported_documented_leader_proof/);
+		assert.match(
+			instructions,
+			/When it reports `role_routing_unavailable` and adapted Ralplan authority is requested, do not fabricate `agent_type`; run `omx ralplan preflight --json` and stop on `unsupported_documented_leader_proof`\. Ordinary work remains under its own workflow gates/,
+		);
+		assert.doesNotMatch(
+			instructions,
+			/Before Ralplan-originated planning, state, HUD, runtime, or delegation work/,
+		);
 		assert.match(instructions, /never fake the role via a prompt label/i);
 		assert.match(instructions, /use `reasoning_effort` instead of `tier`/);
 		assert.match(instructions, /LOW -> `low`/);

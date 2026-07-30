@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, readFile, mkdir, chmod } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "fs";
 import {
 	initTeamState,
@@ -64,6 +65,51 @@ function withMockPromptModeCodexAllowed<T>(fn: () => T): T {
 	} finally {
 		if (restoreImmediately) restore();
 	}
+}
+
+function workerRuntimeScaleTmuxStub(
+	tmuxLogPath: string,
+	statePath: string,
+	sessionName: string,
+	ownerId: string,
+): string {
+	return [
+		"#!/bin/sh",
+		"set -eu",
+		`printf '%s\\n' "$*" >> "${tmuxLogPath}"`,
+		'case "${1:-}" in',
+		'  -V) echo "tmux 3.2a" ;;',
+		"  display-message)",
+		'    case "$*" in',
+		`      *"-t %31 "*) printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%31' '42424' '${sessionName}' '$1' '@1' '${ownerId}' ;;`,
+		`      *"-t %21 "*) printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%21' '42422' '${sessionName}' '$1' '@1' '${ownerId}' ;;`,
+		`      *) printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%11' '42421' '${sessionName}' '$1' '@1' '${ownerId}' ;;`,
+		"    esac",
+		"    ;;",
+		"  if-shell)",
+		'    [ "${2:-}" = "-F" ] || exit 1',
+		'    if [ "${3:-}" = "-t" ]; then target="${4:-}"; condition="${5:-}"; success="${6:-}"; else target=""; condition="${3:-}"; success="${4:-}"; fi',
+		'    case "$target" in %21|%31) ;; *) exit 1 ;; esac',
+		"    receipt=\"$(printf '%s' \"$success\" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')\"",
+		'    [ -n "$receipt" ] || exit 1',
+		'    case "$success" in',
+		`      *split-window*) [ "$target" = '%21' ] || exit 1; : > '${statePath}'; printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%31' '42424' '${sessionName}' '$1' '@1' "$receipt" ;;`,
+		'      *set-option*|*send-keys*|*kill-pane*) printf "%s\\n" "$receipt" ;;',
+		"      *) exit 1 ;;",
+		"    esac",
+		"    ;;",
+		"  list-panes)",
+		"    printf '%s\\t%s\\t%s\\n' '%11' '0' '42421'",
+		"    printf '%s\\t%s\\t%s\\n' '%21' '0' '42422'",
+		`    if [ -f '${statePath}' ]; then printf '%s\\t%s\\t%s\\n' '%31' '0' '42424'; fi`,
+		"    ;;",
+		`  show-option) echo '${ownerId}' ;;`,
+		"  split-window) exit 1 ;;",
+		"  set-option|send-keys|kill-pane|capture-pane) ;;",
+		"esac",
+		"exit 0",
+		"",
+	].join("\n");
 }
 
 describe("worker runtime identity contract", () => {
@@ -264,48 +310,22 @@ process.on('SIGTERM', () => process.exit(0));
 		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
 		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 
 		try {
 			await writeFile(
 				tmuxStubPath,
-				[
-					"#!/bin/sh",
-					"set -eu",
-					`printf '%s\n' "$*" >> "${tmuxLogPath}"`,
-					'case "${1:-}" in',
-					"  -V)",
-					'    echo "tmux 3.2a"',
-					"    ;;",
-					"  split-window)",
-					'    echo "%31"',
-					"    ;;",
-					"  list-panes)",
-					'    if [ "${2:-}" = "-a" ] && [ "${3:-}" = "-F" ] && [ "${4:-}" = "#{pane_id}\t#{pane_dead}\t#{pane_pid}" ]; then',
-					'      printf "%s\n" "%11\t0\t42421" "%21\t0\t42422" "%31\t0\t42424"',
-					"    else",
-					'      echo "42424"',
-					"    fi",
-					"    ;;",
-					"  show-option)",
-					'    case "$*" in',
-					'      *"-p -t %21 @omx_team_pane_owner_id"*|*"-p -t %31 @omx_team_pane_owner_id"*)',
-					'        echo "team:low-role-scale"',
-					"        ;;",
-					"      *)",
-					"        exit 1",
-					"        ;;",
-					"    esac",
-					"    ;;",
-					"  capture-pane)",
-					'    echo ""',
-					"    ;;",
-					"esac",
-					"exit 0",
-					"",
-				].join("\n"),
+				workerRuntimeScaleTmuxStub(
+					tmuxLogPath,
+					join(fakeBinDir, "created-%31"),
+					"omx-team-low-role-scale",
+					"team:low-role-scale",
+				),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			execFileSync("sh", ["-n", tmuxStubPath], { stdio: "pipe" });
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
+			process.env.OMX_MUX_BINARY = "tmux";
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
 			await writeFile(
@@ -441,10 +461,25 @@ process.on('SIGTERM', () => process.exit(0));
 				"utf-8",
 			);
 			assert.match(startupScript, /gpt-5\.6-luna/);
+			execFileSync("sh", [
+				"-n",
+				join(
+					cwd,
+					".omx",
+					"state",
+					"team",
+					"low-role-scale",
+					"runtime",
+					"worker-2-startup.sh",
+				),
+			]);
 			assert.match(startupScript, /model_reasoning_effort.*low/);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			await rm(cwd, { recursive: true, force: true });
 			await rm(fakeBinDir, { recursive: true, force: true });
 		}
@@ -460,51 +495,23 @@ process.on('SIGTERM', () => process.exit(0));
 		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
 		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 
 		try {
 			await writeFile(
 				tmuxStubPath,
-				[
-					"#!/bin/sh",
-					"set -eu",
-					`printf '%s\n' "$*" >> "${tmuxLogPath}"`,
-					'case "${1:-}" in',
-					"  -V)",
-					'    echo "tmux 3.2a"',
-					"    ;;",
-					"  split-window)",
-					'    echo "%31"',
-					"    ;;",
-					"  list-panes)",
-					'    if [ "${2:-}" = "-a" ] && [ "${3:-}" = "-F" ] && [ "${4:-}" = "#{pane_id}\t#{pane_dead}\t#{pane_pid}" ]; then',
-					'      printf "%s\n" "%11\t0\t42421" "%21\t0\t42422" "%31\t0\t42424"',
-					"    else",
-					'      echo "42424"',
-					"    fi",
-					"    ;;",
-					"  show-option)",
-					'    case "$*" in',
-					'      *"-p -t %21 @omx_team_pane_owner_id"*|*"-p -t %31 @omx_team_pane_owner_id"*)',
-					'        echo "team:exact-role-cli"',
-					"        ;;",
-					"      *)",
-					"        exit 1",
-					"        ;;",
-					"    esac",
-					"    ;;",
-					"  send-keys)",
-					"    ;;",
-					"  capture-pane)",
-					'    echo ""',
-					"    ;;",
-					"esac",
-					"exit 0",
-					"",
-				].join("\n"),
+				workerRuntimeScaleTmuxStub(
+					tmuxLogPath,
+					join(fakeBinDir, "created-%31"),
+					"omx-team-exact-role-cli",
+					"team:exact-role-cli",
+				),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			execFileSync("sh", ["-n", tmuxStubPath], { stdio: "pipe" });
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
+			process.env.OMX_MUX_BINARY = "tmux";
 
 			await mkdir(join(cwd, ".omx", "state", "team", "exact-role-cli"), {
 				recursive: true,
@@ -631,6 +638,9 @@ process.on('SIGTERM', () => process.exit(0));
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			await rm(cwd, { recursive: true, force: true });
 			await rm(fakeBinDir, { recursive: true, force: true });
 		}

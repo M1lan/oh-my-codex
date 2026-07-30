@@ -7,6 +7,7 @@ import {
 	teamReadDispatchRequest as readDispatchRequest,
 	teamTransitionDispatchRequest as transitionDispatchRequest,
 	teamMarkDispatchRequestNotified as markDispatchRequestNotified,
+	teamMarkDispatchRequestFailed as markDispatchRequestFailed,
 	type TeamDispatchRequest,
 	type TeamDispatchRequestInput,
 } from "./team-ops.js";
@@ -123,7 +124,7 @@ async function markImmediateDispatchFailure(params: {
 	messageId?: string;
 	cwd: string;
 }): Promise<void> {
-	const { teamName, request, reason, messageId, cwd } = params;
+	const { teamName, request, reason, cwd } = params;
 	if (request.transport_preference === "hook_preferred_with_fallback") return;
 
 	const current = await readDispatchRequest(teamName, request.request_id, cwd);
@@ -135,15 +136,10 @@ async function markImmediateDispatchFailure(params: {
 	)
 		return;
 
-	await transitionDispatchRequest(
+	await markDispatchRequestFailed(
 		teamName,
 		request.request_id,
-		current.status,
-		"failed",
-		{
-			message_id: messageId ?? current.message_id,
-			last_reason: reason,
-		},
+		reason,
 		cwd,
 	).catch(() => {});
 }

@@ -28,7 +28,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const promptsDir = join(wd, ".codex", "prompts");
 			const nativeAgentsDir = join(wd, ".codex", "agents");
@@ -113,7 +113,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
@@ -126,7 +126,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			assert.notEqual(customized, installed);
 			await writeFile(executorPath, customized);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			assert.equal(await readFile(executorPath, "utf-8"), customized);
 		} finally {
@@ -142,7 +142,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
@@ -154,7 +154,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 				);
 			await writeFile(executorPath, customized);
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			const refreshed = await readFile(executorPath, "utf-8");
 			assert.notEqual(refreshed, customized);
@@ -176,7 +176,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const executorPath = join(wd, ".codex", "agents", "executor.toml");
 			const installed = await readFile(executorPath, "utf-8");
@@ -189,7 +189,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await writeFile(executorPath, customized);
 
 			process.env.OMX_SKIP_NATIVE_AGENT_REFRESH = "1";
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			assert.equal(await readFile(executorPath, "utf-8"), customized);
 		} finally {
@@ -209,7 +209,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const validPrompts = [
 				"style-reviewer.md",
@@ -232,7 +232,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await writeFile(unknownPromptPath, "# unclassified local prompt\n");
 			assert.equal(existsSync(unknownPromptPath), true);
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			for (const validPrompt of validPrompts) {
 				assert.equal(
@@ -258,7 +258,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const staleAgents = ["style-reviewer.toml", "quality-reviewer.toml"];
 			for (const staleAgent of staleAgents) {
@@ -267,7 +267,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 				assert.equal(existsSync(stalePath), true);
 			}
 
-			await setup({ scope: "project", force: true });
+			await setup({ scope: "project", installMode: "legacy", force: true });
 
 			for (const staleAgent of staleAgents) {
 				assert.equal(
@@ -292,7 +292,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const stalePath = join(wd, ".codex", "agents", "style-reviewer.toml");
 			await writeFile(
@@ -307,7 +307,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			);
 			assert.equal(existsSync(stalePath), true);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			assert.equal(existsSync(stalePath), false);
 			assert.equal(
@@ -327,7 +327,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const userAuthoredPath = join(
 				wd,
@@ -346,7 +346,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			);
 			assert.equal(existsSync(userAuthoredPath), true);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			assert.equal(existsSync(userAuthoredPath), true);
 			assert.equal(
@@ -366,7 +366,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			await mkdir(join(wd, ".omx", "state"), { recursive: true });
 			process.chdir(wd);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			const stalePath = join(wd, ".codex", "agents", "legacy-skill-agent.toml");
 			await writeFile(
@@ -380,7 +380,7 @@ describe("omx setup prompt/native-agent overwrite behavior", () => {
 			);
 			assert.equal(existsSync(stalePath), true);
 
-			await setup({ scope: "project" });
+			await setup({ scope: "project", installMode: "legacy" });
 
 			assert.equal(existsSync(stalePath), false);
 			assert.equal(

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -13,8 +13,8 @@ import {
 	symlink,
 } from "fs/promises";
 import { join, posix, relative, win32 } from "path";
-import { tmpdir } from "os";
-import { existsSync, readFileSync } from "fs";
+import { tmpdir as osTmpdir } from "os";
+import { existsSync, readFileSync, realpathSync } from "fs";
 import {
 	initTeamState,
 	createTask,
@@ -47,8 +47,21 @@ import {
 import { TEAM_WORKER_INHERITED_MODEL_ENV } from "../model-contract.js";
 import { buildWorkerProcessLaunchSpec } from "../tmux-session.js";
 
+const tmpdir = (): string => realpathSync(osTmpdir());
+
 delete process.env.OMX_TEAM_STATE_ROOT;
 process.env.OMX_RUNTIME_BRIDGE = "0";
+
+const originalMuxBinary = process.env.OMX_MUX_BINARY;
+
+beforeEach(() => {
+	process.env.OMX_MUX_BINARY = "tmux";
+});
+
+afterEach(() => {
+	if (originalMuxBinary === undefined) delete process.env.OMX_MUX_BINARY;
+	else process.env.OMX_MUX_BINARY = originalMuxBinary;
+});
 
 async function initCommittedGitRepo(cwd: string): Promise<void> {
 	execFileSync("git", ["init"], { cwd, stdio: "pipe" });
@@ -279,6 +292,7 @@ async function writeReadyContextPack(
 async function writeSuccessfulScaleUpTmuxStub(
 	fakeBinDir: string,
 	tmuxLogPath: string,
+	failGuardedSendKeys = false,
 ): Promise<void> {
 	const tmuxStubPath = join(fakeBinDir, "tmux");
 	await writeFile(
@@ -288,24 +302,63 @@ async function writeSuccessfulScaleUpTmuxStub(
 			"set -eu",
 			`printf '%s\n' "$*" >> "${tmuxLogPath}"`,
 			'case "${1:-}" in',
-			'  show-option) echo "team:scale-up" ;;',
 			"  -V)",
 			'    echo "tmux 3.2a"',
 			"    ;;",
+			"  display-message)",
+			'    case "$*" in',
+			'      *"-t %32 "*) echo "%32\\t42425\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+			'      *"-t %33 "*) echo "%33\\t42426\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+			'      *"-t %31 "*) echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+			'      *"-t %21 "*) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+			'      *) echo "%11\\t42411\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+			"    esac",
+			"    ;;",
+			"  if-shell)",
+			'    case "${2:-}" in',
+			"      -F)",
+			'        if [ "${3:-}" = "-t" ]; then',
+			'          target="${4:-}"',
+			'          condition="${5:-}"',
+			'          success="${6:-}"',
+			"        else",
+			'          target=""',
+			'          condition="${3:-}"',
+			'          success="${4:-}"',
+			"        fi",
+			"        ;;",
+			"      *) exit 1 ;;",
+			"    esac",
+			'    case "$target:$condition" in',
+			"      %21:*) ;;",
+			"      %31:*) ;;",
+			"      %32:*) ;;",
+			"      %33:*) ;;",
+			"      *) exit 1 ;;",
+			"    esac",
+			"    receipt=\"$(printf '%s' \"$success\" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')\"",
+			'    [ -n "$receipt" ] || exit 1',
+			'    case "$success" in',
+			`      *split-window*) case "$target" in %21) : > "${join(fakeBinDir, "created-%31")}"; printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%31' '42424' 'omx-team-scale-up' '$1' '@1' "$receipt" ;; %31) : > "${join(fakeBinDir, "created-%32")}"; printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%32' '42425' 'omx-team-scale-up' '$1' '@1' "$receipt" ;; %32) : > "${join(fakeBinDir, "created-%33")}"; printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' '%33' '42426' 'omx-team-scale-up' '$1' '@1' "$receipt" ;; *) exit 1 ;; esac ;;`,
+			...(failGuardedSendKeys ? ["      *send-keys*) exit 1 ;;"] : []),
+			'      *"\'set-option\'"*|*"\'send-keys\'"*|*"\'kill-pane\'"*|*set-option*|*send-keys*|*kill-pane*) printf "%s\\n" "$receipt" ;;',
+			"      *) exit 1 ;;",
+			"    esac",
+			"    ;;",
 			"  split-window)",
-			'    echo "%31"',
+			'    case "$*" in',
+			`      *"-t %21 "*) : > "${join(fakeBinDir, "created-%31")}"; echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1" ;;`,
+			`      *"-t %31 "*) : > "${join(fakeBinDir, "created-%32")}"; echo "%32\\t42425\\tomx-team-scale-up\\t\\$1\\t@1" ;;`,
+			`      *"-t %32 "*) : > "${join(fakeBinDir, "created-%33")}"; echo "%33\\t42426\\tomx-team-scale-up\\t\\$1\\t@1" ;;`,
+			"      *) exit 1 ;;",
+			"    esac",
 			"    ;;",
 			"  list-panes)",
-			'    case "$*" in',
-			'      *"#{pane_id}\t#{pane_dead}\t#{pane_pid}"*)',
-			"        printf '%s\t%s\t%s\n' '%11' '0' '42411'",
-			"        printf '%s\t%s\t%s\n' '%21' '0' '42421'",
-			`        if [ ! -f "${join(fakeBinDir, "killed-%31")}" ]; then printf '%s\\t%s\\t%s\\n' '%31' '0' '42424'; fi`,
-			"        ;;",
-			"      *)",
-			'        echo "42424"',
-			"        ;;",
-			"    esac",
+			"    printf '%s\\t%s\\t%s\\n' '%11' '0' '42411'",
+			"    printf '%s\\t%s\\t%s\\n' '%21' '0' '42421'",
+			`    if [ -f "${join(fakeBinDir, "created-%31")}" ] && [ ! -f "${join(fakeBinDir, "killed-%31")}" ]; then printf '%s\\t%s\\t%s\\n' '%31' '0' '42424'; fi`,
+			`    if [ -f "${join(fakeBinDir, "created-%32")}" ] && [ ! -f "${join(fakeBinDir, "killed-%32")}" ]; then printf '%s\\t%s\\t%s\\n' '%32' '0' '42425'; fi`,
+			`    if [ -f "${join(fakeBinDir, "created-%33")}" ] && [ ! -f "${join(fakeBinDir, "killed-%33")}" ]; then printf '%s\\t%s\\t%s\\n' '%33' '0' '42426'; fi`,
 			"    ;;",
 			"  show-option)",
 			'    case "$*" in',
@@ -313,19 +366,18 @@ async function writeSuccessfulScaleUpTmuxStub(
 			"      *) exit 1 ;;",
 			"    esac",
 			"    ;;",
-			"  send-keys)",
-			"    ;;",
+			"  set-option) ;;",
+			"  send-keys) ;;",
 			"  kill-pane)",
 			`    : > "${join(fakeBinDir, "killed-")}$3"`,
 			"    ;;",
-			"  capture-pane)",
-			'    echo ""',
-			"    ;;",
+			'  capture-pane) echo "" ;;',
 			"esac",
 			"exit 0",
 			"",
 		].join("\n"),
 	);
+	execFileSync("sh", ["-n", tmuxStubPath], { stdio: "pipe" });
 	await chmod(tmuxStubPath, 0o755);
 	await writeFile(tmuxLogPath, "");
 }
@@ -339,7 +391,7 @@ async function configureScaleUpTeamForDirectDispatch(
 	if (!config) {
 		throw new Error(`missing team config for ${teamName}`);
 	}
-	config.tmux_session = `omx-team-${teamName}`;
+	config.tmux_session = "omx-team-scale-up";
 	config.tmux_pane_owner_id = "team:scale-up";
 	config.leader_pane_id = "%11";
 
@@ -382,6 +434,29 @@ async function readScaleUpTmuxLogCommands(
 	const content = await readFile(tmuxLogPath, "utf-8");
 	const trimmed = content.trim();
 	return trimmed === "" ? [] : trimmed.split("\n");
+}
+
+function isGuardedScaleMutation(
+	command: string,
+	mutation: string,
+	target?: string,
+): boolean {
+	return (
+		command.startsWith("if-shell -F -t ") &&
+		command.includes(mutation) &&
+		(target === undefined ||
+			command.includes(`-t '${target}'`) ||
+			command.includes(`-t ${target}`)) &&
+		/omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(
+			command,
+		)
+	);
+}
+
+function guardedScaleSplitCount(commands: readonly string[]): number {
+	return commands.filter((command) =>
+		isGuardedScaleMutation(command, "split-window"),
+	).length;
 }
 
 async function readScaleUpTaskPayloads(
@@ -1080,51 +1155,10 @@ exit 0
 		const cwd = await mkdtemp(join(tmpdir(), "omx-scale-up-role-"));
 		const fakeBinDir = await mkdtemp(join(tmpdir(), "omx-scale-up-role-bin-"));
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
-			await writeFile(
-				tmuxStubPath,
-				[
-					"#!/bin/sh",
-					"set -eu",
-					`printf '\%s\n' "$*" >> "${tmuxLogPath}"`,
-					'case "${1:-}" in',
-					'  show-option) echo "team:scale-up-role" ;;',
-					"  -V)",
-					'    echo "tmux 3.2a"',
-					"    ;;",
-					"  split-window)",
-					'    echo "%31"',
-					"    ;;",
-					"  list-panes)",
-					'    case "$*" in',
-					'      *"#{pane_id}\t#{pane_dead}\t#{pane_pid}"*)',
-					"        printf '%s\\t%s\\t%s\\n' '%11' '0' '42411'",
-					"        printf '%s\\t%s\\t%s\\n' '%21' '0' '42421'",
-					`        if [ ! -f "${join(fakeBinDir, "scale-up-role-killed-%31")}" ]; then printf '%s\\t%s\\t%s\\n' '%31' '0' '42424'; fi`,
-					"        ;;",
-					"      *)",
-					'        echo "42424"',
-					"        ;;",
-					"    esac",
-					"    ;;",
-					"  send-keys)",
-					"    ;;",
-					"  kill-pane)",
-					`    : > "${join(fakeBinDir, "scale-up-role-killed-")}$3"`,
-					"    ;;",
-					"  capture-pane)",
-					'    echo ""',
-					"    ;;",
-					"esac",
-					"exit 0",
-					"",
-				].join("\n"),
-			);
-			await chmod(tmuxStubPath, 0o755);
-			await writeFile(tmuxLogPath, "");
+			await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
@@ -1155,10 +1189,10 @@ exit 0
 			const config = await readTeamConfig("scale-up-role", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-scale-up-role";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
-			config.tmux_pane_owner_id = "team:scale-up-role";
+			config.tmux_pane_owner_id = "team:scale-up";
 			config.workers[0]!.pane_id = "%21";
 			config.workers[0]!.pid = 42421;
 			await saveTeamConfig(config, cwd);
@@ -1195,7 +1229,7 @@ exit 0
 				cwd,
 				{ OMX_TEAM_SCALING_ENABLED: "1", OMX_TEAM_SKIP_READY_WAIT: "1" },
 			);
-			assert.equal(result.ok, true);
+			assert.equal(result.ok, true, result.ok ? "ok" : result.error);
 			if (!result.ok) return;
 
 			const createdTask = await readTask("scale-up-role", "2", cwd);
@@ -1239,8 +1273,8 @@ exit 0
 			assert.ok(
 				tmuxCommands.some(
 					(command) =>
-						command ===
-						"set-option -p -t %31 @omx_team_pane_owner_id team:scale-up-role",
+						isGuardedScaleMutation(command, "set-option", "%31") &&
+						command.includes("@omx_team_pane_owner_id"),
 				),
 			);
 		} finally {
@@ -1470,8 +1504,27 @@ printf '%s\\n' "$@" > '${capturePath}'
 					"  -V)",
 					'    echo "tmux 3.2a"',
 					"    ;;",
+					"  display-message)",
+					'    case "$*" in',
+					'      *"-t %31 "*) echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up-owner-tag-rollback" ;;',
+					'      *"-t %21 "*) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up-owner-tag-rollback" ;;',
+					"      *) exit 1 ;;",
+					"    esac",
+					"    ;;",
+					"  if-shell)",
+					'    [ "${2:-}" = "-F" ] && [ "${3:-}" = "-t" ] || exit 1',
+					'    success="${6:-}"',
+					"    receipt=\"$(printf '%s' \"$success\" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')\"",
+					'    [ -n "$receipt" ] || exit 1',
+					'    case "$success" in',
+					'      *split-window*) printf "%s\\t%s\\n" "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1" "$receipt" ;;',
+					"      *set-option*) exit 1 ;;",
+					'      *kill-pane*) printf "%s\\n" "$receipt" ;;',
+					"      *) exit 1 ;;",
+					"    esac",
+					"    ;;",
 					"  split-window)",
-					'    echo "%31"',
+					'    echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1"',
 					"    ;;",
 					"  set-option)",
 					'    case "$*" in',
@@ -1503,6 +1556,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				].join("\n"),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			execFileSync("sh", ["-n", tmuxStubPath], { stdio: "pipe" });
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 			process.env.OMX_RUNTIME_BRIDGE = "0";
@@ -1537,87 +1591,17 @@ printf '%s\\n' "$@" > '${capturePath}'
 			);
 			assert.equal(result.ok, false);
 			if (result.ok) return;
-			assert.match(
-				result.error,
-				/scale_up_rollback_cleanup_debt:pane_owner_unverified:%31/,
-			);
-
+			assert.equal(result.error, "scale_up_split_target_authority_lost:%21");
 			const config = await readTeamConfig("scale-up-owner-tag-rollback", cwd);
 			assert.deepEqual(
 				config?.workers.map((worker) => worker.name),
-				["worker-1", "worker-2"],
-			);
-			assert.equal(config?.workers[1]?.pane_id, "%31");
-			assert.equal(config?.next_worker_index, 3);
-			assert.equal(
-				(await readTask("scale-up-owner-tag-rollback", "1", cwd))?.owner,
-				"worker-2",
+				["worker-1"],
 			);
 			assert.equal(
-				existsSync(
-					join(
-						cwd,
-						".omx",
-						"state",
-						"team",
-						"scale-up-owner-tag-rollback",
-						"workers",
-						"worker-2",
-						"identity.json",
-					),
-				),
-				false,
+				await readTask("scale-up-owner-tag-rollback", "1", cwd),
+				null,
 			);
-			assert.equal(
-				existsSync(
-					join(
-						cwd,
-						".omx",
-						"state",
-						"team",
-						"scale-up-owner-tag-rollback",
-						"workers",
-						"worker-2",
-						"inbox.md",
-					),
-				),
-				false,
-			);
-			const dispatch = JSON.parse(
-				await readFile(
-					join(
-						cwd,
-						".omx",
-						"state",
-						"team",
-						"scale-up-owner-tag-rollback",
-						"dispatch",
-						"requests.json",
-					),
-					"utf8",
-				),
-			) as Array<{ to_worker?: string }>;
-			assert.equal(
-				dispatch.some((request) => request.to_worker === "worker-2"),
-				false,
-			);
-			assert.equal(
-				(
-					await listDispatchRequests("scale-up-owner-tag-rollback", cwd, {
-						to_worker: "worker-2",
-					})
-				).length,
-				0,
-			);
-
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
-			assert.ok(
-				tmuxCommands.some(
-					(command) =>
-						command ===
-						"set-option -p -t %31 @omx_team_pane_owner_id team:scale-up-owner-tag-rollback",
-				),
-			);
 			assert.equal(
 				tmuxCommands.some((command) => command === "kill-pane -t %31"),
 				false,
@@ -1654,6 +1638,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 					'case "${1:-}" in',
 					'  -V) echo "tmux 3.2a" ;;',
 					'  show-option) echo "team:scale-up" ;;',
+					'  display-message) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
 					'  split-window) : > "' + splitPath + '"; echo "%31" ;;',
 					"  list-panes)",
 					'    if [ -f "' +
@@ -1682,13 +1667,9 @@ printf '%s\\n' "$@" > '${capturePath}'
 
 			assert.equal(result.ok, false);
 			if (result.ok) return;
-			assert.match(
-				result.error,
-				/scale_up_rollback_cleanup_debt:pane_pid_unpinned:%31/,
-			);
+			assert.match(result.error, /scale_up_split_target_authority_lost:%21/);
 			const config = await readTeamConfig(teamName, cwd);
-			assert.equal(config?.workers[1]?.pane_id, "%31");
-			assert.equal(config?.workers[1]?.pid, undefined);
+			assert.equal(config?.workers.length, 1);
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
 			assert.equal(
 				tmuxCommands.some((command) => command === "kill-pane -t %31"),
@@ -1720,8 +1701,27 @@ printf '%s\\n' "$@" > '${capturePath}'
 					`printf '%s\\n' "$*" >> "${tmuxLogPath}"`,
 					'case "${1:-}" in',
 					'  show-option) echo "team:scale-up" ;;',
+					"  display-message)",
+					'    case "$*" in',
+					'      *"-t %31 "*) echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+					'      *"-t %21 "*) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
+					"      *) exit 1 ;;",
+					"    esac",
+					"    ;;",
+					"  if-shell)",
+					'    [ "${2:-}" = "-F" ] && [ "${3:-}" = "-t" ] || exit 1',
+					'    success="${6:-}"',
+					"    receipt=\"$(printf '%s' \"$success\" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')\"",
+					'    [ -n "$receipt" ] || exit 1',
+					'    case "$success" in',
+					'      *set-option*) printf "recycled\\n" ;;',
+					'      *split-window*) printf "%s\\t%s\\n" "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1" "$receipt" ;;',
+					'      *kill-pane*) printf "%s\\n" "$receipt" ;;',
+					"      *) exit 1 ;;",
+					"    esac",
+					"    ;;",
 					'  -V) echo "tmux 3.2a" ;;',
-					'  split-window) echo "%31" ;;',
+					'  split-window) echo "%31\\t42424\\tomx-team-scale-up\\t\\$1\\t@1" ;;',
 					"  list-panes)",
 					`    count_file="${join(fakeBinDir, "proof-count")}"`,
 					'    count=0; [ ! -f "$count_file" ] || count=$(cat "$count_file")',
@@ -1743,6 +1743,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				].join("\n"),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			execFileSync("sh", ["-n", tmuxStubPath], { stdio: "pipe" });
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
@@ -1756,24 +1757,13 @@ printf '%s\\n' "$@" > '${capturePath}'
 
 			assert.equal(result.ok, false);
 			if (result.ok) return;
-			assert.match(
-				result.error,
-				/scale_up_rollback_cleanup_debt:pane_owner_unverified:%31/,
-			);
+			assert.equal(result.error, "scale_up_split_target_authority_lost:%21");
 			const config = await readTeamConfig(teamName, cwd);
-			assert.equal(config?.workers[1]?.pane_id, "%31");
-			assert.equal(config?.workers[1]?.pid, 42424);
+			assert.deepEqual(
+				config?.workers.map((worker) => worker.name),
+				["worker-1"],
+			);
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
-			assert.equal(
-				tmuxCommands.some((command) =>
-					command.includes("set-option -p -t %31 @omx_team_pane_owner_id"),
-				),
-				false,
-			);
-			assert.equal(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-				true,
-			);
 			assert.equal(
 				tmuxCommands.some((command) => command === "kill-pane -t %31"),
 				false,
@@ -1864,9 +1854,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				inbox,
 				/omx ultragoal checkpoint --goal-id G001-team-runtime-bridge/,
 			);
-			assert.ok(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -1937,9 +1925,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
 			assert.match(inbox, /Implement generic follow-up/);
 			assert.doesNotMatch(inbox, /## Approved Handoff Context/);
-			assert.ok(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -2014,9 +2000,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				/Use the approved plan and matching test specs as the execution baseline/,
 			);
 			assert.doesNotMatch(inbox, /Approved context pack|Context pack index/);
-			assert.ok(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -2128,9 +2112,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				inbox,
 				/Approved context pack|Build refs|Verify refs|Scope refs|query the canonical pack|Context pack index/,
 			);
-			assert.ok(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -2186,7 +2168,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 					);
 					const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
 					const splitWindowCommands = tmuxCommands.filter((command) =>
-						command.startsWith("split-window "),
+						isGuardedScaleMutation(command, "split-window"),
 					);
 					const inboxes = await Promise.all(
 						tasks.map(async (task) => {
@@ -2468,6 +2450,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 				].join("\n"),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 			delete process.env.CODEX_HOME;
@@ -2533,7 +2516,7 @@ printf '%s\\n' "$@" > '${capturePath}'
 			const config = await readTeamConfig("scale-up-project-reasoning", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-scale-up-project-reasoning";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -2629,48 +2612,14 @@ printf '%s\\n' "$@" > '${capturePath}'
 		const fakeBinDir = await mkdtemp(
 			join(tmpdir(), "omx-scale-up-rollback-worktree-bin-"),
 		);
-		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
-			await writeFile(
-				tmuxStubPath,
-				`#!/bin/sh
-set -eu
-	case "\${1:-}" in
-  show-option) echo 'team:scale-up' ;;
-  -V)
-    echo "tmux 3.2a"
-    ;;
-  split-window)
-    echo "%31"
-    ;;
-  list-panes)
-    case "$*" in
-      *"#{pane_id}\t#{pane_dead}\t#{pane_pid}"*)
-        printf '%s\t%s\t%s\n' '%11' '0' '42411'
-        printf '%s\t%s\t%s\n' '%21' '0' '42421'
-        if [ ! -f "${fakeBinDir}/killed-%31" ]; then printf '%s\t%s\t%s\n' '%31' '0' '42424'; fi
-        ;;
-      *)
-        echo "42424"
-        ;;
-    esac
-    ;;
-  send-keys)
-    exit 1
-    ;;
-  kill-pane)
-    : > "${fakeBinDir}/killed-$3"
-    ;;
-  capture-pane)
-    echo ""
-    ;;
-esac
-exit 0
-`,
+			await writeSuccessfulScaleUpTmuxStub(
+				fakeBinDir,
+				join(fakeBinDir, "tmux.log"),
+				true,
 			);
-			await chmod(tmuxStubPath, 0o755);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
@@ -2698,7 +2647,7 @@ exit 0
 			const config = await readTeamConfig("rollback-worktree", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-rollback-worktree";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -2815,6 +2764,10 @@ exit 0
 `,
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(
+				fakeBinDir,
+				join(fakeBinDir, "tmux.log"),
+			);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
@@ -2842,7 +2795,7 @@ exit 0
 			const config = await readTeamConfig("canonical-root", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-canonical-root";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -2976,6 +2929,10 @@ exit 0
 `,
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(
+				fakeBinDir,
+				join(fakeBinDir, "tmux.log"),
+			);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
@@ -3006,7 +2963,7 @@ exit 0
 			const config = await readTeamConfig("frontier-role", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-frontier-role";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -3120,6 +3077,10 @@ exit 0
 `,
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(
+				fakeBinDir,
+				join(fakeBinDir, "tmux.log"),
+			);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await mkdir(join(cwd, ".codex", "prompts"), { recursive: true });
@@ -3147,7 +3108,7 @@ exit 0
 			const config = await readTeamConfig("mini-tuned-root", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-mini-tuned-root";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -3223,47 +3184,10 @@ exit 0
 			join(tmpdir(), "omx-scale-up-layout-bin-"),
 		);
 		const tmuxLogPath = join(fakeBinDir, "tmux.log");
-		const tmuxStubPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
 
 		try {
-			await writeFile(
-				tmuxStubPath,
-				`#!/bin/sh
-set -eu
-printf '%s\\n' "$*" >> "${tmuxLogPath}"
-case "\${1:-}" in
-  show-option) echo 'team:scale-up' ;;
-  -V)
-    echo "tmux 3.2a"
-    ;;
-  split-window)
-    echo "%31"
-    ;;
-  list-panes)
-    case "$*" in
-      *"#{pane_id}\t#{pane_dead}\t#{pane_pid}"*)
-        printf '%s\t%s\t%s\n' '%11' '0' '42411'
-        printf '%s\t%s\t%s\n' '%21' '0' '42421'
-        if [ ! -f "${fakeBinDir}/layout-killed-%31" ]; then printf '%s\t%s\t%s\n' '%31' '0' '42424'; fi
-        ;;
-      *)
-        echo "42424"
-        ;;
-    esac
-    ;;
-  capture-pane)
-    echo ""
-    ;;
-  kill-pane)
-    : > "${fakeBinDir}/layout-killed-$3"
-    ;;
-esac
-exit 0
-`,
-			);
-			await chmod(tmuxStubPath, 0o755);
-			await writeFile(tmuxLogPath, "");
+			await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
 			await initTeamState("scale-up-layout", "task", "executor", 1, cwd);
@@ -3271,7 +3195,7 @@ exit 0
 			const config = await readTeamConfig("scale-up-layout", cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = "omx-team-scale-up-layout";
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
@@ -3304,23 +3228,36 @@ exit 0
 			if (!result.ok) return;
 
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
-			const splitWindowIndex = tmuxCommands.findIndex((command) =>
-				command.startsWith("split-window "),
+			const guardedSplit = tmuxCommands.find((command) =>
+				command.startsWith("if-shell -F -t %21 "),
 			);
-			assert.ok(splitWindowIndex > 2);
+			assert.match(guardedSplit ?? "", /#\{==:#\{pane_id\},%21\}/);
+			assert.match(guardedSplit ?? "", /#\{==:#\{pane_pid\},42421\}/);
 			assert.match(
-				tmuxCommands[splitWindowIndex - 3]!,
-				/^list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}$/,
+				guardedSplit ?? "",
+				/#\{==:#\{session_name\},omx-team-scale-up\}/,
 			);
-			assert.equal(
-				tmuxCommands[splitWindowIndex - 2],
-				"show-option -qv -p -t %21 @omx_team_pane_owner_id",
-			);
+			assert.match(guardedSplit ?? "", /#\{==:#\{session_id\},\$1\}/);
+			assert.match(guardedSplit ?? "", /#\{==:#\{window_id\},@1\}/);
 			assert.match(
-				tmuxCommands[splitWindowIndex - 1]!,
-				/^list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}$/,
+				guardedSplit ?? "",
+				/#\{==:#\{@omx_team_pane_owner_id\},team:scale-up\}/,
 			);
-			assert.match(tmuxCommands[splitWindowIndex]!, /split-window -v -t %21/);
+			assert.match(guardedSplit ?? "", /split-window/);
+			const plainScaleMutations = tmuxCommands.filter((command) =>
+				/^(?:split-window|set-option|send-keys|kill-pane)\b/.test(command),
+			);
+			assert.deepEqual(plainScaleMutations, []);
+			assert.ok(
+				tmuxCommands.some((command) =>
+					isGuardedScaleMutation(command, "set-option", "%31"),
+				),
+			);
+			assert.ok(
+				tmuxCommands.some((command) =>
+					isGuardedScaleMutation(command, "send-keys", "%31"),
+				),
+			);
 			assert.doesNotMatch(tmuxCommands.join("\n"), /select-layout .*tiled/);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
@@ -3468,9 +3405,7 @@ exit 0
 				42421,
 			);
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
-			assert.ok(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
@@ -3648,6 +3583,7 @@ exit 0
 					"  -V)",
 					'    echo "tmux 3.2a"',
 					"    ;;",
+					'  display-message) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
 					"  list-panes)",
 					`    count=0; [ ! -f "${proofCountPath}" ] || count=$(cat "${proofCountPath}")`,
 					"    count=$((count + 1))",
@@ -3658,8 +3594,14 @@ exit 0
 					"      exit 1",
 					"    fi",
 					"    ;;",
-					"  split-window)",
-					'    echo "%31"',
+					"  if-shell)",
+					'    [ "${2:-}" = "-F" ] && [ "${3:-}" = "-t" ] || exit 1',
+					'    success="${6:-}"',
+					"    receipt=\"$(printf '%s' \"$success\" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')\"",
+					'    case "$success" in',
+					'      *split-window*) printf "%s\\t%s\\n" "%31\\t42424\\tomx-team-scale-up\\t$1\\t@1" "$receipt" ;;',
+					'      *) printf "%s\\n" "$receipt" ;;',
+					"    esac",
 					"    ;;",
 					"esac",
 					"exit 0",
@@ -3700,7 +3642,7 @@ exit 0
 
 			assert.deepEqual(result, {
 				ok: false,
-				error: "scale_up_split_target_proof_unavailable:%21:query_failed",
+				error: "scale_up_split_target_proof_unavailable:%21",
 			});
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
 			assert.deepEqual(
@@ -3710,10 +3652,7 @@ exit 0
 					"list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}",
 				],
 			);
-			assert.equal(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-				false,
-			);
+			assert.equal(guardedScaleSplitCount(tmuxCommands), 0);
 			assert.equal(
 				tmuxCommands.some((command) => command.startsWith("send-keys ")),
 				false,
@@ -3764,6 +3703,7 @@ exit 0
 					"  -V)",
 					'    echo "tmux 3.2a"',
 					"    ;;",
+					'  display-message) echo "%21\\t42421\\tomx-team-scale-up\\t\\$1\\t@1\\tteam:scale-up" ;;',
 					"  list-panes)",
 					`    count=0; [ ! -f "${proofCountPath}" ] || count=$(cat "${proofCountPath}")`,
 					"    count=$((count + 1))",
@@ -3823,7 +3763,7 @@ exit 0
 
 			assert.deepEqual(result, {
 				ok: false,
-				error: "scale_up_split_target_pid_changed:%21:42421:52421",
+				error: "scale_up_split_target_authority_lost:%21",
 			});
 			const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
 			assert.equal(
@@ -3832,11 +3772,9 @@ exit 0
 				2,
 			);
 			assert.equal(
-				tmuxCommands.some((command) => command.startsWith("split-window ")),
-				false,
-			);
-			assert.equal(
-				tmuxCommands.some((command) => command.startsWith("send-keys ")),
+				tmuxCommands.some((command) =>
+					isGuardedScaleMutation(command, "send-keys"),
+				),
 				false,
 			);
 			assert.deepEqual(
@@ -3900,6 +3838,7 @@ exit 0
 				].join("\n"),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
@@ -3930,12 +3869,12 @@ exit 0
 			const config = await readTeamConfig(teamName, repo);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = `omx-team-${teamName}`;
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
 			config.workers[0]!.pane_id = "%21";
-			config.workers[0]!.pid = 45452;
+			config.workers[0]!.pid = 42421;
 			await saveTeamConfig(config, repo);
 
 			const manifestPath = join(
@@ -4036,6 +3975,7 @@ exit 0
 				].join("\n"),
 			);
 			await chmod(tmuxStubPath, 0o755);
+			await writeSuccessfulScaleUpTmuxStub(fakeBinDir, tmuxLogPath);
 			await writeFile(tmuxLogPath, "");
 			process.env.PATH = `${fakeBinDir}:${previousPath ?? ""}`;
 
@@ -4067,12 +4007,12 @@ exit 0
 			const config = await readTeamConfig(teamName, repo);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = `omx-team-${teamName}`;
+			config.tmux_session = "omx-team-scale-up";
 			config.leader_pane_id = "%11";
 
 			config.tmux_pane_owner_id = "team:scale-up";
 			config.workers[0]!.pane_id = "%21";
-			config.workers[0]!.pid = 46462;
+			config.workers[0]!.pid = 42421;
 			await saveTeamConfig(config, repo);
 
 			const manifestPath = join(
@@ -4164,7 +4104,7 @@ esac
 			const config = await readTeamConfig(teamName, cwd);
 			assert.ok(config);
 			if (!config) return;
-			config.tmux_session = `omx-team-${teamName}`;
+			config.tmux_session = "omx-team-scale-up";
 			config.workers[0]!.pane_id = "%21";
 			config.workspace_mode = "worktree";
 			config.worktree_mode = { enabled: true, detached: true, name: null };
@@ -4227,6 +4167,32 @@ printf '%s\n' "$*" >> "${tmuxLogPath}"
 case "\${1:-}" in
   show-option) echo 'team:scale-up' ;;
   -V) echo 'tmux 3.2a' ;;
+  display-message)
+    case "$*" in
+      *"-t %32 "*) echo '%32	42432	omx-team-scale-up	$1	@1	team:scale-up' ;;
+      *"-t %31 "*) echo '%31	42431	omx-team-scale-up	$1	@1	team:scale-up' ;;
+      *"-t %21 "*) echo '%21	42421	omx-team-scale-up	$1	@1	team:scale-up' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  if-shell)
+    [ "\${2:-}" = '-F' ] && [ "\${3:-}" = '-t' ] || exit 1
+    target="\${4:-}"
+    success="\${6:-}"
+    receipt="$(printf '%s' "$success" | sed -En 's/.*(omx-scale-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}).*/\\1/p')"
+    case "$success" in
+      *split-window*)
+        split_count=0; [ ! -f "${splitCountPath}" ] || split_count=$(cat "${splitCountPath}")
+        split_count=$((split_count + 1)); printf '%s' "$split_count" > "${splitCountPath}"
+        if [ "$split_count" -eq 1 ]; then pane='%31'; pid='42431'; elif [ "$split_count" -eq 2 ]; then pane='%32'; pid='42432'; else pane='%33'; pid='42433'; fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pane" "$pid" 'omx-team-scale-up' '$1' '@1' "$receipt"
+        ;;
+      *kill-pane*)
+        case "$target" in %31) exit 1 ;; %32) printf '%s\n' "$receipt" ;; *) exit 1 ;; esac
+        ;;
+      *) printf '%s\n' "$receipt" ;;
+    esac
+    ;;
   list-panes)
     split_count=0; [ ! -f "${splitCountPath}" ] || split_count=$(cat "${splitCountPath}")
     if [ "$split_count" -ge 2 ] && [ ! -f "${proofLossUsedPath}" ]; then
@@ -4248,9 +4214,11 @@ case "\${1:-}" in
     split_count=0; [ ! -f "${splitCountPath}" ] || split_count=$(cat "${splitCountPath}")
     split_count=$((split_count + 1)); printf '%s' "$split_count" > "${splitCountPath}"
     if [ "$split_count" -eq 1 ]; then
-      echo '%31'
+      echo '%31\t42431\tomx-team-scale-up\t$1\t@1'
+    elif [ "$split_count" -eq 2 ]; then
+      echo '%32\t42432\tomx-team-scale-up\t$1\t@1'
     else
-      echo '%32'
+      echo '%33\t42433\tomx-team-scale-up\t$1\t@1'
     fi
     ;;
   kill-pane)
@@ -4306,151 +4274,73 @@ esac
 			if (!result.ok)
 				assert.match(
 					result.error,
-					/^scale_up_rollback_cleanup_debt:.*pane_teardown_failed:%31.*pane_teardown_unresolved:%32/,
+					/^scale_up_rollback_cleanup_debt:pane_teardown_authority_lost:%31/,
 				);
 			assert.equal(await readFile(splitCountPath, "utf-8"), "2");
 			const config = await readTeamConfig("rollback-kill-fail", cwd);
 			assert.deepEqual(
 				config?.workers.map((worker) => worker.name),
-				["worker-1", "worker-2", "worker-3"],
+				["worker-1", "worker-2"],
 			);
-			assert.equal(config?.worker_count, 3);
-			assert.equal(config?.next_worker_index, 4);
+			assert.equal(config?.worker_count, 2);
+			assert.equal(config?.next_worker_index, 3);
 			assert.equal(
 				(await readTask("rollback-kill-fail", "1", cwd))?.owner,
 				"worker-2",
 			);
-			assert.equal(
-				(await readTask("rollback-kill-fail", "2", cwd))?.owner,
-				"worker-3",
-			);
+			assert.equal(await readTask("rollback-kill-fail", "2", cwd), null);
 			assert.equal(await readTask("rollback-kill-fail", "3", cwd), null);
-			for (const workerName of ["worker-2", "worker-3"]) {
-				const workerDir = join(
-					cwd,
-					".omx",
-					"state",
-					"team",
-					"rollback-kill-fail",
-					"workers",
-					workerName,
-				);
-				assert.equal(
-					existsSync(
-						workerStartupScriptPath(cwd, "rollback-kill-fail", workerName),
+			const worker2Dir = join(
+				cwd,
+				".omx",
+				"state",
+				"team",
+				"rollback-kill-fail",
+				"workers",
+				"worker-2",
+			);
+			assert.equal(
+				existsSync(
+					workerStartupScriptPath(cwd, "rollback-kill-fail", "worker-2"),
+				),
+				true,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						cwd,
+						".omx",
+						"team",
+						"rollback-kill-fail",
+						"worktrees",
+						"worker-2",
 					),
-					true,
-					`${workerName} startup script must remain`,
-				);
-				assert.equal(
-					existsSync(
-						join(
-							cwd,
-							".omx",
-							"team",
-							"rollback-kill-fail",
-							"worktrees",
-							workerName,
-						),
-					),
-					true,
-					`${workerName} worktree must remain`,
-				);
-				if (workerName === "worker-2") {
-					assert.equal(
-						existsSync(workerDir),
-						true,
-						"worker-2 materialized state must remain retryable",
-					);
-					assert.equal(
-						existsSync(join(workerDir, "identity.json")),
-						true,
-						"worker-2 identity must remain",
-					);
-					assert.equal(
-						existsSync(join(workerDir, "inbox.md")),
-						true,
-						"worker-2 inbox must remain",
-					);
-				} else {
-					assert.equal(
-						existsSync(join(workerDir, "identity.json")),
-						false,
-						"worker-3 proof failed before identity materialization",
-					);
-					assert.equal(
-						existsSync(join(workerDir, "inbox.md")),
-						false,
-						"worker-3 proof failed before inbox materialization",
-					);
-				}
-			}
-			// P2: retry execution of recorded cleanup debt is intentionally a follow-up surface.
+				),
+				true,
+			);
+			assert.equal(
+				existsSync(worker2Dir),
+				true,
+				"worker-2 materialized state must remain retryable",
+			);
+			assert.equal(
+				existsSync(join(worker2Dir, "identity.json")),
+				true,
+				"worker-2 identity must remain",
+			);
+			assert.equal(
+				existsSync(join(worker2Dir, "inbox.md")),
+				true,
+				"worker-2 inbox must remain",
+			);
 			const tmuxCommands: string[] =
 				await readScaleUpTmuxLogCommands(tmuxLogPath);
-			const mutationCommands = tmuxCommands
-				.filter(
-					(command) =>
-						command.startsWith("split-window ") ||
-						command.startsWith("kill-pane "),
-				)
-				.map((command) =>
-					command.startsWith("split-window ")
-						? command.split(" -c ")[0]!
-						: command,
-				);
-			assert.deepEqual(mutationCommands, [
-				"split-window -v -t %21 -d -P -F #{pane_id}",
-				"split-window -v -t %31 -d -P -F #{pane_id}",
-				"kill-pane -t %31",
-			]);
-			for (const mutationCommand of mutationCommands) {
-				const mutationIndex = tmuxCommands.findIndex(
-					(command) =>
-						command === mutationCommand ||
-						command.startsWith(`${mutationCommand} -c `),
-				);
-				if (mutationCommand.startsWith("split-window ")) {
-					assert.ok(mutationIndex > 2);
-					assert.equal(
-						tmuxCommands[mutationIndex - 3],
-						"list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}",
-					);
-					assert.match(
-						tmuxCommands[mutationIndex - 2]!,
-						/^show-option -qv -p -t %(?:21|31) @omx_team_pane_owner_id$/,
-					);
-					assert.equal(
-						tmuxCommands[mutationIndex - 1],
-						"list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}",
-					);
-				} else {
-					assert.ok(mutationIndex > 2);
-					assert.equal(
-						tmuxCommands[mutationIndex - 3],
-						"list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}",
-					);
-					assert.equal(
-						tmuxCommands[mutationIndex - 2],
-						"show-option -qv -p -t %31 @omx_team_pane_owner_id",
-					);
-					assert.equal(
-						tmuxCommands[mutationIndex - 1],
-						"list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}",
-					);
-				}
-			}
+			// The first rollback cleanup transaction fails closed on %31 authority; later panes are never touched.
 			assert.ok(
 				tmuxCommands.some((command) =>
-					command.startsWith("split-window -v -t %21 "),
+					isGuardedScaleMutation(command, "kill-pane", "%31"),
 				),
 			);
-			assert.ok(
-				tmuxCommands.some((command) =>
-					command.startsWith("split-window -v -t %31 "),
-				),
-			);
-			assert.ok(tmuxCommands.some((command) => command === "kill-pane -t %31"));
 			assert.equal(
 				tmuxCommands.some((command) => command === "kill-pane -t %32"),
 				false,
@@ -4596,10 +4486,12 @@ esac
 					false,
 				);
 				const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
+				assert.equal(guardedScaleSplitCount(tmuxCommands), 1);
 				assert.ok(
-					tmuxCommands.some((command) => command.startsWith("split-window ")),
+					tmuxCommands.some((command) =>
+						isGuardedScaleMutation(command, "kill-pane", "%31"),
+					),
 				);
-				assert.ok(tmuxCommands.includes("kill-pane -t %31"));
 			} finally {
 				if (typeof previousPath === "string") process.env.PATH = previousPath;
 				else delete process.env.PATH;
@@ -4676,7 +4568,7 @@ esac
 			);
 			assert.deepEqual(
 				(await readScaleUpTmuxLogCommands(tmuxLogPath)).filter((command) =>
-					command.startsWith("split-window "),
+					isGuardedScaleMutation(command, "split-window"),
 				),
 				[],
 			);

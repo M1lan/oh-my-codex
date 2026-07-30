@@ -22,11 +22,16 @@ import {
 	DEEP_INTERVIEW_INPUT_LOCK_MESSAGE,
 	persistDeepInterviewModeState,
 } from "../keyword-detector.js";
-import { SKILL_ACTIVE_STATE_FILE } from "../../state/skill-active.js";
+import {
+	readSkillActiveState,
+	SKILL_ACTIVE_STATE_FILE,
+} from "../../state/skill-active.js";
 import {
 	isUnderspecifiedForExecution,
 	applyRalplanGate,
 } from "../keyword-detector.js";
+import { neutralizeOwnedRoutingRalplan } from "../../ralplan/documented-leader-preflight.js";
+import { readActiveWorkflowModes } from "../../state/workflow-transition.js";
 import {
 	EXPLICIT_SKILL_ALIASES,
 	getExplicitSkillDefinition,
@@ -53,6 +58,16 @@ async function withIsolatedHome<T>(
 const AUTOPILOT_TEST_NOW = "2026-05-30T00:00:00.000Z";
 const AUTOPILOT_TEST_STARTED_AT = "2026-05-29T00:00:00.000Z";
 const AUTOPILOT_TEST_UPDATED_AT = "2026-05-29T00:10:00.000Z";
+
+const availableAutopilotReceiptVerifier = {
+	getRalplanHostConsensusReceiptVerifierCapability: () => "available" as const,
+};
+
+function recordSkillActivationWithAvailableAutopilotReceipt(
+	input: Parameters<typeof recordSkillActivation>[0],
+) {
+	return recordSkillActivation(input, availableAutopilotReceiptVerifier);
+}
 
 interface TestAutopilotModeState {
 	context_snapshot_path?: string;
@@ -117,7 +132,7 @@ async function continueAutopilotTestState(
 	suffix: string,
 	text = "continue",
 ): Promise<void> {
-	await recordSkillActivation({
+	await recordSkillActivationWithAvailableAutopilotReceipt({
 		stateDir,
 		sourceCwd: cwd,
 		text,
@@ -3359,6 +3374,106 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		}
 	});
 
+	it("fails fresh native Autopilot before deep-interview when receipt verification is unavailable", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-keyword-autopilot-preflight-"),
+		);
+		const stateDir = join(cwd, ".omx", "state");
+		try {
+			const result = await recordSkillActivation({
+				stateDir,
+				sourceCwd: cwd,
+				text: "$autopilot implement the task",
+				sessionId: "sess-autopilot-preflight",
+				nowIso: "2026-07-23T00:00:00.000Z",
+			});
+
+			assert.equal(result?.active, false);
+			assert.equal(result?.phase, "failed");
+			assert.equal(
+				result?.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
+			assert.deepEqual(result?.active_skills, []);
+			const modeState = JSON.parse(
+				await readFile(
+					join(
+						stateDir,
+						"sessions",
+						"sess-autopilot-preflight",
+						"autopilot-state.json",
+					),
+					"utf-8",
+				),
+			) as { active?: boolean; current_phase?: string; error?: string };
+			assert.equal(modeState.active, false);
+			assert.equal(modeState.current_phase, "failed");
+			assert.equal(
+				modeState.error,
+				"documented_host_consensus_receipt_unavailable",
+			);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						"sess-autopilot-preflight",
+						"deep-interview-state.json",
+					),
+				),
+				false,
+			);
+			assert.equal(
+				existsSync(
+					join(
+						stateDir,
+						"sessions",
+						"sess-autopilot-preflight",
+						"ultragoal-state.json",
+					),
+				),
+				false,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("byte-preserves an active native Autopilot session when receipt verification is unavailable", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-keyword-active-autopilot-preflight-"),
+		);
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionId = "sess-active-autopilot-preflight";
+		const sessionDir = join(stateDir, "sessions", sessionId);
+		const statePath = join(sessionDir, SKILL_ACTIVE_STATE_FILE);
+		const modePath = join(sessionDir, "autopilot-state.json");
+		const rawState =
+			'{"version":1,"active":true,"skill":"autopilot","keyword":"$autopilot","phase":"ralplan","activated_at":"2026-07-22T00:00:00.000Z","updated_at":"2026-07-22T00:00:00.000Z","source":"keyword-detector","session_id":"sess-active-autopilot-preflight","metadata":{"preserve":true},"active_skills":[{"skill":"autopilot","active":true,"phase":"ralplan","session_id":"sess-active-autopilot-preflight"}]}\n';
+		const rawMode =
+			'{"active":true,"mode":"autopilot","current_phase":"ralplan","session_id":"sess-active-autopilot-preflight","metadata":{"preserve":true},"handoff_artifacts":{"ralplan":{"path":".omx/plans/existing.md"}}}\n';
+		try {
+			await mkdir(sessionDir, { recursive: true });
+			await writeFile(statePath, rawState);
+			await writeFile(modePath, rawMode);
+
+			const result = await recordSkillActivation({
+				stateDir,
+				sourceCwd: cwd,
+				text: "$autopilot continue",
+				sessionId,
+				nowIso: "2026-07-23T00:00:00.000Z",
+			});
+
+			assert.equal(result?.active, true);
+			assert.equal(result?.phase, "ralplan");
+			assert.equal(await readFile(statePath, "utf-8"), rawState);
+			assert.equal(await readFile(modePath, "utf-8"), rawMode);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("writes skill-active-state.json with deep-interview phase when autopilot keyword activates", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-keyword-state-"));
 		const stateDir = join(cwd, ".omx", "state");
@@ -3369,7 +3484,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		try {
 			process.env.CODEX_HOME = codexHome;
 			await mkdir(stateDir, { recursive: true });
-			const result = await recordSkillActivation({
+			const result = await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "please run $autopilot and keep going",
 				sessionId: "sess-1",
@@ -3532,14 +3647,15 @@ describe("keyword detector skill-active-state lifecycle", () => {
 
 			// Activate Autopilot: seeds autopilot-state.json at current_phase=deep-interview
 			// with deep_interview_gate.status="required" (gate not satisfied).
-			const activated = await recordSkillActivation({
-				stateDir,
-				text: "please run $autopilot",
-				sessionId: "sess-gate",
-				threadId: "thread-gate",
-				turnId: "turn-1",
-				nowIso: "2026-02-25T00:00:00.000Z",
-			});
+			const activated =
+				await recordSkillActivationWithAvailableAutopilotReceipt({
+					stateDir,
+					text: "please run $autopilot",
+					sessionId: "sess-gate",
+					threadId: "thread-gate",
+					turnId: "turn-1",
+					nowIso: "2026-02-25T00:00:00.000Z",
+				});
 			assert.equal(activated?.phase, "deep-interview");
 
 			const autopilotStatePath = join(
@@ -3606,7 +3722,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		const stateDir = join(cwd, ".omx", "state");
 		try {
 			await mkdir(stateDir, { recursive: true });
-			await recordSkillActivation({
+			await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "please run $autopilot",
 				sessionId: "sess-skip",
@@ -3877,7 +3993,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 				}),
 			);
 
-			await recordSkillActivation({
+			await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				sourceCwd: cwd,
 				text: "$autopilot implement issue #2918",
@@ -3998,7 +4114,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 				),
 			);
 
-			const result = await recordSkillActivation({
+			const result = await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "continue",
 				sessionId,
@@ -4368,7 +4484,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 			mock.method(console, "warn", (...args: unknown[]) => {
 				warnings.push(args);
 			});
-			await recordSkillActivation({
+			await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				sourceCwd: cwd,
 				text: "$autopilot symlink escape",
@@ -4409,7 +4525,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		try {
 			await mkdir(stateDir, { recursive: true });
 
-			await recordSkillActivation({
+			await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				sourceCwd: cwd,
 				text: "$autopilot same task",
@@ -4418,7 +4534,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 				turnId: "turn-collision-a",
 				nowIso: "2026-05-30T00:00:00.000Z",
 			});
-			await recordSkillActivation({
+			await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				sourceCwd: cwd,
 				text: "$autopilot same task",
@@ -4861,6 +4977,87 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		}
 	});
 
+	it("preserves an active Autopilot mode when canonical skill state is missing", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-keyword-autopilot-mode-drift-"),
+		);
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionId = "sess-autopilot-mode-drift";
+		const modePath = join(
+			stateDir,
+			"sessions",
+			sessionId,
+			"autopilot-state.json",
+		);
+		try {
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			const rawMode =
+				'{"active":true,"mode":"autopilot","current_phase":"ralplan","session_id":"sess-autopilot-mode-drift","marker":"preserve-active-mode","metadata":{"nested":{"keep":true}}}\n';
+			await writeFile(modePath, rawMode);
+
+			const result = await recordSkillActivation({
+				stateDir,
+				text: "$autopilot continue",
+				sessionId,
+				nowIso: "2026-07-23T00:00:00.000Z",
+			});
+
+			assert.equal(result?.skill, "autopilot");
+			assert.equal(result?.phase, "ralplan");
+			assert.equal(await readFile(modePath, "utf-8"), rawMode);
+			assert.equal(
+				existsSync(
+					join(stateDir, "sessions", sessionId, SKILL_ACTIVE_STATE_FILE),
+				),
+				false,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves active standalone Ralplan state bytes when fresh Autopilot preflight is unavailable", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-keyword-ralplan-autopilot-preflight-"),
+		);
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionId = "sess-ralplan-autopilot-preflight";
+		const statePath = join(
+			stateDir,
+			"sessions",
+			sessionId,
+			SKILL_ACTIVE_STATE_FILE,
+		);
+		const rawState =
+			'{"version":1,"active":true,"skill":"ralplan","keyword":"$ralplan","phase":"planning","session_id":"sess-ralplan-autopilot-preflight","active_skills":[{"skill":"ralplan","phase":"planning","active":true,"session_id":"sess-ralplan-autopilot-preflight"}]}';
+		try {
+			await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+			await writeFile(statePath, rawState);
+
+			const denied = await recordSkillActivation({
+				stateDir,
+				text: "$autopilot do it too",
+				sessionId,
+				nowIso: "2026-07-23T00:00:00.000Z",
+			});
+
+			assert.equal(denied?.skill, "ralplan");
+			assert.equal(
+				denied?.transition_error,
+				"documented_host_consensus_receipt_unavailable",
+			);
+			assert.equal(await readFile(statePath, "utf-8"), rawState);
+			assert.equal(
+				existsSync(
+					join(stateDir, "sessions", sessionId, "autopilot-state.json"),
+				),
+				false,
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("denies prompt-submit overlaps against the current session-visible canonical state", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-keyword-state-session-visible-"),
@@ -5215,6 +5412,57 @@ describe("keyword detector skill-active-state lifecycle", () => {
 			assert.equal(modeState.active, true);
 			assert.equal(modeState.current_phase, "planning");
 		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+	it("does not reactivate a neutralized routing-only Ralplan seed on plain continuation", async () => {
+		const cwd = await mkdtemp(
+			join(tmpdir(), "omx-keyword-neutralized-ralplan-"),
+		);
+		const stateDir = join(cwd, ".omx", "state");
+		const sessionId = "sess-neutralized";
+		const previousSessionId = process.env.OMX_SESSION_ID;
+		try {
+			process.env.OMX_SESSION_ID = sessionId;
+			await mkdir(stateDir, { recursive: true });
+			await writeFile(
+				join(stateDir, "session.json"),
+				JSON.stringify({ session_id: sessionId, cwd, state_root: stateDir }),
+			);
+			assert.ok(
+				await recordSkillActivation({
+					stateDir,
+					sourceCwd: cwd,
+					text: "$ralplan tighten the plan",
+					sessionId,
+					nowIso: "2026-02-25T00:00:00.000Z",
+				}),
+			);
+			const sessionDir = join(stateDir, "sessions", sessionId);
+			const ralplanPath = join(sessionDir, "ralplan-state.json");
+			const skillPath = join(sessionDir, SKILL_ACTIVE_STATE_FILE);
+			const [ralplanBefore, skillBefore] = await Promise.all([
+				readFile(ralplanPath),
+				readFile(skillPath),
+			]);
+			assert.equal(await neutralizeOwnedRoutingRalplan(cwd), true);
+			assert.deepEqual(await readActiveWorkflowModes(cwd, sessionId), []);
+			assert.equal(
+				await recordSkillActivation({
+					stateDir,
+					sourceCwd: cwd,
+					text: "continue",
+					sessionId,
+					nowIso: "2026-02-25T00:00:01.000Z",
+				}),
+				null,
+			);
+			assert.deepEqual(await readFile(ralplanPath), ralplanBefore);
+			assert.deepEqual(await readFile(skillPath), skillBefore);
+			assert.equal((await readSkillActiveState(skillPath))?.active, false);
+		} finally {
+			if (previousSessionId === undefined) delete process.env.OMX_SESSION_ID;
+			else process.env.OMX_SESSION_ID = previousSessionId;
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});
@@ -5854,7 +6102,7 @@ describe("keyword detector skill-active-state lifecycle", () => {
 		}
 	});
 
-	it("emits terminal ralplan state before explicit ultragoal execution handoff", async () => {
+	it("keeps a locally approved ralplan active when the host consensus receipt verifier is unavailable", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-keyword-ralplan-ultragoal-handoff-"),
 		);
@@ -5905,6 +6153,10 @@ describe("keyword detector skill-active-state lifecycle", () => {
 						current_phase: "complete",
 						planning_complete: true,
 						ralplan_consensus_gate: {
+							documented_host_consensus_receipt: {
+								issuer: "official-host",
+								verdict: "approve",
+							},
 							complete: true,
 							sequence: ["architect-review", "critic-review"],
 							ralplan_architect_review: {
@@ -5932,15 +6184,10 @@ describe("keyword detector skill-active-state lifecycle", () => {
 				nowIso: "2026-04-10T00:20:00.000Z",
 			});
 
-			assert.equal(result?.transition_error, undefined);
-			assert.equal(result?.skill, "ultragoal");
-			assert.equal(
+			assert.notEqual(result?.skill, "ultragoal");
+			assert.notEqual(
 				result?.transition_message,
 				"mode transiting: ralplan -> ultragoal",
-			);
-			assert.deepEqual(
-				result?.active_skills?.map((entry) => entry.skill),
-				["ultragoal"],
 			);
 
 			const ralplan = JSON.parse(
@@ -5956,31 +6203,25 @@ describe("keyword detector skill-active-state lifecycle", () => {
 			) as {
 				active?: boolean;
 				current_phase?: string;
-				completed_at?: string;
 				auto_completed_reason?: string;
 			};
-			assert.equal(ralplan.active, false);
-			assert.equal(ralplan.current_phase, "completed");
-			assert.equal(
+			assert.equal(ralplan.active, true);
+			assert.equal(ralplan.current_phase, "complete");
+			assert.notEqual(
 				ralplan.auto_completed_reason,
 				"mode transiting: ralplan -> ultragoal",
 			);
-			assert.ok(ralplan.completed_at);
-
-			const ultragoal = JSON.parse(
-				await readFile(
+			assert.equal(
+				existsSync(
 					join(
 						stateDir,
 						"sessions",
 						"sess-ralplan-ultragoal",
 						"ultragoal-state.json",
 					),
-					"utf-8",
 				),
-			) as { active?: boolean; mode?: string; current_phase?: string };
-			assert.equal(ultragoal.active, true);
-			assert.equal(ultragoal.mode, "ultragoal");
-			assert.equal(ultragoal.current_phase, "planning");
+				false,
+			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -7355,7 +7596,7 @@ deepMaxRounds = 21
 		}
 	});
 
-	it("emits a warning when skill-active-state persistence fails", async () => {
+	it("warns when fresh Autopilot preflight persistence fails", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-keyword-state-persist-fail-"),
 		);
@@ -7376,6 +7617,7 @@ deepMaxRounds = 21
 
 			assert.ok(result);
 			assert.equal(result.skill, "autopilot");
+			assert.equal(result.phase, "failed");
 			assert.equal(warnings.length, 1);
 			assert.match(
 				String(warnings[0][0]),
@@ -7408,7 +7650,7 @@ deepMaxRounds = 21
 				}),
 			);
 
-			const result = await recordSkillActivation({
+			const result = await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "autopilot keep going",
 				nowIso: "2026-02-26T00:00:00.000Z",
@@ -7466,7 +7708,7 @@ deepMaxRounds = 21
 				"# existing context",
 			);
 
-			const result = await recordSkillActivation({
+			const result = await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "autopilot keep going",
 				sessionId: "sess-autopilot",
@@ -7792,7 +8034,7 @@ deepMaxRounds = 21
 				"# autopilot context",
 			);
 
-			const result = await recordSkillActivation({
+			const result = await recordSkillActivationWithAvailableAutopilotReceipt({
 				stateDir,
 				text: "\\ keep going now",
 				sessionId: "sess-autopilot-bare",
@@ -8488,7 +8730,7 @@ describe("applyRalplanGate", () => {
 		}
 	});
 
-	it("does not re-enter ralplan for a short approved team follow-up with durable consensus", async () => {
+	it("keeps short approved team follow-ups gated without an official host consensus receipt", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "omx-keyword-gate-followup-ko-"));
 		try {
 			const plansDir = join(cwd, ".omx", "plans");
@@ -8528,8 +8770,12 @@ describe("applyRalplanGate", () => {
 			);
 
 			const result = applyRalplanGate(["team"], "team으로 해줘", { cwd });
-			assert.equal(result.gateApplied, false);
-			assert.deepEqual(result.keywords, ["team"]);
+			assert.equal(result.gateApplied, true);
+			assert.deepEqual(result.keywords, ["ralplan"]);
+			assert.equal(
+				result.blockedReason,
+				"documented_host_consensus_receipt_unavailable",
+			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
@@ -8582,12 +8828,16 @@ describe("applyRalplanGate", () => {
 			});
 			assert.equal(result.gateApplied, true);
 			assert.deepEqual(result.keywords, ["ralplan"]);
+			assert.equal(
+				result.blockedReason,
+				"documented_host_consensus_receipt_unavailable",
+			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}
 	});
 
-	it("does not re-enter ralplan for a short approved ralph follow-up with durable consensus", async () => {
+	it("keeps short approved ralph follow-ups gated without an official host consensus receipt", async () => {
 		const cwd = await mkdtemp(
 			join(tmpdir(), "omx-keyword-gate-followup-ralph-"),
 		);
@@ -8632,8 +8882,12 @@ describe("applyRalplanGate", () => {
 				cwd,
 				priorSkill: "ralplan",
 			});
-			assert.equal(result.gateApplied, false);
-			assert.deepEqual(result.keywords, ["ralph"]);
+			assert.equal(result.gateApplied, true);
+			assert.deepEqual(result.keywords, ["ralplan"]);
+			assert.equal(
+				result.blockedReason,
+				"documented_host_consensus_receipt_unavailable",
+			);
 		} finally {
 			await rm(cwd, { recursive: true, force: true });
 		}

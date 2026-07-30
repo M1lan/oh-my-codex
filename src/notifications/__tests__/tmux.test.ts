@@ -163,10 +163,14 @@ describe("getTeamTmuxSessions", () => {
 
 describe("getTeamTmuxSessions - session matching", () => {
 	const originalPath = process.env.PATH;
+	const originalMuxBinary = process.env.OMX_MUX_BINARY;
 	const tmpDirs: string[] = [];
 
 	afterEach(() => {
 		process.env.PATH = originalPath;
+		if (originalMuxBinary !== undefined)
+			process.env.OMX_MUX_BINARY = originalMuxBinary;
+		else delete process.env.OMX_MUX_BINARY;
 		for (const dir of tmpDirs.splice(0)) {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -183,6 +187,7 @@ describe("getTeamTmuxSessions - session matching", () => {
 		writeFileSync(tmuxPath, `#!/bin/sh\n${lines}\n`);
 		chmodSync(tmuxPath, 0o755);
 		process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
+		process.env.OMX_MUX_BINARY = tmuxPath;
 	}
 
 	it('returns canonical session name (omx-team-alpha) for team "alpha"', () => {
@@ -211,12 +216,16 @@ describe("getTeamTmuxSessions - session matching", () => {
 
 describe("captureTmuxPane", () => {
 	const originalPath = process.env.PATH;
+	const originalMuxBinary = process.env.OMX_MUX_BINARY;
 	const originalTmux = process.env.TMUX;
 	const originalPane = process.env.TMUX_PANE;
 	const tmpDirs: string[] = [];
 
 	afterEach(() => {
 		process.env.PATH = originalPath;
+		if (originalMuxBinary !== undefined)
+			process.env.OMX_MUX_BINARY = originalMuxBinary;
+		else delete process.env.OMX_MUX_BINARY;
 		if (originalTmux !== undefined) {
 			process.env.TMUX = originalTmux;
 		} else {
@@ -271,6 +280,7 @@ describe("captureTmuxPane", () => {
 		);
 		chmodSync(tmuxPath, 0o755);
 		process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
+		process.env.OMX_MUX_BINARY = tmuxPath;
 
 		assert.equal(captureTmuxPane("%42", 7.8), "capture:%42:-7");
 		assert.equal(captureTmuxPane("%42", Number.NaN), "capture:%42:-12");
@@ -299,6 +309,7 @@ describe("captureTmuxPane", () => {
 		);
 		chmodSync(tmuxPath, 0o755);
 		process.env.PATH = `${fakeBinDir}:${originalPath ?? ""}`;
+		process.env.OMX_MUX_BINARY = tmuxPath;
 
 		const result = captureTmuxPaneWithLiveness("%42", 12);
 		assert.equal(result.live, false);

@@ -42,6 +42,7 @@ import {
 	transitionDispatchRequest as transitionDispatchRequestImpl,
 	markDispatchRequestNotified as markDispatchRequestNotifiedImpl,
 	markDispatchRequestDelivered as markDispatchRequestDeliveredImpl,
+	markDispatchRequestFailed as markDispatchRequestFailedImpl,
 	normalizeBridgeDispatchRecord,
 	normalizeDispatchRequest as normalizeDispatchRequestImpl,
 } from "./state/dispatch.js";
@@ -94,6 +95,11 @@ export type {
 	TeamWorkerIntegrationStatus,
 } from "./contracts.js";
 
+export interface StartupCleanupPane {
+	pane_id: string;
+	pid: number | null;
+}
+
 export interface TeamConfig {
 	name: string;
 	task: string;
@@ -128,6 +134,8 @@ export interface TeamConfig {
 	resize_hook_target: string | null;
 	/** Monotonic counter for worker index assignment during scaling. */
 	next_worker_index?: number;
+	/** Split artifacts proven to belong to startup but not assignable to one worker slot. */
+	startup_cleanup_panes?: StartupCleanupPane[];
 	display_name?: string;
 	requested_name?: string;
 	identity_source?: string;
@@ -364,6 +372,7 @@ export interface TeamManifestV2 {
 	resize_hook_target: string | null;
 	/** Monotonic counter for worker index assignment during scaling. */
 	next_worker_index?: number;
+	startup_cleanup_panes?: StartupCleanupPane[];
 	display_name?: string;
 	requested_name?: string;
 	identity_source?: string;
@@ -960,6 +969,11 @@ function isTeamManifestV2(value: unknown): value is TeamManifestV2 {
 		)
 	)
 		return false;
+	if (
+		v.startup_cleanup_panes !== undefined &&
+		!normalizeStartupCleanupPanes(v.startup_cleanup_panes)
+	)
+		return false;
 	if (!(typeof v.resize_hook_name === "string" || v.resize_hook_name === null))
 		return false;
 	if (
@@ -1516,6 +1530,7 @@ export async function initTeamState(
 			resize_hook_name: null,
 			resize_hook_target: null,
 			next_worker_index: workerCount + 1,
+			startup_cleanup_panes: undefined,
 			display_name: workspace.display_name,
 			requested_name: workspace.requested_name,
 			identity_source: workspace.identity_source,
@@ -1560,6 +1575,7 @@ async function writeConfig(cfg: TeamConfig, cwd: string): Promise<void> {
 		resize_hook_target: normalized.resize_hook_target,
 		next_worker_index:
 			normalized.next_worker_index ?? existing.next_worker_index,
+		startup_cleanup_panes: normalized.startup_cleanup_panes,
 		display_name: normalized.display_name ?? existing.display_name,
 		requested_name: normalized.requested_name ?? existing.requested_name,
 		identity_source: normalized.identity_source ?? existing.identity_source,
@@ -1640,10 +1656,33 @@ function teamConfigFromManifest(manifest: TeamManifestV2): TeamConfig {
 		resize_hook_name: manifest.resize_hook_name,
 		resize_hook_target: manifest.resize_hook_target,
 		next_worker_index: manifest.next_worker_index,
+		startup_cleanup_panes: manifest.startup_cleanup_panes,
 		display_name: manifest.display_name,
 		requested_name: manifest.requested_name,
 		identity_source: manifest.identity_source,
 	};
+}
+
+function normalizeStartupCleanupPanes(
+	value: unknown,
+): StartupCleanupPane[] | null {
+	if (!Array.isArray(value)) return null;
+	const panes = new Map<string, StartupCleanupPane>();
+	for (const raw of value) {
+		if (!raw || typeof raw !== "object") return null;
+		const paneId = (raw as Record<string, unknown>).pane_id;
+		const pid = (raw as Record<string, unknown>).pid;
+		if (typeof paneId !== "string" || !/^%[0-9]+$/.test(paneId)) return null;
+		if (
+			!(
+				pid === null ||
+				(typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0)
+			)
+		)
+			return null;
+		panes.set(paneId, { pane_id: paneId, pid });
+	}
+	return [...panes.values()];
 }
 
 function normalizeTeamConfig(config: TeamConfig): TeamConfig {
@@ -1655,6 +1694,9 @@ function normalizeTeamConfig(config: TeamConfig): TeamConfig {
 		config.config_generation >= 0
 			? config.config_generation
 			: 0;
+	const startupCleanupPanes = normalizeStartupCleanupPanes(
+		config.startup_cleanup_panes ?? [],
+	);
 	return {
 		...config,
 		config_generation: configGeneration,
@@ -1680,6 +1722,10 @@ function normalizeTeamConfig(config: TeamConfig): TeamConfig {
 				: undefined,
 		resize_hook_name: config.resize_hook_name ?? null,
 		resize_hook_target: config.resize_hook_target ?? null,
+		startup_cleanup_panes:
+			startupCleanupPanes && startupCleanupPanes.length > 0
+				? startupCleanupPanes
+				: undefined,
 		worker_launch_mode: workerLaunchMode,
 	};
 }
@@ -1723,6 +1769,7 @@ function teamManifestFromConfig(config: TeamConfig): TeamManifestV2 {
 		resize_hook_name: normalized.resize_hook_name,
 		resize_hook_target: normalized.resize_hook_target,
 		next_worker_index: normalized.next_worker_index,
+		startup_cleanup_panes: normalized.startup_cleanup_panes,
 		display_name: normalized.display_name,
 		requested_name: normalized.requested_name,
 		identity_source: normalized.identity_source,
@@ -2132,6 +2179,15 @@ async function withMailboxLock<T>(
 	);
 }
 
+export function teamContinuationRequiredDiagnostic(
+	phase: TeamPhaseState,
+): string {
+	const epoch = phase.terminal_epoch ?? phase.updated_at;
+	const reason =
+		phase.terminal_reason ?? `terminal_phase_${phase.current_phase}`;
+	return `team_continuation_required:terminal_epoch=${epoch}:reason=${reason}:action=reopen_or_start_continuation`;
+}
+
 // Create a task (auto-increment ID)
 export async function createTask(
 	teamName: string,
@@ -2142,6 +2198,13 @@ export async function createTask(
 		await recoverTeamMembershipTaskTransaction(teamName, cwd);
 		const cfg = await readTeamConfig(teamName, cwd);
 		if (!cfg) throw new Error(`Team ${teamName} not found`);
+		const phase = await readTeamPhase(teamName, cwd);
+		if (
+			phase?.terminal_epoch ||
+			(phase && isTerminalPhase(phase.current_phase))
+		) {
+			throw new Error(teamContinuationRequiredDiagnostic(phase));
+		}
 
 		let nextNumeric = normalizeNextTaskId(cfg.next_task_id);
 		const nextNumericFromDisk = await computeNextTaskIdFromDisk(teamName, cwd);
@@ -2873,6 +2936,22 @@ export async function markDispatchRequestDelivered(
 	});
 }
 
+export async function markDispatchRequestFailed(
+	teamName: string,
+	requestId: string,
+	reason: string,
+	cwd: string,
+): Promise<void> {
+	await markDispatchRequestFailedImpl(requestId, reason, {
+		teamName,
+		cwd,
+		validateWorkerName,
+		withDispatchLock,
+		readDispatchRequests,
+		writeDispatchRequests,
+	});
+}
+
 export async function sendDirectMessage(
 	teamName: string,
 	fromWorker: string,
@@ -3101,6 +3180,16 @@ export interface TeamPhaseState {
 	current_fix_attempt: number;
 	transitions: Array<{ from: string; to: string; at: string; reason?: string }>;
 	updated_at: string;
+	terminal_epoch?: string;
+	terminal_reason?: string;
+	final_task_counts?: {
+		total: number;
+		pending: number;
+		blocked: number;
+		in_progress: number;
+		completed: number;
+		failed: number;
+	};
 }
 
 export type TeamLeaderDecisionState =

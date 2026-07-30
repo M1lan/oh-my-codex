@@ -7,6 +7,7 @@ export type CodexGoalSnapshotStatus =
 	| "complete"
 	| "cancelled"
 	| "failed"
+	| "blocked"
 	| "unknown";
 
 export interface CodexGoalSnapshot {
@@ -59,6 +60,7 @@ function normalizeStatus(value: unknown): CodexGoalSnapshotStatus {
 		return "complete";
 	if (status === "cancelled" || status === "canceled") return "cancelled";
 	if (status === "failed" || status === "failure") return "failed";
+	if (status === "blocked") return "blocked";
 	if (
 		status === "active" ||
 		status === "in_progress" ||

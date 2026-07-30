@@ -746,6 +746,7 @@ esac
 					cwd,
 					env: makeQuestionCliEnv(cwd, {
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: "tmux",
 						TMUX: "/tmp/fake",
 						TMUX_PANE: "%0",
 						OMX_QUESTION_RETURN_PANE: "",
@@ -862,6 +863,7 @@ esac
 					cwd,
 					env: makeQuestionCliEnv(cwd, {
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: "tmux",
 						TMUX: "/tmp/fake",
 						TMUX_PANE: "%0",
 						OMX_QUESTION_RETURN_PANE: "",
@@ -989,6 +991,7 @@ exit 0
 
 		const childEnv: NodeJS.ProcessEnv = makeQuestionCliEnv(cwd, {
 			PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+			OMX_MUX_BINARY: "tmux",
 			OMX_AUTO_UPDATE: "0",
 			OMX_NOTIFY_FALLBACK: "0",
 			OMX_HOOK_DERIVED_SIGNALS: "0",
@@ -1104,6 +1107,7 @@ exit 0
 					cwd,
 					env: makeQuestionCliEnv(cwd, {
 						PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+						OMX_MUX_BINARY: "tmux",
 						TMUX: "/tmp/fake",
 						TMUX_PANE: "%0",
 						OMX_QUESTION_RETURN_PANE: "",
@@ -1194,6 +1198,7 @@ esac
 
 		const childEnv: NodeJS.ProcessEnv = makeQuestionCliEnv(cwd, {
 			PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+			OMX_MUX_BINARY: "tmux",
 			OMX_QUESTION_RETURN_PANE: "%44",
 			OMX_AUTO_UPDATE: "0",
 			OMX_NOTIFY_FALLBACK: "0",

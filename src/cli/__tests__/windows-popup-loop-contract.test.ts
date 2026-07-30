@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +48,7 @@ describe("Windows popup loop contracts", () => {
 		);
 		assert.match(
 			cliIndex,
-			/detached:\s*true,\s*stdio:\s*'ignore',\s*windowsHide:\s*true/,
+			/detached:\s*true,\s*stdio:\s*["']ignore["'],\s*windowsHide:\s*true/,
 		);
 		assert.match(
 			cliIndex,
@@ -60,11 +60,11 @@ describe("Windows popup loop contracts", () => {
 		);
 		assert.match(
 			starPrompt,
-			/spawnSyncFn\('gh',\s*\['api',[\s\S]*?windowsHide:\s*true/,
+			/spawnSyncFn\(\s*["']gh["'],\s*\[\s*["']api["'],[\s\S]*?windowsHide:\s*true/,
 		);
 		assert.match(
 			updateSource,
-			/spawnNpmSync\(\s*\[\s*'install',\s*'-g',[\s\S]*?windowsHide:\s*true/,
+			/spawnGlobalPnpmAddSync\(\s*installSource,\s*\{[\s\S]*?windowsHide:\s*true/,
 		);
 		assert.match(
 			notifierSource,
@@ -72,16 +72,16 @@ describe("Windows popup loop contracts", () => {
 		);
 		assert.match(
 			replyListenerSource,
-			/spawn\('node',\s*\['-e',\s*daemonScript\],\s*\{[\s\S]*?windowsHide:\s*true/,
+			/spawn\(["']node["'],\s*\[["']-e["'],\s*daemonScript\],\s*\{[\s\S]*?windowsHide:\s*true/,
 		);
 		assert.match(
 			fallbackWatcherSource,
-			/spawnPlatformCommandSync\('tmux', args/,
+			/spawnPlatformCommandSync\(\s*["']tmux["'],\s*\[/,
 		);
 		assert.match(
 			fallbackWatcherSource,
-			/sendKeys\(\['send-keys', '-t', binding\.paneId/,
+			/sendKeys\(\s*\[\s*["']send-keys["'],\s*["']-t["'],\s*binding\.paneId/,
 		);
-		assert.doesNotMatch(fallbackWatcherSource, /spawnSync\('tmux'/);
+		assert.doesNotMatch(fallbackWatcherSource, /spawnSync\(["']tmux["']/);
 	});
 });

@@ -68,7 +68,7 @@ describe("error-handling warning guards", () => {
 		);
 		assert.match(
 			replyListenerSource,
-			/detached: true,\s+stdio: 'ignore',\s+windowsHide: true,/,
+			/detached: true,\s+stdio: ["']ignore["'],\s+windowsHide: true,/,
 		);
 	});
 

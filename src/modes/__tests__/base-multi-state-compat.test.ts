@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, it } from "node:test";
 import { readModeState, startMode } from "../base.js";
 
 describe("modes/base multi-state compatibility", () => {
@@ -13,7 +13,11 @@ describe("modes/base multi-state compatibility", () => {
 			await startMode("team", "coordinate execution", 5, wd);
 			await writeFile(
 				join(wd, ".omx", "state", "session.json"),
-				JSON.stringify({ session_id: "sess-team-ralph" }),
+				JSON.stringify({
+					session_id: "sess-team-ralph",
+					cwd: wd,
+					state_root: join(wd, ".omx", "state"),
+				}),
 			);
 
 			await startMode("ralph", "complete the approved plan", 5, wd);

@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { describe, it } from "node:test";
 import { existsSync } from "fs";
-import { join } from "path";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
+import { join } from "path";
 
 async function withAmbientTmuxEnv<T>(
 	env: NodeJS.ProcessEnv,
@@ -888,7 +888,11 @@ describe("state-server directory initialization", () => {
 			await mkdir(sessionDir, { recursive: true });
 			await writeFile(
 				join(stateDir, "session.json"),
-				JSON.stringify({ session_id: sessionId }, null, 2),
+				JSON.stringify(
+					{ session_id: sessionId, cwd: wd, state_root: stateDir },
+					null,
+					2,
+				),
 			);
 			await writeFile(
 				join(stateDir, "deep-interview-state.json"),

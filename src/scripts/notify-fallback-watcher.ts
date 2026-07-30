@@ -28,14 +28,13 @@ import {
 	resolveAutoNudgeSignature,
 } from "./notify-hook/auto-nudge.js";
 import { readScopedJsonIfExists } from "./notify-hook/state-io.js";
-import { checkPaneReadyForTeamSendKeys } from "./notify-hook/team-tmux-guard.js";
 import {
 	checkWorkerPanesAlive,
 	isLeaderStale,
 	maybeNudgeTeamLeader,
 	resolveLeaderStalenessThresholdMs,
 } from "./notify-hook/team-leader-nudge.js";
-import { DEFAULT_MARKER } from "./tmux-hook-engine.js";
+import { DEFAULT_MARKER, isPaneRunningShell } from "./tmux-hook-engine.js";
 import { isTerminalPhase } from "./notify-hook/utils.js";
 import {
 	isSessionStale,
@@ -56,7 +55,6 @@ import {
 	compactNotifyFallbackDeliveries,
 	NOTIFY_FALLBACK_LEASE_MS,
 } from "./notify-fallback-delivery.js";
-import { readExactPaneProofSync } from "../team/exact-pane.js";
 import { OMX_RALPH_PANE_OWNER_OPTION } from "../state/mode-state-context.js";
 
 function argValue(name: string, fallback = ""): string {
@@ -268,6 +266,7 @@ interface RalphContinueSteerState {
 	state_path: string;
 	pane_id: string;
 	pane_current_command: string;
+	pane_start_command: string;
 	current_phase: string;
 	subagent_session_id: string;
 	active_subagent_thread_ids: string[];
@@ -429,6 +428,7 @@ let lastRalphContinueSteer: RalphContinueSteerState = {
 	state_path: "",
 	pane_id: "",
 	pane_current_command: "",
+	pane_start_command: "",
 	current_phase: "",
 	subagent_session_id: "",
 	active_subagent_thread_ids: [],
@@ -602,6 +602,7 @@ function normalizeRalphContinueSteerState(
 		state_path: safeString(raw.state_path),
 		pane_id: safeString(raw.pane_id),
 		pane_current_command: safeString(raw.pane_current_command),
+		pane_start_command: safeString(raw.pane_start_command),
 		current_phase: safeString(raw.current_phase),
 		subagent_session_id: safeString(raw.subagent_session_id),
 		active_subagent_thread_ids: Array.isArray(raw.active_subagent_thread_ids)
@@ -940,7 +941,15 @@ interface RalphContinuePaneBinding {
 	paneId: string;
 	panePid: number;
 	sessionName: string;
+	sessionId: string;
+	windowId: string;
 	paneOwnerId: string;
+	paneCurrentCommand: string;
+	paneStartCommand: string;
+}
+
+function isSafeRalphAuthorityValue(value: string): boolean {
+	return /^[A-Za-z0-9_./:+@%=-]+(?: [A-Za-z0-9_./:+@%=-]+)*$/.test(value);
 }
 
 function parseRalphContinuePaneBinding(
@@ -949,62 +958,47 @@ function parseRalphContinuePaneBinding(
 	const paneId = safeString(state?.tmux_pane_id).trim();
 	const panePid = parsePositivePid(state?.tmux_pane_pid);
 	const sessionName = safeString(state?.tmux_session_name).trim();
+	const sessionId = safeString(state?.tmux_session_id).trim();
+	const windowId = safeString(state?.tmux_window_id).trim();
 	const paneOwnerId = safeString(state?.tmux_pane_owner_id).trim();
+	const paneCurrentCommand = safeString(
+		state?.tmux_pane_current_command,
+	).trim();
+	const paneStartCommand = safeString(state?.tmux_pane_start_command).trim();
 	if (
 		!/^%[0-9]+$/.test(paneId) ||
 		panePid === null ||
 		!sessionName ||
+		!/^\$[0-9]+$/.test(sessionId) ||
+		!/^@[0-9]+$/.test(windowId) ||
 		!paneOwnerId
 	)
 		return null;
+	if (
+		!isSafeRalphAuthorityValue(sessionName) ||
+		!isSafeRalphAuthorityValue(paneOwnerId) ||
+		!isSafeRalphAuthorityValue(paneCurrentCommand) ||
+		!isSafeRalphAuthorityValue(paneStartCommand) ||
+		isPaneRunningShell(paneCurrentCommand)
+	)
+		return null;
 	if (paneOwnerId.startsWith("team:")) return null;
-	return { paneId, panePid, sessionName, paneOwnerId };
+	return {
+		paneId,
+		panePid,
+		sessionName,
+		sessionId,
+		windowId,
+		paneOwnerId,
+		paneCurrentCommand,
+		paneStartCommand,
+	};
 }
 
-function requireFrozenRalphPaneBinding(
+function ralphInputAuthorityCondition(
 	binding: RalphContinuePaneBinding,
-): void {
-	const initialProof = readExactPaneProofSync(binding.paneId);
-	if (initialProof.status !== "live" || initialProof.pid !== binding.panePid) {
-		throw new Error(
-			`persisted Ralph pane identity unavailable: ${binding.paneId}`,
-		);
-	}
-	const session = spawnPlatformCommandSync(
-		"tmux",
-		["display-message", "-p", "-t", binding.paneId, "#S"],
-		{ encoding: "utf-8" },
-	).result;
-	if (
-		session.error ||
-		session.status !== 0 ||
-		safeString(session.stdout).trim() !== binding.sessionName
-	) {
-		throw new Error(`persisted Ralph pane session changed: ${binding.paneId}`);
-	}
-	const owner = spawnPlatformCommandSync(
-		"tmux",
-		[
-			"show-option",
-			"-qv",
-			"-p",
-			"-t",
-			binding.paneId,
-			OMX_RALPH_PANE_OWNER_OPTION,
-		],
-		{ encoding: "utf-8" },
-	).result;
-	if (
-		owner.error ||
-		owner.status !== 0 ||
-		safeString(owner.stdout).trim() !== binding.paneOwnerId
-	) {
-		throw new Error(`persisted Ralph pane owner changed: ${binding.paneId}`);
-	}
-	const finalProof = readExactPaneProofSync(binding.paneId);
-	if (finalProof.status !== "live" || finalProof.pid !== binding.panePid) {
-		throw new Error(`persisted Ralph pane identity changed: ${binding.paneId}`);
-	}
+): string {
+	return `#{&&:#{==:#{pane_id},${binding.paneId}},#{&&:#{==:#{pane_dead},0},#{&&:#{==:#{pane_pid},${binding.panePid}},#{&&:#{==:#{session_name},${binding.sessionName}},#{&&:#{==:#{session_id},${binding.sessionId}},#{&&:#{==:#{window_id},${binding.windowId}},#{&&:#{==:#{${OMX_RALPH_PANE_OWNER_OPTION}},${binding.paneOwnerId}},#{&&:#{==:#{pane_current_command},${binding.paneCurrentCommand}},#{==:#{pane_start_command},${binding.paneStartCommand}}}}}}}}}`;
 }
 
 async function emitRalphContinueSteer(
@@ -1013,13 +1007,26 @@ async function emitRalphContinueSteer(
 ): Promise<void> {
 	const markedText = `${message} ${DEFAULT_MARKER}`;
 	const sendKeys = (args: string[], failure: string): void => {
-		requireFrozenRalphPaneBinding(binding);
-		const { result } = spawnPlatformCommandSync("tmux", args, {
-			encoding: "utf-8",
-		});
+		const receipt = `__omx_ralph_input_${Math.random().toString(36).slice(2)}__`;
+		const success = `${args.map((arg) => `'${arg.replace(/'/g, "'\\\"'\\\"'")}'`).join(" ")} \\; display-message -p ${receipt}`;
+		const denied = "display-message -p __omx_ralph_input_denied__";
+		const { result } = spawnPlatformCommandSync(
+			"tmux",
+			[
+				"if-shell",
+				"-F",
+				"-t",
+				binding.paneId,
+				ralphInputAuthorityCondition(binding),
+				success,
+				denied,
+			],
+			{ encoding: "utf-8" },
+		);
 		if (result.error) throw new Error(result.error.message);
-		if (result.status !== 0)
+		if (result.status !== 0 || safeString(result.stdout).trim() !== receipt) {
 			throw new Error((result.stderr || result.stdout || "").trim() || failure);
+		}
 	};
 	sendKeys(
 		["send-keys", "-t", binding.paneId, "-l", markedText],
@@ -1412,6 +1419,7 @@ async function runRalphContinueSteerTick(): Promise<void> {
 		state_path: activeRalph.path,
 		pane_id: activePaneId,
 		pane_current_command: "",
+		pane_start_command: "",
 		subagent_session_id: safeString(
 			activeRalph.state?.owner_codex_session_id,
 		).trim(),
@@ -1471,25 +1479,8 @@ async function runRalphContinueSteerTick(): Promise<void> {
 			return { sent: false, skipped: true };
 		}
 		lastRalphContinueSteer.pane_id = binding.paneId;
-		try {
-			requireFrozenRalphPaneBinding(binding);
-		} catch (error) {
-			lastRalphContinueSteer.last_reason = "pane_binding_changed";
-			lastRalphContinueSteer.last_error =
-				error instanceof Error ? error.message : safeString(error);
-			return { sent: false, skipped: true };
-		}
-		const paneGuard = await checkPaneReadyForTeamSendKeys(
-			binding.paneId,
-			binding.paneId,
-		);
-		lastRalphContinueSteer.pane_current_command =
-			paneGuard.paneCurrentCommand || "";
-		if (!paneGuard.ok) {
-			lastRalphContinueSteer.last_reason =
-				paneGuard.reason || "pane_guard_blocked";
-			return { sent: false, skipped: true };
-		}
+		lastRalphContinueSteer.pane_current_command = binding.paneCurrentCommand;
+		lastRalphContinueSteer.pane_start_command = binding.paneStartCommand;
 		await emitRalphContinueSteer(binding, RALPH_CONTINUE_TEXT);
 		await writeRalphSteerTimestamp(nowIso);
 		lastRalphContinueSteer.last_sent_at = nowIso;

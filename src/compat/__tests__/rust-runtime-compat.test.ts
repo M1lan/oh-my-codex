@@ -212,6 +212,7 @@ describe("rust runtime legacy-reader compatibility", () => {
 
 				const result = runOmx(wd, ["doctor", "--team"], {
 					PATH: `${fakeBin}:${process.env.PATH || ""}`,
+					OMX_MUX_BINARY: "tmux",
 					OMX_TEAM_STATE_ROOT: teamStateRoot,
 				});
 				if (shouldSkipForSpawnPermissions(result.error)) return;

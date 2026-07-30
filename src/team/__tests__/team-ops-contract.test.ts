@@ -42,6 +42,7 @@ const EXPECTED_STATE_RE_EXPORTS = {
 	teamTransitionDispatchRequest: "transitionDispatchRequest",
 	teamMarkDispatchRequestNotified: "markDispatchRequestNotified",
 	teamMarkDispatchRequestDelivered: "markDispatchRequestDelivered",
+	teamMarkDispatchRequestFailed: "markDispatchRequestFailed",
 	teamRemoveDispatchRequestsForWorkers: "removeDispatchRequestsForWorkers",
 	teamAppendEvent: "appendTeamEvent",
 	teamReadTaskApproval: "readTaskApproval",
@@ -72,7 +73,7 @@ const EXPECTED_STATE_RE_EXPORTS = {
 function parseStateReExports(source: string): Record<string, string> {
 	const map: Record<string, string> = {};
 	for (const match of source.matchAll(
-		/export\s*\{([^}]+)\}\s*from\s*'\.\/state\.js';/g,
+		/export\s*\{([^}]+)\}\s*from\s*["']\.\/state\.js["'];/g,
 	)) {
 		const specifiers = match[1]
 			.split(",")

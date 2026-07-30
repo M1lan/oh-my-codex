@@ -162,6 +162,7 @@ function runNotifyHookAsWorker(
 			env: {
 				...process.env,
 				PATH: `${fakeBinDir}:${process.env.PATH || ""}`,
+				OMX_MUX_BINARY: "tmux",
 				OMX_TEAM_WORKER: workerEnv,
 				OMX_TEAM_STATE_ROOT: stateRoot,
 				OMX_TEAM_LEADER_CWD: "",

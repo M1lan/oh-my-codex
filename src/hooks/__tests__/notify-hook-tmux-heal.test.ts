@@ -18,6 +18,7 @@ import {
 	handleTmuxInjection,
 	resolvePaneTarget,
 } from "../../scripts/notify-hook/tmux-injection.js";
+import { defaultProcessInspectionProvider } from "../session.js";
 
 const NOTIFY_HOOK_SCRIPT = new URL(
 	"../../../dist/scripts/notify-hook.js",
@@ -30,6 +31,7 @@ const STATE_ENV_KEYS = [
 	"OMX_SESSION_ID",
 	"CODEX_SESSION_ID",
 	"SESSION_ID",
+	"OMX_MUX_BINARY",
 ] as const;
 
 async function withTempWorkingDir(
@@ -41,6 +43,7 @@ async function withTempWorkingDir(
 		previous.set(key, process.env[key]);
 		delete process.env[key];
 	}
+	process.env.OMX_MUX_BINARY = "tmux";
 	try {
 		await run(cwd);
 	} finally {
@@ -126,14 +129,25 @@ async function writeManagedSessionState(
 	cwd: string,
 	sessionId: string,
 ): Promise<void> {
+	const observation = defaultProcessInspectionProvider.observeProcess(
+		process.pid,
+		process.platform,
+	);
 	await writeJson(join(stateDir, "session.json"), {
 		session_id: sessionId,
 		started_at: new Date().toISOString(),
 		cwd,
 		pid: process.pid,
 		platform: process.platform,
-		pid_start_ticks: readLinuxStartTicks(process.pid),
-		pid_cmdline: readLinuxCmdline(process.pid),
+		...(observation.kind === "identity"
+			? {
+					identity_schema_version: 2,
+					process_identity: observation.identity,
+				}
+			: {
+					pid_start_ticks: readLinuxStartTicks(process.pid),
+					pid_cmdline: readLinuxCmdline(process.pid),
+				}),
 	});
 }
 

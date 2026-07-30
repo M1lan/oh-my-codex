@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { arch, platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { describe, it } from "node:test";
 import { getInstallableNativeAgentNames } from "../../agents/policy.js";
 import { getSetupInstallableSkillNames } from "../../catalog/installable.js";
 import { readCatalogManifest } from "../../catalog/reader.js";
@@ -94,7 +94,7 @@ describe("package bin contract", () => {
 		);
 		assert.equal(
 			pkg.scripts?.["test:ci:compiled"],
-			"pnpm run verify:native-agents && pnpm run verify:plugin-bundle && pnpm run test:node && node dist/scripts/generate-catalog-docs.js --check",
+			"node dist/scripts/run-compiled-ci.js",
 		);
 		assert.equal(
 			pkg.scripts?.["coverage:team-critical"],

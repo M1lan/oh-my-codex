@@ -36,7 +36,13 @@ import {
 	isPlanningComplete,
 	readPlanningArtifacts,
 } from "../planning/artifacts.js";
-import { hasDurableRalplanConsensusEvidenceForCwd } from "../ralplan/consensus-gate.js";
+import {
+	buildRalplanConsensusGateForCwd,
+	shouldBlockFreshAutopilotForRalplanReceipt,
+	type RalplanConsensusBlockedReason,
+	type RalplanHostConsensusReceiptVerifierCapability,
+} from "../ralplan/consensus-gate.js";
+
 import {
 	getExplicitSkillDefinition,
 	KEYWORD_TRIGGER_DEFINITIONS,
@@ -47,6 +53,7 @@ import { readTeamModeConfig } from "../config/team-mode.js";
 import {
 	SKILL_ACTIVE_STATE_FILE,
 	listActiveSkills,
+	readSkillActiveState,
 	writeSkillActiveStateCopiesForStateDir,
 	type SkillActiveEntry,
 } from "../state/skill-active.js";
@@ -192,6 +199,10 @@ export interface RecordSkillActivationInput {
 	onProvenanceRejected?: (
 		diagnostic: PromptDiagnosticDescriptor,
 	) => void | Promise<void>;
+}
+
+interface RecordSkillActivationDependencies {
+	getRalplanHostConsensusReceiptVerifierCapability?: () => RalplanHostConsensusReceiptVerifierCapability;
 }
 
 export interface DeepInterviewModeStatePersistenceInput {
@@ -632,12 +643,7 @@ function releaseDeepInterviewInputLock(
 async function readExistingSkillState(
 	statePath: string,
 ): Promise<SkillActiveState | null> {
-	try {
-		const raw = await readFile(statePath, "utf-8");
-		return JSON.parse(raw) as SkillActiveState;
-	} catch {
-		return null;
-	}
+	return (await readSkillActiveState(statePath)) as SkillActiveState | null;
 }
 
 function buildActiveSkills(
@@ -892,6 +898,46 @@ function isResettableTerminalModeState(
 		lifecycleOutcome === "userinterlude" ||
 		(expectedMode === "ralph" && lifecycleOutcome === "blocked")
 	);
+}
+
+async function persistBlockedFreshAutopilotState(
+	stateDir: string,
+	sessionId: string | undefined,
+	nowIso: string,
+): Promise<void> {
+	const { absolutePath } = resolveSeedStateFilePath(
+		stateDir,
+		"autopilot",
+		sessionId,
+	);
+	await mkdir(dirname(absolutePath), { recursive: true });
+	const error = "documented_host_consensus_receipt_unavailable";
+	const state = withModeRuntimeContext(
+		{},
+		{
+			active: false,
+			mode: "autopilot",
+			current_phase: "failed",
+			iteration: 0,
+			max_iterations: 10,
+			started_at: nowIso,
+			completed_at: nowIso,
+			updated_at: nowIso,
+			error,
+			status_message:
+				"Status: failed — Autopilot cannot start without an official host consensus receipt verifier.",
+			handoff_artifacts: {
+				ralplan_consensus_gate: {
+					blocked_reason: error,
+					blocked_details: [
+						"official host consensus receipt verifier is unavailable",
+					],
+				},
+			},
+		},
+		{ nowIso },
+	);
+	await writeFile(absolutePath, JSON.stringify(state, null, 2));
 }
 
 async function persistStatefulSkillSeedState(
@@ -5536,6 +5582,7 @@ async function preflightKeywordTargetState(
 
 export async function recordSkillActivation(
 	input: RecordSkillActivationInput,
+	dependencies: RecordSkillActivationDependencies = {},
 ): Promise<SkillActiveState | null> {
 	const classification =
 		input.classification ?? classifyKeywordInput(input.text);
@@ -5692,12 +5739,55 @@ export async function recordSkillActivation(
 				).absolutePath,
 			)
 		: null;
+	const freshAutopilot =
+		match.skill === "autopilot" &&
+		!(previous?.active === true && previous.skill === "autopilot") &&
+		matchedModeState?.active !== true;
 	const matchedModeTerminal = matchedSeedConfig
 		? isResettableTerminalModeState(
 				matchedModeState as Record<string, unknown> | null,
 				matchedSeedConfig.mode,
 			)
 		: false;
+	if (
+		match.skill === "autopilot" &&
+		matchedModeState?.active === true &&
+		!matchedModeTerminal &&
+		shouldBlockFreshAutopilotForRalplanReceipt(
+			dependencies.getRalplanHostConsensusReceiptVerifierCapability?.(),
+		)
+	) {
+		const phase =
+			safeString(matchedModeState.current_phase).trim() || "deep-interview";
+		const preserved = previous ?? {
+			version: 1 as const,
+			active: true,
+			skill: "autopilot",
+			keyword: match.keyword,
+			phase,
+			activated_at: safeString(matchedModeState.started_at).trim() || nowIso,
+			updated_at: safeString(matchedModeState.updated_at).trim() || nowIso,
+			source: "keyword-detector" as const,
+			session_id: input.sessionId,
+			active_skills: [
+				{
+					skill: "autopilot",
+					active: true,
+					phase,
+					session_id: input.sessionId,
+				},
+			],
+		};
+		return {
+			...preserved,
+			initialized_mode: "autopilot",
+			initialized_state_path: resolveSeedStateFilePath(
+				input.stateDir,
+				"autopilot",
+				input.sessionId ?? preserved.session_id,
+			).relativePath,
+		};
+	}
 	if (
 		classification.reservedInput === "omx-question-answered" &&
 		matchedModeTerminal
@@ -5854,7 +5944,13 @@ export async function recordSkillActivation(
 				nextWorkflowEntries.map((entry) => entry.skill),
 				requestedMode,
 			);
-			if (!decision.allowed) {
+			const hasStandaloneRalplanPreflightDenial =
+				freshAutopilot &&
+				previous?.active === true &&
+				previous.skill === "ralplan" &&
+				decision.currentModes.length === 1 &&
+				decision.currentModes[0] === "ralplan";
+			if (!decision.allowed && !hasStandaloneRalplanPreflightDenial) {
 				return {
 					...(previous ?? {}),
 					version: 1,
@@ -5880,6 +5976,67 @@ export async function recordSkillActivation(
 						"activate",
 					),
 				};
+			}
+
+			if (
+				freshAutopilot &&
+				requestedMode === "autopilot" &&
+				shouldBlockFreshAutopilotForRalplanReceipt(
+					dependencies.getRalplanHostConsensusReceiptVerifierCapability?.(),
+				)
+			) {
+				const error = "documented_host_consensus_receipt_unavailable";
+				if (previous?.active === true && previous.skill === "ralplan") {
+					return {
+						...previous,
+						updated_at: nowIso,
+						transition_error: error,
+					};
+				}
+
+				const state: SkillActiveState = {
+					version: 1,
+					active: false,
+					skill: "autopilot",
+					keyword: match.keyword,
+					phase: "failed",
+					activated_at: nowIso,
+					updated_at: nowIso,
+					source: "keyword-detector",
+					session_id: input.sessionId,
+					thread_id: input.threadId,
+					turn_id: input.turnId,
+					active_skills: [],
+					error,
+					transition_error: error,
+					status_message:
+						"Status: failed — Autopilot cannot start without an official host consensus receipt verifier.",
+				};
+				const nextState = applyProvenanceOwner(state);
+				try {
+					await persistBlockedFreshAutopilotState(
+						input.stateDir,
+						input.sessionId,
+						nowIso,
+					);
+					await writeSkillActiveStateCopiesForStateDir(
+						input.stateDir,
+						nextState,
+						input.sessionId,
+						selectRootSkillStateCopy(
+							previousRoot,
+							nextState,
+							input.sessionId,
+							suppressRootMutation,
+						),
+					);
+				} catch (error) {
+					console.warn(
+						"[omx] warning: failed to persist keyword activation state",
+						error,
+					);
+				}
+				return nextState;
 			}
 
 			if (decision.autoCompleteModes.length > 0) {
@@ -6260,24 +6417,45 @@ export interface ApplyRalplanGateOptions {
 	priorSkill?: string | null;
 	requireNativeSubagents?: boolean;
 }
+export interface ApplyRalplanGateResult {
+	keywords: string[];
+	gateApplied: boolean;
+	gatedKeywords: string[];
+	blockedReason: RalplanConsensusBlockedReason | null;
+}
 
 export function applyRalplanGate(
 	keywords: string[],
 	text: string,
 	options: ApplyRalplanGateOptions = {},
-): { keywords: string[]; gateApplied: boolean; gatedKeywords: string[] } {
+): ApplyRalplanGateResult {
 	if (keywords.length === 0) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
 	// Don't gate if cancel is present (cancel always wins)
 	if (keywords.includes("cancel")) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
 	// Don't gate if ralplan is already in the list
 	if (keywords.includes("ralplan")) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
 	// Check if any execution keywords are present
@@ -6285,23 +6463,35 @@ export function applyRalplanGate(
 		EXECUTION_GATE_KEYWORDS.has(k),
 	);
 	if (executionKeywords.length === 0) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
 	// Check if prompt is underspecified
 	if (!isUnderspecifiedForExecution(text)) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
-	const planningComplete = isPlanningComplete(
-		readPlanningArtifacts(options.cwd ?? process.cwd()),
-	);
-	const consensusComplete = hasDurableRalplanConsensusEvidenceForCwd(
-		options.cwd ?? process.cwd(),
-		{
-			requireNativeSubagents: options.requireNativeSubagents,
-		},
-	);
+	const cwd = options.cwd ?? process.cwd();
+	const planningComplete = isPlanningComplete(readPlanningArtifacts(cwd));
+	const consensusEvidence = buildRalplanConsensusGateForCwd(cwd, {
+		requireNativeSubagents: options.requireNativeSubagents,
+	});
+	const consensusComplete = consensusEvidence.complete;
+	const consensusBlockedFollowup =
+		planningComplete &&
+		executionKeywords.some(
+			(keyword) => keyword === "team" || keyword === "ralph",
+		);
 	const shortFollowupBypasses = executionKeywords.filter((keyword) => {
 		if (keyword !== "team" && keyword !== "ralph") return false;
 		return isApprovedExecutionFollowupShortcut(keyword as FollowupMode, text, {
@@ -6310,7 +6500,12 @@ export function applyRalplanGate(
 		});
 	});
 	if (shortFollowupBypasses.length > 0) {
-		return { keywords, gateApplied: false, gatedKeywords: [] };
+		return {
+			keywords,
+			gateApplied: false,
+			gatedKeywords: [],
+			blockedReason: null,
+		};
 	}
 
 	// Gate: replace execution keywords with ralplan
@@ -6323,6 +6518,9 @@ export function applyRalplanGate(
 		keywords: filtered,
 		gateApplied: true,
 		gatedKeywords: executionKeywords,
+		blockedReason: consensusBlockedFollowup
+			? consensusEvidence.blockedReason
+			: null,
 	};
 }
 

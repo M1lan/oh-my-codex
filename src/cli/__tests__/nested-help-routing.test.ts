@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 function runOmx(cwd: string, argv: string[]) {
@@ -30,7 +30,7 @@ describe("nested help routing", () => {
 		],
 		[
 			["ask", "--help"],
-			/Usage:\s*omx ask <claude\|gemini> <question or task>/i,
+			/Usage:\s*omx ask <claude\|gemini\|gjc> <question or task>/i,
 		],
 		[
 			["question", "--help"],

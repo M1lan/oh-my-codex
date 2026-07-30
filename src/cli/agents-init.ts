@@ -1,15 +1,18 @@
 import { existsSync } from "node:fs";
 import {
+	copyFile,
 	mkdir,
 	readdir,
 	readFile,
 	stat,
 	writeFile,
-	copyFile,
 } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
+import {
+	readSessionPointer,
+	resolveSessionPointerContext,
+} from "../hooks/session.js";
 import { getPackageRoot } from "../utils/package.js";
-import { readSessionState, isSessionStale } from "../hooks/session.js";
 
 export const AGENTS_INIT_USAGE = [
 	"Usage: omx agents-init [path] [--dry-run] [--force] [--verbose]",
@@ -310,10 +313,17 @@ export async function agentsInit(
 		"agents-init",
 		new Date().toISOString().replaceAll(":", "-"),
 	);
-	const activeSession = await readSessionState(cwd);
-	const rootSessionGuardActive = Boolean(
-		activeSession && !isSessionStale(activeSession),
-	);
+	let rootSessionGuardActive = false;
+	try {
+		const sessionPointer = await readSessionPointer(
+			resolveSessionPointerContext(cwd),
+		);
+		rootSessionGuardActive =
+			sessionPointer.status === "usable" ||
+			sessionPointer.status === "identity-indeterminate";
+	} catch {
+		// Preserve legacy fail-open behavior when session state cannot be read.
+	}
 
 	console.log("oh-my-codex AGENTS bootstrap");
 	console.log("===========================\n");

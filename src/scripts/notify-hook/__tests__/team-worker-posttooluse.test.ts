@@ -26,6 +26,11 @@ async function initWorkerFixture(): Promise<{
 		cwd,
 		stdio: "ignore",
 	});
+	execFileSync(
+		"git",
+		["config", "core.hooksPath", join(cwd, ".git", "hooks")],
+		{ cwd, stdio: "ignore" },
+	);
 	await writeFile(join(cwd, "README.md"), "hello\n", "utf-8");
 	execFileSync("git", ["add", "README.md"], { cwd, stdio: "ignore" });
 	execFileSync("git", ["commit", "-m", "init"], { cwd, stdio: "ignore" });

@@ -6,7 +6,7 @@
 import { createHash } from "crypto";
 import { existsSync, realpathSync } from "fs";
 import { readdir, readFile, realpath } from "fs/promises";
-import { dirname, isAbsolute, join, resolve } from "path";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 
@@ -50,11 +50,20 @@ function resolveLauncherPath(rawPath: string, baseCwd: string): string {
 
 export function canonicalizeComparablePath(rawPath: string): string {
 	const absolutePath = resolve(rawPath);
-	if (!existsSync(absolutePath)) return absolutePath;
+	let existingPath = absolutePath;
+	const missingSegments: string[] = [];
+	while (!existsSync(existingPath)) {
+		const parent = dirname(existingPath);
+		if (parent === existingPath) return absolutePath;
+		missingSegments.unshift(basename(existingPath));
+		existingPath = parent;
+	}
 	try {
-		return typeof realpathSync.native === "function"
-			? realpathSync.native(absolutePath)
-			: realpathSync(absolutePath);
+		const canonicalExistingPath =
+			typeof realpathSync.native === "function"
+				? realpathSync.native(existingPath)
+				: realpathSync(existingPath);
+		return resolve(canonicalExistingPath, ...missingSegments);
 	} catch {
 		return absolutePath;
 	}

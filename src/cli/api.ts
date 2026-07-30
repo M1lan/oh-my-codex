@@ -1,7 +1,7 @@
 import {
-	spawnSync,
 	type SpawnSyncOptionsWithStringEncoding,
 	type SpawnSyncReturns,
+	spawnSync,
 } from "node:child_process";
 import { existsSync } from "node:fs";
 import { arch as osArch, constants as osConstants } from "node:os";
@@ -12,6 +12,7 @@ import {
 	API_BIN_ENV as API_BIN_ENV_SHARED,
 	getPackageVersion,
 	hydrateNativeBinary,
+	inspectManagedNativeBinary,
 	resolveCachedNativeBinaryCandidatePaths,
 	resolveLinuxNativeLibcPreference,
 } from "./native-assets.js";
@@ -182,6 +183,7 @@ export async function resolveApiBinaryPathWithHydration(
 	if (override) return isAbsolute(override) ? override : resolve(cwd, override);
 
 	const version = await getPackageVersion(packageRoot);
+	let rejectedCache: { path: string; state: string } | undefined;
 	for (const cached of resolveCachedNativeBinaryCandidatePaths(
 		"omx-api",
 		version,
@@ -195,7 +197,10 @@ export async function resolveApiBinaryPathWithHydration(
 					: undefined,
 		},
 	)) {
-		if (exists(cached)) return cached;
+		const inspected = await inspectManagedNativeBinary(cached, env);
+		if (inspected.state === "verified") return inspected.path!;
+		if (inspected.state !== "missing")
+			rejectedCache ??= { path: cached, state: inspected.state };
 	}
 
 	for (const packaged of packagedApiBinaryCandidatePaths(
@@ -224,6 +229,7 @@ export async function resolveApiBinaryPathWithHydration(
 
 	throw new Error(
 		`[api] native binary not found. Checked cached/native candidates under ${packageRoot}, ${repoLocal}, and ${nestedRepoLocal}. ` +
+			`${rejectedCache ? `Rejected managed cache entry ${rejectedCache.path} (${rejectedCache.state}). ` : ""}` +
 			`Reconnect to the network so OMX can fetch the release asset, or set ${OMX_API_BIN_ENV} to override the path.`,
 	);
 }
@@ -265,12 +271,7 @@ export async function apiCommand(args: string[]): Promise<void> {
 		return;
 	}
 
-	let binaryPath: string;
-	try {
-		binaryPath = await resolveApiBinaryPathWithHydration();
-	} catch (error) {
-		throw error;
-	}
+	const binaryPath = await resolveApiBinaryPathWithHydration();
 
 	const result = runApiBinary(binaryPath, args);
 	if (result.error) {

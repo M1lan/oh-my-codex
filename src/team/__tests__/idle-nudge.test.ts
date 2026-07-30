@@ -103,6 +103,7 @@ async function withFakeTmux(
 	const captureSeqPath = join(root, "capture-seq.txt");
 
 	const prevPath = process.env.PATH;
+	const prevMuxBinary = process.env.OMX_MUX_BINARY;
 	const prevCaptureSeq = process.env.OMX_CAPTURE_SEQ_FILE;
 	const prevCaptureToken = process.env.OMX_CAPTURE_TOKEN;
 	const prevFailSendKeys = process.env.OMX_FAIL_SEND_KEYS;
@@ -114,6 +115,7 @@ async function withFakeTmux(
 		await chmod(tmuxPath, 0o755);
 
 		process.env.PATH = `${binDir}:${prevPath ?? ""}`;
+		process.env.OMX_MUX_BINARY = "tmux";
 		process.env.OMX_CAPTURE_SEQ_FILE = captureSeqPath;
 		process.env.OMX_CAPTURE_TOKEN = "IDLE";
 		delete process.env.OMX_FAIL_SEND_KEYS;
@@ -128,6 +130,9 @@ async function withFakeTmux(
 	} finally {
 		if (typeof prevPath === "string") process.env.PATH = prevPath;
 		else delete process.env.PATH;
+		if (typeof prevMuxBinary === "string")
+			process.env.OMX_MUX_BINARY = prevMuxBinary;
+		else delete process.env.OMX_MUX_BINARY;
 
 		if (typeof prevCaptureSeq === "string")
 			process.env.OMX_CAPTURE_SEQ_FILE = prevCaptureSeq;

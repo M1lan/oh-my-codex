@@ -21,7 +21,10 @@ import {
 	resolveManagedSessionPane,
 	verifyManagedPaneTarget,
 } from "../../scripts/notify-hook/managed-tmux.js";
-import { writeSessionStart } from "../session.js";
+import {
+	defaultProcessInspectionProvider,
+	writeSessionStart,
+} from "../session.js";
 
 function readLinuxStartTicks(pid: number): number | null {
 	try {
@@ -48,6 +51,22 @@ function readLinuxCmdline(pid: number): string | null {
 	}
 }
 
+function processIdentityFields(pid: number) {
+	const observation = defaultProcessInspectionProvider.observeProcess(
+		pid,
+		process.platform,
+	);
+	return observation.kind === "identity"
+		? {
+				identity_schema_version: 2 as const,
+				process_identity: observation.identity,
+			}
+		: {
+				pid_start_ticks: readLinuxStartTicks(pid),
+				pid_cmdline: readLinuxCmdline(pid),
+			};
+}
+
 describe("notify-hook managed tmux windows fallback", () => {
 	async function withFakeTmux(
 		cwd: string,
@@ -57,15 +76,20 @@ describe("notify-hook managed tmux windows fallback", () => {
 		const fakeBinDir = join(cwd, "fake-bin");
 		const fakeTmuxPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 		await mkdir(fakeBinDir, { recursive: true });
 		await writeFile(fakeTmuxPath, script);
 		await chmod(fakeTmuxPath, 0o755);
 		process.env.PATH = `${fakeBinDir}:${previousPath || ""}`;
+		process.env.OMX_MUX_BINARY = fakeTmuxPath;
 		try {
 			await run();
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 		}
 	}
 
@@ -623,8 +647,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -688,6 +711,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -726,8 +750,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -791,6 +814,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -831,8 +855,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -884,6 +907,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -921,8 +945,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -986,6 +1009,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1026,8 +1050,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1091,6 +1114,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1131,8 +1155,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1196,6 +1219,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1236,8 +1260,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1301,6 +1324,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1342,8 +1366,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1417,6 +1440,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1457,8 +1481,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1522,6 +1545,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";
@@ -1562,8 +1586,7 @@ exit 1
 						cwd,
 						pid: process.pid,
 						platform: process.platform,
-						pid_start_ticks: readLinuxStartTicks(process.pid),
-						pid_cmdline: readLinuxCmdline(process.pid),
+						...processIdentityFields(process.pid),
 					},
 					null,
 					2,
@@ -1623,6 +1646,7 @@ exit 1
 			await chmod(fakeTmuxPath, 0o755);
 
 			process.env.PATH = `${fakeBinDir}:${originalPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX = "1";
 			delete process.env.TMUX_PANE;
 			process.env.OMX_TEAM_WORKER = "";

@@ -1,24 +1,25 @@
 import {
-	spawnSync,
 	type SpawnSyncOptionsWithStringEncoding,
 	type SpawnSyncReturns,
+	spawnSync,
 } from "child_process";
 import { existsSync } from "fs";
 import { arch as osArch, constants as osConstants } from "os";
 import { isAbsolute, join, resolve } from "path";
+import { readConfiguredEnvOverrides } from "../config/models.js";
+import { buildCapturePaneArgv } from "../scripts/tmux-hook-engine.js";
 import { getPackageRoot } from "../utils/package.js";
 import {
 	classifySpawnError,
 	resolveTmuxBinaryForPlatform,
 } from "../utils/platform-command.js";
-import { readConfiguredEnvOverrides } from "../config/models.js";
-import { buildCapturePaneArgv } from "../scripts/tmux-hook-engine.js";
 import {
-	SPARKSHELL_BIN_ENV as SPARKSHELL_BIN_ENV_SHARED,
 	getPackageVersion,
 	hydrateNativeBinary,
-	resolveLinuxNativeLibcPreference,
+	inspectManagedNativeBinary,
 	resolveCachedNativeBinaryCandidatePaths,
+	resolveLinuxNativeLibcPreference,
+	SPARKSHELL_BIN_ENV as SPARKSHELL_BIN_ENV_SHARED,
 } from "./native-assets.js";
 
 const OMX_SPARKSHELL_BIN_ENV = SPARKSHELL_BIN_ENV_SHARED;
@@ -196,6 +197,7 @@ export async function resolveSparkShellBinaryPathWithHydration(
 	}
 
 	const version = await getPackageVersion(packageRoot);
+	let rejectedCache: { path: string; state: string } | undefined;
 	for (const cached of resolveCachedNativeBinaryCandidatePaths(
 		"omx-sparkshell",
 		version,
@@ -209,7 +211,10 @@ export async function resolveSparkShellBinaryPathWithHydration(
 					: undefined,
 		},
 	)) {
-		if (exists(cached)) return cached;
+		const inspected = await inspectManagedNativeBinary(cached, env);
+		if (inspected.state === "verified") return inspected.path!;
+		if (inspected.state !== "missing")
+			rejectedCache ??= { path: cached, state: inspected.state };
 	}
 
 	for (const packaged of packagedSparkShellBinaryCandidatePaths(
@@ -241,6 +246,7 @@ export async function resolveSparkShellBinaryPathWithHydration(
 
 	throw new Error(
 		`[sparkshell] native binary not found. Checked cached/native candidates under ${packageRoot}, ${repoLocal}, and ${nestedRepoLocal}. ` +
+			`${rejectedCache ? `Rejected managed cache entry ${rejectedCache.path} (${rejectedCache.state}). ` : ""}` +
 			`Reconnect to the network so OMX can fetch the release asset, or set ${OMX_SPARKSHELL_BIN_ENV} to override the path.`,
 	);
 }
@@ -305,7 +311,17 @@ interface SparkShellFallbackInvocation {
 }
 
 interface RunSparkShellFallbackOptions {
+	cause?: unknown;
+	nativePath?: string;
+	state?: string;
 	announce?: boolean;
+}
+
+function sanitizeFallbackDiagnostic(value: unknown): string {
+	return String(value instanceof Error ? value.message : (value ?? "unknown"))
+		.replace(/[\r\n\t\0]/g, " ")
+		.replace(/[^\x20-\x7e]/g, "?")
+		.slice(0, 500);
 }
 
 interface ParseSparkShellFallbackOptions {
@@ -334,10 +350,49 @@ export function resolveFallbackShellArgv(
 	return [env.ComSpec?.trim() || "cmd.exe", "/d", "/s", "/c", script];
 }
 
+function stripSparkShellWrapperOptions(args: readonly string[]): string[] {
+	let index = 0;
+	while (index < args.length) {
+		const token = args[index]!;
+		if (token === "--") return [...args.slice(index + 1)];
+		if (
+			token === "--json" ||
+			token === "--since-last" ||
+			token.startsWith("--cache=")
+		) {
+			index += 1;
+			continue;
+		}
+		if (
+			token === "--budget" ||
+			token === "--cache-ttl-ms" ||
+			token === "--team" ||
+			token === "--worker"
+		) {
+			if (args[index + 1] === undefined)
+				throw new Error(`${token} requires a value.\n${SPARKSHELL_USAGE}`);
+			index += 2;
+			continue;
+		}
+		if (
+			token.startsWith("--budget=") ||
+			token.startsWith("--cache-ttl-ms=") ||
+			token.startsWith("--team=") ||
+			token.startsWith("--worker=")
+		) {
+			index += 1;
+			continue;
+		}
+		return [...args.slice(index)];
+	}
+	return [];
+}
+
 export function parseSparkShellFallbackInvocation(
 	args: readonly string[],
 	options: ParseSparkShellFallbackOptions = {},
 ): SparkShellFallbackInvocation {
+	args = stripSparkShellWrapperOptions(args);
 	if (args.length === 0) {
 		throw new Error(`Missing command to run.\n${SPARKSHELL_USAGE}`);
 	}
@@ -348,6 +403,10 @@ export function parseSparkShellFallbackInvocation(
 			throw new Error(
 				`--shell requires a command string.\n${SPARKSHELL_USAGE}`,
 			);
+		if (args.length !== 2)
+			throw new Error(
+				`--shell does not accept additional arguments.\n${SPARKSHELL_USAGE}`,
+			);
 		return { kind: "command", argv: resolveFallbackShellArgv(script, options) };
 	}
 	if (args[0]?.startsWith("--shell=")) {
@@ -355,6 +414,10 @@ export function parseSparkShellFallbackInvocation(
 		if (!script.trim())
 			throw new Error(
 				`--shell requires a command string.\n${SPARKSHELL_USAGE}`,
+			);
+		if (args.length !== 1)
+			throw new Error(
+				`--shell does not accept additional arguments.\n${SPARKSHELL_USAGE}`,
 			);
 		return { kind: "command", argv: resolveFallbackShellArgv(script, options) };
 	}
@@ -438,11 +501,16 @@ function runSparkShellFallback(
 	args: readonly string[],
 	options: RunSparkShellFallbackOptions = {},
 ): void {
-	const { announce = true } = options;
+	const {
+		announce = true,
+		cause = "native sidecar unavailable",
+		nativePath = "native-resolution",
+		state = "unavailable",
+	} = options;
 	const invocation = parseSparkShellFallbackInvocation(args);
 	if (announce) {
 		process.stderr.write(
-			"[sparkshell] native sidecar unavailable; falling back to raw command execution without summary support.\n",
+			`[sparkshell] native sidecar unavailable; cause=${sanitizeFallbackDiagnostic(cause)}; path=${sanitizeFallbackDiagnostic(nativePath)}; state=${sanitizeFallbackDiagnostic(state)}; remediation=install a compatible native sidecar, reconnect for hydration, or set ${OMX_SPARKSHELL_BIN_ENV}. Falling back to raw command execution without summary support.\n`,
 		);
 	}
 	const result = spawnSync(invocation.argv[0], invocation.argv.slice(1), {
@@ -492,7 +560,7 @@ export async function sparkshellCommand(args: string[]): Promise<void> {
 		binaryPath = await resolveSparkShellBinaryPathWithHydration();
 	} catch (error) {
 		if (!hasExplicitOverride) {
-			runSparkShellFallback(args);
+			runSparkShellFallback(args, { cause: error, state: "resolution-failed" });
 			return;
 		}
 		throw error;
@@ -503,7 +571,11 @@ export async function sparkshellCommand(args: string[]): Promise<void> {
 		const errno = result.error as NodeJS.ErrnoException;
 		const kind = classifySpawnError(errno);
 		if (!hasExplicitOverride && (kind === "missing" || kind === "blocked")) {
-			runSparkShellFallback(args);
+			runSparkShellFallback(args, {
+				cause: errno,
+				nativePath: binaryPath,
+				state: kind,
+			});
 			return;
 		}
 		if (kind === "missing") {
@@ -522,10 +594,11 @@ export async function sparkshellCommand(args: string[]): Promise<void> {
 	}
 
 	if (!hasExplicitOverride && isSparkShellNativeCompatibilityFailure(result)) {
-		process.stderr.write(
-			"[sparkshell] GLIBC-incompatible native sidecar detected; falling back to raw command execution without summary support.\n",
-		);
-		runSparkShellFallback(args, { announce: false });
+		runSparkShellFallback(args, {
+			cause: result.stderr || "GLIBC-incompatible native sidecar",
+			nativePath: binaryPath,
+			state: "glibc-incompatible",
+		});
 		return;
 	}
 

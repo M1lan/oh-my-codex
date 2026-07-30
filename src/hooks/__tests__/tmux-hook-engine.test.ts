@@ -423,6 +423,7 @@ describe("resolveCodexPane", () => {
 		const fakeBinDir = await mkdtemp(join(tmpdir(), "omx-resolve-codex-pane-"));
 		const fakeTmuxPath = join(fakeBinDir, "tmux");
 		const previousPath = process.env.PATH;
+		const previousMuxBinary = process.env.OMX_MUX_BINARY;
 		const previousTmuxPane = process.env.TMUX_PANE;
 
 		try {
@@ -467,12 +468,16 @@ exit 1
 			);
 			await chmod(fakeTmuxPath, 0o755);
 			process.env.PATH = `${fakeBinDir}:${previousPath || ""}`;
+			process.env.OMX_MUX_BINARY = fakeTmuxPath;
 			process.env.TMUX_PANE = "%2";
 
 			assert.equal(resolveCodexPane(), "%42");
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;
 			else delete process.env.PATH;
+			if (typeof previousMuxBinary === "string")
+				process.env.OMX_MUX_BINARY = previousMuxBinary;
+			else delete process.env.OMX_MUX_BINARY;
 			if (typeof previousTmuxPane === "string")
 				process.env.TMUX_PANE = previousTmuxPane;
 			else delete process.env.TMUX_PANE;

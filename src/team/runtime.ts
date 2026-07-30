@@ -23,6 +23,7 @@ import {
 	type TeamSession,
 	waitForWorkerReady,
 	waitForWorkerReadyAsync,
+	waitForWorkerReadyDetailedAsync,
 	dismissTrustPromptIfPresent,
 	evaluateStartupDirectTriggerSafety,
 	sendToWorker,
@@ -102,6 +103,7 @@ import {
 } from "./team-ops.js";
 import {
 	commitTeamMembershipTaskTransaction,
+	teamContinuationRequiredDiagnostic,
 	writeTeamManifestV2 as writeTeamManifestV2State,
 } from "./state.js";
 import {
@@ -200,6 +202,13 @@ import {
 	type TeamCommitHygieneArtifactPaths,
 	type TeamOperationalCommitEntry,
 } from "./commit-hygiene.js";
+import {
+	classifyRecordedIdentity,
+	defaultProcessInspectionProvider,
+	type IdentityClassification,
+	type ProcessIdentity as SharedProcessIdentity,
+} from "../hooks/session.js";
+
 import {
 	assertCleanLeaderWorkspaceForWorkerWorktrees,
 	ensureWorktree,
@@ -420,6 +429,7 @@ async function mutateShutdownConfig(
 									hud_pane_pid: current.hud_pane_pid,
 									resize_hook_name: current.resize_hook_name,
 									resize_hook_target: current.resize_hook_target,
+									startup_cleanup_panes: current.startup_cleanup_panes,
 								},
 								null,
 								2,
@@ -431,6 +441,97 @@ async function mutateShutdownConfig(
 			throw new Error(`shutdown_config_missing_after_commit:${current.name}`);
 		return committed;
 	});
+}
+
+export async function reconcileStartupCleanupPanes(
+	config: TeamConfig,
+	cwd: string,
+): Promise<TeamConfig> {
+	const cleanupPanes = config.startup_cleanup_panes ?? [];
+	if (cleanupPanes.length === 0) return config;
+
+	const teamPaneOwnerId = config.tmux_pane_owner_id?.trim() ?? "";
+	if (!teamPaneOwnerId)
+		throw new Error(
+			"startup_cleanup_pane_owner_unavailable:missing_team_owner_id",
+		);
+
+	const resolvedPaneIds = new Set<string>();
+	const expectedPanePids: Record<string, number> = {};
+	for (const cleanupPane of cleanupPanes) {
+		if (
+			cleanupPane.pane_id === config.leader_pane_id ||
+			cleanupPane.pane_id === config.hud_pane_id
+		) {
+			throw new Error(
+				`startup_cleanup_pane_target_invalid:${cleanupPane.pane_id}`,
+			);
+		}
+		const proof = readExactPaneProofSync(cleanupPane.pane_id);
+		if (proof.status === "gone") {
+			resolvedPaneIds.add(cleanupPane.pane_id);
+			continue;
+		}
+		if (proof.status === "unavailable") {
+			assertPaneTeardownProofsAvailable("startup_cleanup", [proof]);
+			continue;
+		}
+		if (cleanupPane.pid === null) {
+			throw new Error(
+				`startup_cleanup_pane_pid_missing:${cleanupPane.pane_id}`,
+			);
+		}
+		if (proof.pid !== cleanupPane.pid) {
+			throw new Error(
+				`startup_cleanup_pane_identity_changed:${cleanupPane.pane_id}`,
+			);
+		}
+		const owner = readPaneTeamOwnerTagResult(cleanupPane.pane_id);
+		if (owner.status === "error") {
+			throw new Error(
+				`startup_cleanup_pane_owner_unavailable:${cleanupPane.pane_id}:${owner.error}`,
+			);
+		}
+		if (owner.status !== "value" || owner.value !== teamPaneOwnerId) {
+			throw new Error(
+				`startup_cleanup_pane_owner_changed:${cleanupPane.pane_id}`,
+			);
+		}
+		expectedPanePids[cleanupPane.pane_id] = cleanupPane.pid;
+	}
+
+	const livePaneIds = Object.keys(expectedPanePids);
+	if (livePaneIds.length > 0) {
+		const teardown = await teardownWorkerPanes(livePaneIds, {
+			leaderPaneId: config.leader_pane_id,
+			hudPaneId: config.hud_pane_id,
+			expectedPanePids,
+			authorizePaneKill: (paneId, proof) => {
+				if (expectedPanePids[paneId] !== proof.pid) return false;
+				const owner = readPaneTeamOwnerTagResult(paneId);
+				return owner.status === "value" && owner.value === teamPaneOwnerId;
+			},
+		});
+		assertPaneTeardownProofsAvailable(
+			"startup_cleanup",
+			teardown.proofUnavailable,
+		);
+		for (const paneId of teardown.killedPaneIds) resolvedPaneIds.add(paneId);
+	}
+
+	const nextConfig = await mutateShutdownConfig(config, cwd, (current) => {
+		const unresolved = (current.startup_cleanup_panes ?? []).filter(
+			(cleanupPane) => !resolvedPaneIds.has(cleanupPane.pane_id),
+		);
+		current.startup_cleanup_panes =
+			unresolved.length > 0 ? unresolved : undefined;
+	});
+	if ((nextConfig.startup_cleanup_panes?.length ?? 0) > 0) {
+		throw new Error(
+			`startup_cleanup_pane_teardown_failed:${nextConfig.startup_cleanup_panes!.map((pane) => pane.pane_id).join(",")}`,
+		);
+	}
+	return nextConfig;
 }
 
 async function assertTeamStartupIsNonDestructive(
@@ -484,6 +585,17 @@ interface ShutdownOptions {
 export interface TeamShutdownSummary {
 	commitHygieneArtifacts: TeamCommitHygieneArtifactPaths | null;
 }
+let terminalEpochStartedHookForTest:
+	| ((teamName: string, cwd: string, phase: TeamPhaseState) => Promise<void>)
+	| null = null;
+
+export function setTerminalEpochStartedHookForTest(
+	hook:
+		| ((teamName: string, cwd: string, phase: TeamPhaseState) => Promise<void>)
+		| null,
+): void {
+	terminalEpochStartedHookForTest = hook;
+}
 
 export function applyCreatedInteractiveSessionToConfig(
 	config: TeamConfig,
@@ -510,6 +622,9 @@ export function applyCreatedInteractiveSessionToConfig(
 	config.tmux_pane_owner_id = createdSession.teamPaneOwnerId;
 	config.resize_hook_name = createdSession.resizeHookName;
 	config.resize_hook_target = createdSession.resizeHookTarget;
+	config.startup_cleanup_panes = createdSession.startupCleanupPanes
+		?.map(({ paneId, panePid }) => ({ pane_id: paneId, pid: panePid }))
+		.filter(({ pane_id }) => /^%[0-9]+$/.test(pane_id));
 	const paneIdsByIndex = createdSession.workerPaneIdsByIndex;
 	const panePidsByIndex = createdSession.workerPanePidsByIndex;
 	if (paneIdsByIndex) {
@@ -3056,6 +3171,10 @@ function isStartupEvidenceMissingReason(reason: string): boolean {
 	);
 }
 
+function isStartupIncompatibleReason(reason: string): boolean {
+	return reason.trim() === "codex_bypass_mdm_incompatible";
+}
+
 async function recordRecoverableStartupIssue(params: {
 	teamName: string;
 	workerName: string;
@@ -3065,9 +3184,11 @@ async function recordRecoverableStartupIssue(params: {
 }): Promise<void> {
 	const { teamName, workerName, taskIds, reason, cwd } = params;
 	const updatedAt = new Date().toISOString();
-	const currentTaskId = isStartupEvidenceMissingReason(reason)
-		? undefined
-		: taskIds[0];
+	const currentTaskId =
+		isStartupEvidenceMissingReason(reason) ||
+		isStartupIncompatibleReason(reason)
+			? undefined
+			: taskIds[0];
 	await writeWorkerStatus(
 		teamName,
 		workerName,
@@ -3219,64 +3340,70 @@ function isPidGone(pid: number): boolean {
 	return probePidLiveness(pid) === "gone";
 }
 
-type ProcessIdentity = {
+interface TrackedProcessRecordV2 {
 	pid: number;
-	/** Linux /proc stat start-time ticks; this changes when a PID is reused. */
-	start_time: string;
-};
+	process_identity: SharedProcessIdentity;
+}
+
+// V1 (legacy, read-only): Linux-only.
+type TrackedProcessRecordV1 = { pid: number; start_time: string };
+type TrackedProcessRecord = TrackedProcessRecordV1 | TrackedProcessRecordV2;
 
 async function captureProcessIdentity(
 	pid: number,
-): Promise<ProcessIdentity | null> {
-	// There is no portable process birth identifier exposed by Node. Refuse to
-	// persist replayable PID debt on platforms without Linux's stable proc stat
-	// start-time field rather than later treating a reused PID as authoritative.
-	if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0)
-		return null;
-	try {
-		const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-		const close = stat.lastIndexOf(")");
-		const fields =
-			close >= 0
-				? stat
-						.slice(close + 2)
-						.trim()
-						.split(/\s+/)
-				: [];
-		// field 22 is starttime; fields begin at field 3 after the comm value.
-		const startTime = fields[19];
-		return typeof startTime === "string" && /^[0-9]+$/.test(startTime)
-			? { pid, start_time: startTime }
-			: null;
-	} catch {
-		return null;
-	}
+): Promise<TrackedProcessRecordV2 | null> {
+	if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+	const observation = defaultProcessInspectionProvider.observeProcess(
+		pid,
+		process.platform,
+	);
+	if (observation.kind !== "identity") return null;
+	return { pid, process_identity: observation.identity };
 }
 
 async function captureProcessIdentities(
 	pids: readonly number[],
-): Promise<ProcessIdentity[] | null> {
+): Promise<TrackedProcessRecordV2[] | null> {
 	const identities = await Promise.all(
 		[...new Set(pids)].map((pid) => captureProcessIdentity(pid)),
 	);
 	return identities.every(
-		(identity): identity is ProcessIdentity => identity !== null,
+		(identity): identity is TrackedProcessRecordV2 => identity !== null,
 	)
 		? identities
 		: null;
 }
 
 async function probeProcessIdentity(
-	identity: ProcessIdentity,
+	identity: TrackedProcessRecord,
 ): Promise<"gone" | "same" | "reused_or_unknown"> {
-	const current = await captureProcessIdentity(identity.pid);
-	if (current === null)
-		return probePidLiveness(identity.pid) === "gone"
-			? "gone"
-			: "reused_or_unknown";
-	return current.start_time === identity.start_time
-		? "same"
-		: "reused_or_unknown";
+	const recorded: SharedProcessIdentity =
+		"process_identity" in identity
+			? identity.process_identity
+			: { platform: "linux", birth: identity.start_time };
+	const runtimePlatform =
+		"process_identity" in identity
+			? identity.process_identity.platform
+			: "linux"; // V1 is always Linux.
+	if (runtimePlatform !== process.platform && "process_identity" in identity) {
+		return "reused_or_unknown";
+	}
+	const classification: IdentityClassification = classifyRecordedIdentity(
+		recorded,
+		process.platform,
+		defaultProcessInspectionProvider,
+		identity.pid,
+	);
+	switch (classification.status) {
+		case "match":
+			return "same";
+		case "gone":
+			return "gone";
+		case "birth-mismatch":
+			return "reused_or_unknown";
+		case "identity-unavailable":
+			return "reused_or_unknown";
+	}
 }
 
 function probeProcessGroupLiveness(
@@ -3509,7 +3636,7 @@ type ExactPaneProcessTreeTeardown = {
 	trackedPids: number[];
 	authorizedPanePid?: number;
 	proofUnavailable?: ExactPaneUnavailableProof;
-	trackedProcessIdentities?: ProcessIdentity[];
+	trackedProcessIdentities?: TrackedProcessRecord[];
 };
 
 type ExactPaneProcessProbe =
@@ -3876,14 +4003,16 @@ type GonePaneDescendantCleanupDebtEntry =
 	| {
 			pane_id: string;
 			authorized_pane_pid: number;
-			tracked_processes: ProcessIdentity[];
+			tracked_processes: TrackedProcessRecord[];
+
 			evidence: string;
 	  }
 	| {
 			pane_id: string;
 			authorized_pane_pid: number;
 			tracked_pids: number[];
-			tracked_processes?: ProcessIdentity[];
+			tracked_processes?: TrackedProcessRecord[];
+
 			evidence: "process_identity_unavailable";
 	  };
 
@@ -3998,14 +4127,60 @@ async function persistGonePaneDescendantCleanupDebt(params: {
 	);
 }
 
-function isValidProcessIdentity(value: unknown): value is ProcessIdentity {
+const TRACKED_PROCESS_PLATFORMS = new Set<NodeJS.Platform>([
+	"aix",
+	"android",
+	"darwin",
+	"freebsd",
+	"haiku",
+	"linux",
+	"openbsd",
+	"sunos",
+	"win32",
+	"cygwin",
+	"netbsd",
+]);
+const TRACKED_PROCESS_BIRTH_PATTERN = /^\d+(?:\.\d+)?$/;
+const TRACKED_PROCESS_CMDLINE_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+function isValidSharedProcessIdentity(
+	value: unknown,
+): value is SharedProcessIdentity {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return false;
+	const identity = value as Partial<SharedProcessIdentity>;
+	if (
+		Object.keys(identity).some(
+			(key) => key !== "platform" && key !== "birth" && key !== "cmdline_hash",
+		)
+	)
+		return false;
 	return (
-		typeof value === "object" &&
-		value !== null &&
-		Number.isSafeInteger((value as { pid?: unknown }).pid) &&
-		(value as { pid: number }).pid > 0 &&
-		typeof (value as { start_time?: unknown }).start_time === "string" &&
-		/^[0-9]+$/.test((value as { start_time: string }).start_time)
+		typeof identity.platform === "string" &&
+		TRACKED_PROCESS_PLATFORMS.has(identity.platform as NodeJS.Platform) &&
+		typeof identity.birth === "string" &&
+		TRACKED_PROCESS_BIRTH_PATTERN.test(identity.birth) &&
+		(identity.cmdline_hash === undefined ||
+			(typeof identity.cmdline_hash === "string" &&
+				TRACKED_PROCESS_CMDLINE_HASH_PATTERN.test(identity.cmdline_hash)))
+	);
+}
+
+function isValidProcessIdentity(value: unknown): value is TrackedProcessRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return false;
+	const candidate = value as {
+		pid?: unknown;
+		start_time?: unknown;
+		process_identity?: unknown;
+	};
+	if (!Number.isSafeInteger(candidate.pid) || (candidate.pid as number) <= 0)
+		return false;
+	if ("process_identity" in candidate)
+		return isValidSharedProcessIdentity(candidate.process_identity);
+	return (
+		typeof candidate.start_time === "string" &&
+		/^[0-9]+$/.test(candidate.start_time)
 	);
 }
 
@@ -4057,7 +4232,9 @@ function isValidGonePaneDescendantCleanupDebt(
 				!candidate.tracked_processes.every(isValidProcessIdentity)
 			)
 				return false;
-			const trackedProcesses = candidate.tracked_processes as ProcessIdentity[];
+			const trackedProcesses =
+				candidate.tracked_processes as TrackedProcessRecord[];
+
 			return (
 				trackedProcesses.every((identity) =>
 					trackedPids.includes(identity.pid),
@@ -4075,7 +4252,9 @@ function isValidGonePaneDescendantCleanupDebt(
 			!candidate.tracked_processes.every(isValidProcessIdentity)
 		)
 			return false;
-		const trackedProcesses = candidate.tracked_processes as ProcessIdentity[];
+		const trackedProcesses =
+			candidate.tracked_processes as TrackedProcessRecord[];
+
 		return (
 			new Set(trackedProcesses.map((identity) => identity.pid)).size ===
 			trackedProcesses.length
@@ -4104,7 +4283,7 @@ async function reconcileGonePaneDescendantCleanupDebt(
 	for (const entry of debt.entries) {
 		if ("tracked_pids" in entry) {
 			const trackedProcesses = entry.tracked_processes ?? [];
-			const knownIdentities = new Map<number, ProcessIdentity>(
+			const knownIdentities = new Map<number, TrackedProcessRecord>(
 				trackedProcesses.map((identity) => [identity.pid, identity]),
 			);
 			const states: Array<"gone" | "same" | "reused_or_unknown"> =
@@ -5135,6 +5314,7 @@ export async function startTeam(
 			writeWarning: options.writeCleanupWarning,
 		});
 		const startupTiming = createStartupTimingRecorder(sanitized, leaderCwd);
+		let workerStartupArgs: ReadonlyArray<ReadonlyArray<string>> | undefined;
 
 		if (workerLaunchMode === "interactive") {
 			const createdSession = createTeamSession(
@@ -5157,6 +5337,7 @@ export async function startTeam(
 				createdSession,
 				workerPaneIds,
 			);
+			workerStartupArgs = createdSession.workerStartupArgs;
 			const createdOwnerId =
 				typeof createdSession.teamPaneOwnerId === "string"
 					? createdSession.teamPaneOwnerId.trim()
@@ -5277,6 +5458,7 @@ export async function startTeam(
 							workerIndex,
 							paneId,
 							workerCli: bootstrapPlan.workerCli,
+							finalArgs: workerStartupArgs?.[workerIndex - 1],
 							inbox,
 							triggerMessage: trigger,
 							intent: triggerIntent,
@@ -5285,6 +5467,23 @@ export async function startTeam(
 							timing: startupTiming,
 						})
 					: null;
+			if (startupDirectOutcome?.reason === "codex_bypass_mdm_incompatible") {
+				await recordRecoverableStartupIssue({
+					teamName: sanitized,
+					workerName,
+					taskIds: workerTasks.map((task) => task.id),
+					reason: startupDirectOutcome.reason,
+					cwd: leaderCwd,
+				});
+				return {
+					ok: false,
+					workerIndex,
+					workerName,
+					error: new Error(
+						`worker_startup_incompatible:${workerName}:${startupDirectOutcome.reason}`,
+					),
+				};
+			}
 
 			let startupReadyPromptObserved = false;
 			if (
@@ -5297,7 +5496,8 @@ export async function startTeam(
 					worker: workerName,
 					pane_id: paneId,
 				});
-				const ready = await waitForWorkerReadyAsync(
+				let readinessIncompatibility: string | null = null;
+				const ready = await waitForWorkerReadyDetailedAsync(
 					sessionName,
 					workerIndex,
 					workerReadyTimeoutMs,
@@ -5305,12 +5505,36 @@ export async function startTeam(
 					config!.workers[workerIndex - 1]?.pid,
 					config!.tmux_pane_owner_id ?? undefined,
 					config!.hud_pane_id ?? undefined,
+					{
+						workerCli: bootstrapPlan.workerCli,
+						finalArgs: workerStartupArgs?.[workerIndex - 1],
+						onIncompatible: (reason) => {
+							readinessIncompatibility = reason;
+						},
+					},
 				);
 				startupTiming.mark("ready_wait_end", {
 					worker: workerName,
 					pane_id: paneId,
 					ok: ready,
 				});
+				if (readinessIncompatibility) {
+					await recordRecoverableStartupIssue({
+						teamName: sanitized,
+						workerName,
+						taskIds: workerTasks.map((task) => task.id),
+						reason: readinessIncompatibility,
+						cwd: leaderCwd,
+					});
+					return {
+						ok: false,
+						workerIndex,
+						workerName,
+						error: new Error(
+							`worker_startup_incompatible:${workerName}:${readinessIncompatibility}`,
+						),
+					};
+				}
 				if (!ready) {
 					const workerAlive = isWorkerPaneOpen(
 						sessionName,
@@ -6047,14 +6271,16 @@ export async function monitorTeam(
 		cwd,
 	});
 	const mailboxDeliveryStartMs = performance.now();
-	const mailboxNotifiedByMessageId = await deliverPendingMailboxMessages(
-		sanitized,
-		config,
-		workers,
-		previousSnapshot?.mailboxNotifiedByMessageId ?? {},
-		dispatchPolicy,
-		cwd,
-	);
+	const mailboxNotifiedByMessageId = phaseState.terminal_epoch
+		? {}
+		: await deliverPendingMailboxMessages(
+				sanitized,
+				config,
+				workers,
+				previousSnapshot?.mailboxNotifiedByMessageId ?? {},
+				dispatchPolicy,
+				cwd,
+			);
 	const mailboxDeliveryMs = performance.now() - mailboxDeliveryStartMs;
 
 	// Prune ephemeral status messages from leader mailbox (TTL: 60s)
@@ -6146,194 +6372,206 @@ export async function assignTask(
 	cwd: string,
 ): Promise<void> {
 	const sanitized = sanitizeTeamName(teamName);
-	const task = await readTask(sanitized, taskId, cwd);
-	if (!task) throw new Error(`Task ${taskId} not found`);
-	const manifest = await readTeamManifestV2(sanitized, cwd);
-	const governance = resolveGovernancePolicy(manifest?.governance);
-
-	if (governance.delegation_only && workerName === "leader-fixed") {
-		throw new Error("delegation_only_violation");
-	}
-
-	if (governance.plan_approval_required && task.requires_code_change === true) {
-		const approved = await isTaskApprovedForExecution(sanitized, taskId, cwd);
-		if (!approved) {
-			throw new Error("plan_approval_required");
+	return await withTeamTaskMembershipBarrier(sanitized, cwd, async () => {
+		const phaseState = await readTeamPhaseState(sanitized, cwd);
+		if (
+			phaseState?.terminal_epoch ||
+			(phaseState && isTerminalPhase(phaseState.current_phase))
+		) {
+			throw new Error(teamContinuationRequiredDiagnostic(phaseState));
 		}
-	}
-	const config = await readTeamConfig(sanitized, cwd);
-	if (!config) throw new Error(`Team ${sanitized} not found`);
-	const workerInfo = config.workers.find((w) => w.name === workerName);
-	if (!workerInfo) throw new Error(`Worker ${workerName} not found in team`);
-	const dispatchPolicy = resolveDispatchPolicy(
-		manifest?.policy,
-		config.worker_launch_mode,
-	);
+		const task = await readTask(sanitized, taskId, cwd);
+		if (!task) throw new Error(`Task ${taskId} not found`);
+		const manifest = await readTeamManifestV2(sanitized, cwd);
+		const governance = resolveGovernancePolicy(manifest?.governance);
 
-	const claim = await claimTask(
-		sanitized,
-		taskId,
-		workerName,
-		task.version ?? 1,
-		cwd,
-	);
-	if (!claim.ok) {
-		if (claim.error === "blocked_dependency") {
-			throw new Error(
-				`blocked_dependency:${(claim.dependencies ?? []).join(",")}`,
-			);
+		if (governance.delegation_only && workerName === "leader-fixed") {
+			throw new Error("delegation_only_violation");
 		}
-		throw new Error(claim.error);
-	}
 
-	try {
-		// Retry dispatch up to 2 times to handle trust prompts during assignment (fixes #393).
-		const approvedExecutionState =
-			await resolvePersistedApprovedTeamExecutionContinuityState(
+		if (
+			governance.plan_approval_required &&
+			task.requires_code_change === true
+		) {
+			const approved = await isTaskApprovedForExecution(sanitized, taskId, cwd);
+			if (!approved) {
+				throw new Error("plan_approval_required");
+			}
+		}
+		const config = await readTeamConfig(sanitized, cwd);
+		if (!config) throw new Error(`Team ${sanitized} not found`);
+		const workerInfo = config.workers.find((w) => w.name === workerName);
+		if (!workerInfo) throw new Error(`Worker ${workerName} not found in team`);
+		const dispatchPolicy = resolveDispatchPolicy(
+			manifest?.policy,
+			config.worker_launch_mode,
+		);
+
+		const claim = await claimTask(
+			sanitized,
+			taskId,
+			workerName,
+			task.version ?? 1,
+			cwd,
+		);
+		if (!claim.ok) {
+			if (claim.error === "blocked_dependency") {
+				throw new Error(
+					`blocked_dependency:${(claim.dependencies ?? []).join(",")}`,
+				);
+			}
+			throw new Error(claim.error);
+		}
+
+		try {
+			// Retry dispatch up to 2 times to handle trust prompts during assignment (fixes #393).
+			const approvedExecutionState =
+				await resolvePersistedApprovedTeamExecutionContinuityState(
+					sanitized,
+					config.leader_cwd ?? cwd,
+					config.team_state_root ??
+						resolveCanonicalTeamStateRoot(config.leader_cwd ?? cwd),
+				);
+			const persistedUltragoalContext = await readPersistedTeamUltragoalContext(
 				sanitized,
 				config.leader_cwd ?? cwd,
 				config.team_state_root ??
 					resolveCanonicalTeamStateRoot(config.leader_cwd ?? cwd),
 			);
-		const persistedUltragoalContext = await readPersistedTeamUltragoalContext(
-			sanitized,
-			config.leader_cwd ?? cwd,
-			config.team_state_root ??
-				resolveCanonicalTeamStateRoot(config.leader_cwd ?? cwd),
-		);
-		const approvedContextSection = joinContextSections(
-			approvedExecutionState.status === "valid"
-				? buildApprovedTeamHandoffSection(approvedExecutionState.approvedHint)
-				: undefined,
-			renderLeaderOwnedUltragoalContextSection(persistedUltragoalContext),
-		);
-		const currentTasks = await listTasks(sanitized, cwd);
-		const currentCoordinationPlan =
-			currentTasks.length > 0
-				? (synthesizeCoordinationPlans(currentTasks).find(
-						(_, index) => currentTasks[index]?.id === task.id,
-					) ?? synthesizeCoordinationPlan(task))
-				: synthesizeCoordinationPlan(task);
-		const hasCurrentCoordination =
-			task.coordination?.source === "explicit" ||
-			coordinationPlansEqual(task.coordination, currentCoordinationPlan);
-		const taskForInbox =
-			task.delegation && hasCurrentCoordination
-				? task
-				: ((await updateTask(
-						sanitized,
-						taskId,
-						{
-							delegation: task.delegation ?? synthesizeDelegationPlan(task),
-							coordination:
-								task.coordination?.source === "explicit"
-									? task.coordination
-									: currentCoordinationPlan,
-						},
-						cwd,
-					)) ?? task);
-		const inbox = generateTaskAssignmentInbox(
-			workerName,
-			sanitized,
-			taskForInbox,
-			{ approvedContextSection },
-		);
-		const maxAssignRetries = 2;
-		const assignRetryDelayS = 2;
-		let outcome: DispatchOutcome = {
-			ok: false,
-			transport: "none",
-			reason: "not_attempted",
-		};
-		const triggerDirective = buildTriggerDirective(
-			workerName,
-			sanitized,
-			resolveInstructionStateRoot(workerInfo.worktree_path),
-		);
-		for (let attempt = 1; attempt <= maxAssignRetries; attempt++) {
-			outcome = await dispatchCriticalInboxInstruction({
-				teamName: sanitized,
-				config,
+			const approvedContextSection = joinContextSections(
+				approvedExecutionState.status === "valid"
+					? buildApprovedTeamHandoffSection(approvedExecutionState.approvedHint)
+					: undefined,
+				renderLeaderOwnedUltragoalContextSection(persistedUltragoalContext),
+			);
+			const currentTasks = await listTasks(sanitized, cwd);
+			const currentCoordinationPlan =
+				currentTasks.length > 0
+					? (synthesizeCoordinationPlans(currentTasks).find(
+							(_, index) => currentTasks[index]?.id === task.id,
+						) ?? synthesizeCoordinationPlan(task))
+					: synthesizeCoordinationPlan(task);
+			const hasCurrentCoordination =
+				task.coordination?.source === "explicit" ||
+				coordinationPlansEqual(task.coordination, currentCoordinationPlan);
+			const taskForInbox =
+				task.delegation && hasCurrentCoordination
+					? task
+					: ((await updateTask(
+							sanitized,
+							taskId,
+							{
+								delegation: task.delegation ?? synthesizeDelegationPlan(task),
+								coordination:
+									task.coordination?.source === "explicit"
+										? task.coordination
+										: currentCoordinationPlan,
+							},
+							cwd,
+						)) ?? task);
+			const inbox = generateTaskAssignmentInbox(
 				workerName,
-				workerIndex: workerInfo.index,
-				paneId: workerInfo.pane_id,
-				inbox,
-				triggerMessage: triggerDirective.text,
-				intent: triggerDirective.intent,
-				cwd,
-				dispatchPolicy,
-				inboxCorrelationKey: `assign:${taskId}:${workerName}`,
-			});
-			if (outcome.ok) break;
-			if (
-				attempt < maxAssignRetries &&
-				config.worker_launch_mode === "interactive" &&
-				config.tmux_session
-			) {
+				sanitized,
+				taskForInbox,
+				{ approvedContextSection },
+			);
+			const maxAssignRetries = 2;
+			const assignRetryDelayS = 2;
+			let outcome: DispatchOutcome = {
+				ok: false,
+				transport: "none",
+				reason: "not_attempted",
+			};
+			const triggerDirective = buildTriggerDirective(
+				workerName,
+				sanitized,
+				resolveInstructionStateRoot(workerInfo.worktree_path),
+			);
+			for (let attempt = 1; attempt <= maxAssignRetries; attempt++) {
+				outcome = await dispatchCriticalInboxInstruction({
+					teamName: sanitized,
+					config,
+					workerName,
+					workerIndex: workerInfo.index,
+					paneId: workerInfo.pane_id,
+					inbox,
+					triggerMessage: triggerDirective.text,
+					intent: triggerDirective.intent,
+					cwd,
+					dispatchPolicy,
+					inboxCorrelationKey: `assign:${taskId}:${workerName}`,
+				});
+				if (outcome.ok) break;
 				if (
-					dismissTrustPromptIfPresent(
-						config.tmux_session,
-						workerInfo.index,
-						workerInfo.pane_id,
-						workerInfo.pid,
-						config.tmux_pane_owner_id ?? undefined,
-						config.hud_pane_id ?? undefined,
-					)
+					attempt < maxAssignRetries &&
+					config.worker_launch_mode === "interactive" &&
+					config.tmux_session
 				) {
-					waitForWorkerReady(
-						config.tmux_session,
-						workerInfo.index,
-						resolveWorkerReadyTimeoutMs(process.env),
-						workerInfo.pane_id,
-						workerInfo.pid,
-						config.tmux_pane_owner_id ?? undefined,
-						config.hud_pane_id ?? undefined,
-					);
-				} else {
-					await new Promise<void>((r) =>
-						setTimeout(r, assignRetryDelayS * 1000),
-					);
+					if (
+						dismissTrustPromptIfPresent(
+							config.tmux_session,
+							workerInfo.index,
+							workerInfo.pane_id,
+							workerInfo.pid,
+							config.tmux_pane_owner_id ?? undefined,
+							config.hud_pane_id ?? undefined,
+						)
+					) {
+						waitForWorkerReady(
+							config.tmux_session,
+							workerInfo.index,
+							resolveWorkerReadyTimeoutMs(process.env),
+							workerInfo.pane_id,
+							workerInfo.pid,
+							config.tmux_pane_owner_id ?? undefined,
+							config.hud_pane_id ?? undefined,
+						);
+					} else {
+						await new Promise<void>((r) =>
+							setTimeout(r, assignRetryDelayS * 1000),
+						);
+					}
 				}
 			}
-		}
-		if (!outcome.ok) {
-			throw new Error("worker_notify_failed");
-		}
-	} catch (error) {
-		// Roll back claim to avoid stuck in_progress tasks on any post-claim dispatch failure.
-		const released = await releaseTaskClaim(
-			sanitized,
-			taskId,
-			claim.claimToken,
-			workerName,
-			cwd,
-		);
-
-		const reason =
-			error instanceof Error && error.message.trim() !== ""
-				? error.message
-				: "worker_assignment_failed";
-
-		try {
-			await writeWorkerInbox(
+			if (!outcome.ok) {
+				throw new Error("worker_notify_failed");
+			}
+		} catch (error) {
+			// Roll back claim to avoid stuck in_progress tasks on any post-claim dispatch failure.
+			const released = await releaseTaskClaim(
 				sanitized,
+				taskId,
+				claim.claimToken,
 				workerName,
-				`# Assignment Cancelled\n\nTask ${taskId} was not dispatched due to ${reason}.\nDo not execute this task from prior inbox content.`,
 				cwd,
 			);
-		} catch (err) {
-			process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
-			// best effort
-		}
 
-		if (!released.ok) {
-			throw new Error(`${reason}:${released.error}`);
-		}
+			const reason =
+				error instanceof Error && error.message.trim() !== ""
+					? error.message
+					: "worker_assignment_failed";
 
-		if (reason === "worker_notify_failed")
-			throw new Error("worker_notify_failed");
-		throw new Error(`worker_assignment_failed:${reason}`);
-	}
+			try {
+				await writeWorkerInbox(
+					sanitized,
+					workerName,
+					`# Assignment Cancelled\n\nTask ${taskId} was not dispatched due to ${reason}.\nDo not execute this task from prior inbox content.`,
+					cwd,
+				);
+			} catch (err) {
+				process.stderr.write(`[team/runtime] operation failed: ${err}\n`);
+				// best effort
+			}
+
+			if (!released.ok) {
+				throw new Error(`${reason}:${released.error}`);
+			}
+
+			if (reason === "worker_notify_failed")
+				throw new Error("worker_notify_failed");
+			throw new Error(`worker_assignment_failed:${reason}`);
+		}
+	});
 }
 
 /**
@@ -6404,6 +6642,7 @@ export async function shutdownTeam(
 		throw new Error(
 			`shutdown_config_missing_after_detached_reconciliation:${sanitized}`,
 		);
+	config = await reconcileStartupCleanupPanes(config, cwd);
 	const restoredHudDebtRoot = join(
 		config.team_state_root ?? resolveCanonicalTeamStateRoot(cwd),
 		"team",
@@ -6470,55 +6709,81 @@ export async function shutdownTeam(
 		manifest?.policy as Partial<TeamGovernance> | undefined,
 	);
 
-	if (!force) {
-		const classification = await classifyShutdown({
-			teamName: sanitized,
-			cwd,
-			config,
-			governance,
-			confirmIssues,
-		});
-		const { gate, dirtyWorkers, requiresIssueConfirmation, useCleanFastPath } =
-			classification;
+	const classification = await withTeamTaskMembershipBarrier(
+		sanitized,
+		cwd,
+		async () => {
+			const current = await classifyShutdown({
+				teamName: sanitized,
+				cwd,
+				config: config!,
+				governance,
+				confirmIssues,
+			});
+			const { gate, requiresIssueConfirmation } = current;
 
-		await appendTeamEvent(
-			sanitized,
-			{
-				type: "shutdown_gate",
-				worker: "leader-fixed",
-				reason: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive} dirty_workers=${dirtyWorkers.join("|") || "none"} confirm_issues=${confirmIssues} clean_fast_path=${useCleanFastPath}`,
-			},
-			cwd,
-		).catch(() => {});
-
-		if (!gate.allowed) {
-			if (requiresIssueConfirmation) {
+			if (!force && !gate.allowed) {
+				if (requiresIssueConfirmation) {
+					throw new Error(
+						`shutdown_confirm_issues_required:failed=${gate.failed}:rerun=omx team shutdown ${sanitized} --confirm-issues`,
+					);
+				}
 				throw new Error(
-					`shutdown_confirm_issues_required:failed=${gate.failed}:rerun=omx team shutdown ${sanitized} --confirm-issues`,
+					`shutdown_gate_blocked:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
 				);
 			}
-			throw new Error(
-				`shutdown_gate_blocked:pending=${gate.pending},blocked=${gate.blocked},in_progress=${gate.in_progress},failed=${gate.failed}`,
-			);
-		}
 
-		skipWorkerAcks = useCleanFastPath;
+			const now = new Date().toISOString();
+			const existingPhase = await readTeamPhaseState(sanitized, cwd);
+			const terminalReason = force ? "forced_shutdown" : "shutdown_gate_passed";
+			await writeTeamPhaseState(
+				sanitized,
+				{
+					current_phase: existingPhase?.current_phase ?? "team-exec",
+					max_fix_attempts: existingPhase?.max_fix_attempts ?? 3,
+					current_fix_attempt: existingPhase?.current_fix_attempt ?? 0,
+					transitions: existingPhase?.transitions ?? [],
+					updated_at: now,
+					terminal_epoch: existingPhase?.terminal_epoch ?? now,
+					terminal_reason: existingPhase?.terminal_reason ?? terminalReason,
+					final_task_counts: {
+						total: gate.total,
+						pending: gate.pending,
+						blocked: gate.blocked,
+						in_progress: gate.in_progress,
+						completed: gate.completed,
+						failed: gate.failed,
+					},
+				},
+				cwd,
+			);
+			return current;
+		},
+	);
+	const terminalPhase = await readTeamPhaseState(sanitized, cwd);
+	if (terminalPhase && terminalEpochStartedHookForTest) {
+		await terminalEpochStartedHookForTest(sanitized, cwd, terminalPhase);
 	}
+	const { gate, dirtyWorkers, useCleanFastPath } = classification;
+
+	await appendTeamEvent(
+		sanitized,
+		{
+			type: force ? "shutdown_gate_forced" : "shutdown_gate",
+			worker: "leader-fixed",
+			reason: force
+				? `force_bypass total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed}`
+				: `allowed=${gate.allowed} total=${gate.total} pending=${gate.pending} blocked=${gate.blocked} in_progress=${gate.in_progress} completed=${gate.completed} failed=${gate.failed} cleanup_requires_all_workers_inactive=${governance.cleanup_requires_all_workers_inactive} dirty_workers=${dirtyWorkers.join("|") || "none"} confirm_issues=${confirmIssues} clean_fast_path=${useCleanFastPath}`,
+		},
+		cwd,
+	).catch(() => {});
 
 	if (force) {
-		await appendTeamEvent(
-			sanitized,
-			{
-				type: "shutdown_gate_forced",
-				worker: "leader-fixed",
-				reason: "force_bypass",
-			},
-			cwd,
-		).catch(() => {});
-
 		// Explicit force means teardown now. Do not spend the graceful ack window
 		// waiting for interactive panes or prompt workers that will be killed below.
 		skipWorkerAcks = true;
+	} else {
+		skipWorkerAcks = useCleanFastPath;
 	}
 
 	const sessionName = config.tmux_session;
@@ -7915,6 +8180,7 @@ async function attemptStartupDirectTrigger(params: {
 	workerIndex: number;
 	paneId?: string;
 	workerCli?: TeamWorkerCli;
+	finalArgs?: readonly string[];
 	inbox: string;
 	triggerMessage: string;
 	intent?: TeamReminderIntent;
@@ -7929,6 +8195,7 @@ async function attemptStartupDirectTrigger(params: {
 		workerIndex,
 		paneId,
 		workerCli,
+		finalArgs,
 		inbox,
 		triggerMessage,
 		intent,
@@ -7942,6 +8209,7 @@ async function attemptStartupDirectTrigger(params: {
 		workerIndex,
 		paneId,
 		workerCli,
+		finalArgs,
 	);
 	if (!safety.safe) {
 		timing.mark("startup_direct_bypass", {
@@ -7950,6 +8218,9 @@ async function attemptStartupDirectTrigger(params: {
 			ok: false,
 			reason: `startup_direct_unsafe:${safety.reason}`,
 		});
+		if (safety.reason === "codex_bypass_mdm_incompatible") {
+			return { ok: false, transport: "none", reason: safety.reason };
+		}
 		return null;
 	}
 

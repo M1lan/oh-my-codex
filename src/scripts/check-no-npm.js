@@ -22,8 +22,14 @@ const SURFACE = [
   /^src\/scripts\/prepare-build\.js$/,
 ];
 
-// Files exempt from the scan (they mention npm on purpose to forbid it).
-const EXEMPT_FILES = new Set(['src/scripts/only-pnpm.js', 'src/scripts/check-no-npm.js']);
+// Files exempt from the scan because they model foreign package-manager
+// commands without executing them.
+const EXEMPT_FILES = new Set([
+  'src/scripts/only-pnpm.js',
+  'src/scripts/check-no-npm.js',
+  'docs/reports/issue-3257/windows-command-harness/dispatcher.mjs',
+  'docs/reports/issue-3257/windows-command-harness/harness.mjs',
+]);
 
 // Per-line allowlist: registry URLs and the npm_config_* env namespace are not
 // npm command invocations (pnpm publishes to the same registry and sets the

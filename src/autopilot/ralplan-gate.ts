@@ -1,14 +1,14 @@
 import {
-	buildRalplanConsensusGateFromSources,
-	RALPLAN_CONSENSUS_BLOCKED_REASONS,
-	withParentReturnToRalplanContext,
-	type RalplanConsensusGateEvidence,
-} from "../ralplan/consensus-gate.js";
-import {
 	buildUnsupportedNativeSubagentGuidance,
 	isUnsupportedNativeSubagentEvidenceForScope,
 	type NativeSubagentSupportEvidence,
 } from "../leader/contract.js";
+import {
+	buildRalplanConsensusGateFromSources,
+	RALPLAN_CONSENSUS_BLOCKED_REASONS,
+	type RalplanConsensusGateEvidence,
+	withParentReturnToRalplanContext,
+} from "../ralplan/consensus-gate.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -130,18 +130,13 @@ export function canAdvanceAutopilotRalplanToUltragoal(
 			unsupportedNativeSubagentGuidance: unsupportedGuidance,
 		};
 	}
-	const nextStateEvidence = buildRalplanConsensusGateFromSources(
-		sourcesForState("next-autopilot-state", input.nextState),
+	// Resolve both states as one ordered evidence set. The consensus resolver selects
+	// the freshest lifecycle record, including a newer invalid next-state record,
+	// while the invariant host-receipt blocker prevents every local record from authorizing execution.
+	const evidence = buildRalplanConsensusGateFromSources(
+		gateSources(input),
 		options,
 	);
-	const evidence =
-		nextStateEvidence.complete ||
-		nextStateEvidence.blockedReason ===
-			RALPLAN_CONSENSUS_BLOCKED_REASONS.nonApprovingReview ||
-		nextStateEvidence.blockedReason ===
-			RALPLAN_CONSENSUS_BLOCKED_REASONS.nativeSubagentEvidenceMissing
-			? nextStateEvidence
-			: buildRalplanConsensusGateFromSources(gateSources(input), options);
 	if (evidence.complete) {
 		return {
 			allowed: true,
@@ -162,6 +157,12 @@ export function canAdvanceAutopilotRalplanToUltragoal(
 function ralplanConsensusBlockedReason(
 	evidence: RalplanConsensusGateEvidence,
 ): string {
+	if (
+		evidence.blockedReason ===
+		RALPLAN_CONSENSUS_BLOCKED_REASONS.documentedHostConsensusReceiptUnavailable
+	) {
+		return "documented_host_consensus_receipt_unavailable";
+	}
 	if (
 		evidence.blockedReason ===
 		RALPLAN_CONSENSUS_BLOCKED_REASONS.nativeSubagentEvidenceMissing

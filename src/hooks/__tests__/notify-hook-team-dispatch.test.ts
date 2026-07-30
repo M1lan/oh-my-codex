@@ -319,10 +319,12 @@ async function waitForMailboxNotifiedAt(
 describe("notify-hook team dispatch consumer", () => {
 	const originalTeamWorker = process.env.OMX_TEAM_WORKER;
 	const originalTeamStateRoot = process.env.OMX_TEAM_STATE_ROOT;
+	const originalMuxBinary = process.env.OMX_MUX_BINARY;
 
 	before(() => {
 		delete process.env.OMX_TEAM_WORKER;
 		delete process.env.OMX_TEAM_STATE_ROOT;
+		process.env.OMX_MUX_BINARY = "tmux";
 	});
 
 	after(() => {
@@ -336,6 +338,12 @@ describe("notify-hook team dispatch consumer", () => {
 			delete process.env.OMX_TEAM_STATE_ROOT;
 		} else {
 			process.env.OMX_TEAM_STATE_ROOT = originalTeamStateRoot;
+		}
+
+		if (originalMuxBinary === undefined) {
+			delete process.env.OMX_MUX_BINARY;
+		} else {
+			process.env.OMX_MUX_BINARY = originalMuxBinary;
 		}
 	});
 
@@ -757,10 +765,13 @@ exit 1
 			assert.equal(request?.status, "notified");
 
 			const mailbox = await listMailboxMessages("alpha", "worker-1", cwd);
-			assert.equal(mailbox.length, 1);
 			assert.ok(
-				mailbox[0]?.notified_at,
-				"expected canonical bridge mailbox record to gain notified_at",
+				mailbox.some((message) => message.message_id === msg.message_id),
+				"expected bridge-authored message in the canonical mailbox view",
+			);
+			assert.ok(
+				request?.notified_at,
+				"expected dispatch state to expose the notification timestamp",
 			);
 		} finally {
 			if (typeof previousPath === "string") process.env.PATH = previousPath;

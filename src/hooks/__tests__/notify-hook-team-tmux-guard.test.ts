@@ -16,6 +16,7 @@ function isolatedChildEnv(fakeBinDir: string): NodeJS.ProcessEnv {
 	const tmuxBin = join(fakeBinDir, "tmux");
 	return {
 		PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+		OMX_MUX_BINARY: tmuxBin,
 		OMX_TEST_TMUX_BIN: tmuxBin,
 		HOME: process.env.HOME,
 		TMPDIR: process.env.TMPDIR,

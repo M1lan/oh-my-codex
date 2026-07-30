@@ -303,6 +303,44 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  native-rust-darwin:
+    name: Native Rust (Darwin)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.native_changed == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build omx-runtime
+        run: cargo build -p omx-runtime
+      - name: Test omx-runtime
+        run: cargo test -p omx-runtime
+
+  native-rust-windows:
+    name: Native Rust (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.native_changed == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+      - name: Build omx-runtime
+        run: cargo build -p omx-runtime
+      - name: Test omx-runtime
+        run: cargo test -p omx-runtime
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -358,6 +396,27 @@ jobs:
           name: ci-dist-node20
           path: dist/
           if-no-files-found: error
+
+  ralplan-preflight-macos:
+    name: Ralplan preflight security (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Verify Darwin descriptor-relative neutralization
+        run: |
+          node --test dist/ralplan/__tests__/documented-leader-preflight.test.js
+          node --test --test-name-pattern='does not reactivate a neutralized routing-only Ralplan seed' dist/hooks/__tests__/keyword-detector.test.js
+          node --test --test-name-pattern='does not advertise a neutralized Ralplan seed in SessionStart context' dist/scripts/__tests__/codex-native-hook.test.js
 
   test:
     name: Test (Node ${{ matrix.node-version }} / ${{ matrix.lane }})
@@ -528,6 +587,41 @@ jobs:
       - name: Run Ralph persistence verification matrix
         run: pnpm run test:ralph-persistence:compiled
 
+  native-cache-integrity:
+    name: Native Cache Integrity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: [changes, build-dist]
+    if: ${{ needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.ts_changed == 'true' || needs.changes.outputs.native_changed == 'true' || needs.changes.outputs.shared_config_changed == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
+      - name: Verify native-cache integrity boundary
+        shell: bash
+        run: |
+          node --test \
+            dist/cli/__tests__/native-assets.test.js \
+            dist/cli/__tests__/sparkshell-cli.test.js \
+            dist/cli/__tests__/api.test.js \
+            dist/scripts/__tests__/verify-native-release-assets.test.js \
+            dist/verification/__tests__/native-release-manifest.test.js \
+            dist/verification/__tests__/explore-harness-release-workflow.test.js \
+            dist/verification/__tests__/ci-rust-gates.test.js
+
   build:
     name: Build (Full Source Build)
     runs-on: ubuntu-latest
@@ -564,7 +658,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [changes, docs-check, rustfmt, clippy, rust-tests, lint, typecheck, build-dist, test, coverage-team-critical, ralph-persistence-gate, build]
+    needs: [changes, docs-check, rustfmt, clippy, rust-tests, native-rust-darwin, native-rust-windows, lint, typecheck, build-dist, ralplan-preflight-macos, test, coverage-team-critical, ralph-persistence-gate, native-cache-integrity, build]
     steps:
       - name: Check required job results
         shell: bash
@@ -580,13 +674,17 @@ jobs:
           RUSTFMT_RESULT: ${{ needs.rustfmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           RUST_TESTS_RESULT: ${{ needs.rust-tests.result }}
+          NATIVE_RUST_DARWIN_RESULT: ${{ needs.native-rust-darwin.result }}
+          NATIVE_RUST_WINDOWS_RESULT: ${{ needs.native-rust-windows.result }}
           LINT_RESULT: ${{ needs.lint.result }}
           TYPECHECK_RESULT: ${{ needs.typecheck.result }}
           BUILD_DIST_RESULT: ${{ needs.build-dist.result }}
+          RALPLAN_PREFLIGHT_MACOS_RESULT: ${{ needs.ralplan-preflight-macos.result }}
           TEST_RESULT: ${{ needs.test.result }}
           COVERAGE_TEAM_CRITICAL_RESULT: ${{ needs.coverage-team-critical.result }}
           RALPH_PERSISTENCE_GATE_RESULT: ${{ needs.ralph-persistence-gate.result }}
           BUILD_RESULT: ${{ needs.build.result }}
+          NATIVE_CACHE_INTEGRITY_RESULT: ${{ needs.native-cache-integrity.result }}
           REASON: ${{ needs.changes.outputs.reason }}
         run: |
           set -euo pipefail
@@ -632,13 +730,17 @@ jobs:
           echo "  rustfmt: $RUSTFMT_RESULT"
           echo "  clippy: $CLIPPY_RESULT"
           echo "  rust-tests: $RUST_TESTS_RESULT"
+          echo "  native-rust-darwin: $NATIVE_RUST_DARWIN_RESULT"
+          echo "  native-rust-windows: $NATIVE_RUST_WINDOWS_RESULT"
           echo "  lint: $LINT_RESULT"
           echo "  typecheck: $TYPECHECK_RESULT"
           echo "  build-dist: $BUILD_DIST_RESULT"
+          echo "  ralplan-preflight-macos: $RALPLAN_PREFLIGHT_MACOS_RESULT"
           echo "  test: $TEST_RESULT"
           echo "  coverage-team-critical: $COVERAGE_TEAM_CRITICAL_RESULT"
           echo "  ralph-persistence-gate: $RALPH_PERSISTENCE_GATE_RESULT"
           echo "  build: $BUILD_RESULT"
+          echo "  native-cache-integrity: $NATIVE_CACHE_INTEGRITY_RESULT"
 
           check_job changes "$CHANGES_RESULT" true
 
@@ -647,22 +749,28 @@ jobs:
           ts_active=false
           dist_active=false
           build_active=false
+          native_cache_integrity_active=false
           if [[ "$FULL_SUITE" == "true" ]] || [[ "$DOCS_CHANGED" == "true" ]]; then docs_active=true; fi
           if [[ "$FULL_SUITE" == "true" ]] || bool_any "$RUST_CHANGED" "$NATIVE_CHANGED"; then rust_active=true; fi
           if [[ "$FULL_SUITE" == "true" ]] || bool_any "$TS_CHANGED" "$SHARED_CONFIG_CHANGED"; then ts_active=true; fi
           if [[ "$FULL_SUITE" == "true" ]] || bool_any "$TS_CHANGED" "$RUST_CHANGED" "$NATIVE_CHANGED" "$SHARED_CONFIG_CHANGED"; then dist_active=true; fi
           if [[ "$FULL_SUITE" == "true" ]] || bool_any "$RUST_CHANGED" "$NATIVE_CHANGED" "$SHARED_CONFIG_CHANGED"; then build_active=true; fi
+          if [[ "$FULL_SUITE" == "true" ]] || bool_any "$TS_CHANGED" "$NATIVE_CHANGED" "$SHARED_CONFIG_CHANGED"; then native_cache_integrity_active=true; fi
 
           check_job docs-check "$DOCS_CHECK_RESULT" "$docs_active"
           check_job rustfmt "$RUSTFMT_RESULT" "$rust_active"
           check_job clippy "$CLIPPY_RESULT" "$rust_active"
           check_job rust-tests "$RUST_TESTS_RESULT" "$rust_active"
+          check_job native-rust-darwin "$NATIVE_RUST_DARWIN_RESULT" "$rust_active"
+          check_job native-rust-windows "$NATIVE_RUST_WINDOWS_RESULT" "$rust_active"
           check_job lint "$LINT_RESULT" "$ts_active"
           check_job typecheck "$TYPECHECK_RESULT" "$ts_active"
           check_job build-dist "$BUILD_DIST_RESULT" "$dist_active"
+          check_job ralplan-preflight-macos "$RALPLAN_PREFLIGHT_MACOS_RESULT" "$ts_active"
           check_job test "$TEST_RESULT" "$ts_active"
           check_job coverage-team-critical "$COVERAGE_TEAM_CRITICAL_RESULT" "$ts_active"
           check_job ralph-persistence-gate "$RALPH_PERSISTENCE_GATE_RESULT" "$ts_active"
+          check_job native-cache-integrity "$NATIVE_CACHE_INTEGRITY_RESULT" "$native_cache_integrity_active"
           check_job build "$BUILD_RESULT" "$build_active"
 
           if (( failures > 0 )); then

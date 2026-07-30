@@ -24,20 +24,20 @@ describe("mcp/code-intel-server module contract", () => {
 			"utf8",
 		);
 
-		const toolNames = Array.from(src.matchAll(/name:\s*'([^']+)'/g)).map(
-			(m) => m[1],
-		);
+		const toolNames = Array.from(
+			src.matchAll(/name:\s*["']([^"']+)["']/g),
+		).map((m) => m[1]);
 		for (const tool of REQUIRED_TOOLS) {
 			assert.ok(toolNames.includes(tool), `missing tool declaration: ${tool}`);
 		}
 
 		assert.match(
 			src,
-			/const args = \['--noEmit', '--pretty', 'false', '--incremental', 'true', '--tsBuildInfoFile', tsBuildInfoFile\]/,
+			/const args = \[\s*["']--noEmit["'],\s*["']--pretty["'],\s*["']false["'],\s*["']--incremental["'],\s*["']true["'],\s*["']--tsBuildInfoFile["'],\s*tsBuildInfoFile,\s*\]/,
 		);
 		assert.match(
 			src,
-			/new Server\(\s*\{ name: 'omx-code-intel', version: '0\.1\.0' \}/,
+			/new Server\(\s*\{\s*name:\s*["']omx-code-intel["'],\s*version:\s*["']0\.1\.0["']\s*\}/,
 		);
 	});
 
@@ -47,7 +47,10 @@ describe("mcp/code-intel-server module contract", () => {
 			"utf8",
 		);
 
-		assert.match(src, /autoStartStdioMcpServer\('code_intel', server\)/);
+		assert.match(
+			src,
+			/autoStartStdioMcpServer\(["']code_intel["'],\s*server\)/,
+		);
 		assert.doesNotMatch(src, /new StdioServerTransport\(\)/);
 		assert.doesNotMatch(
 			src,
@@ -63,9 +66,12 @@ describe("mcp/code-intel-server module contract", () => {
 		assert.match(src, /export function buildAstGrepRunArgs/);
 		assert.match(
 			src,
-			/if \(!options\.dryRun\) \{\s*args\.push\('--update-all'\);/,
+			/if \(!options\.dryRun\) \{\s*args\.push\(["']--update-all["']\);/,
 		);
-		assert.match(src, /args\.push\('--rewrite', options\.replacement\);/);
+		assert.match(
+			src,
+			/args\.push\(["']--rewrite["'],\s*options\.replacement\);/,
+		);
 	});
 
 	it("keeps dry-run/search behavior distinct from apply mode", async () => {
@@ -74,7 +80,7 @@ describe("mcp/code-intel-server module contract", () => {
 			"utf8",
 		);
 		assert.match(src, /if \(options\.replacement\) \{/);
-		assert.match(src, /else \{\s*args\.push\('--json'\);/);
+		assert.match(src, /else \{\s*args\.push\(["']--json["']\);/);
 	});
 
 	it("skips tsc diagnostics when the project has no tsconfig", async () => {
@@ -136,21 +142,22 @@ describe("mcp/code-intel-server module contract", () => {
 					return { stdout: "", stderr: "" };
 				},
 			);
-			assert.deepEqual(observedArgs.slice(0, 5), [
+			assert.deepEqual(observedArgs.slice(0, 6), [
+				"exec",
 				"tsc",
 				"--noEmit",
 				"--pretty",
 				"false",
 				"--incremental",
 			]);
-			assert.equal(observedArgs[5], "true");
-			assert.equal(observedArgs[6], "--tsBuildInfoFile");
-			assert.ok(observedArgs[7]);
+			assert.equal(observedArgs[6], "true");
+			assert.equal(observedArgs[7], "--tsBuildInfoFile");
+			assert.ok(observedArgs[8]);
 			assert.equal(
-				resolve(observedArgs[7]!).startsWith(resolve(projectDir)),
+				resolve(observedArgs[8]!).startsWith(resolve(projectDir)),
 				false,
 			);
-			assert.equal(existsSync(observedArgs[7]!), false);
+			assert.equal(existsSync(observedArgs[8]!), false);
 		} finally {
 			if (previous === undefined)
 				delete process.env.OMX_CODE_INTEL_SERVER_DISABLE_AUTO_START;

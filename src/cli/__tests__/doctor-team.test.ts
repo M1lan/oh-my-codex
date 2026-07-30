@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
-import { join, dirname } from "path";
-import { tmpdir } from "os";
+import { describe, it } from "node:test";
 import { spawn, spawnSync } from "child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
 function runOmx(
@@ -17,7 +17,7 @@ function runOmx(
 	const r = spawnSync(process.execPath, [omxBin, ...argv], {
 		cwd,
 		encoding: "utf-8",
-		env: { ...process.env, ...envOverrides },
+		env: { ...process.env, OMX_MUX_BINARY: "tmux", ...envOverrides },
 	});
 	return {
 		status: r.status,

@@ -55,7 +55,7 @@ describe("hook-derived-watcher", () => {
 		assert.match(source, /async function readFileDelta/);
 		assert.match(source, /while \(totalBytesRead < length\)/);
 		assert.match(source, /nextOffset: offset \+ totalBytesRead/);
-		assert.match(source, /new StringDecoder\('utf8'\)/);
+		assert.match(source, /new StringDecoder\(["']utf8["']\)/);
 		assert.match(source, /decoder\.write\(bytes\)/);
 		assert.match(
 			source,
@@ -63,11 +63,11 @@ describe("hook-derived-watcher", () => {
 		);
 		assert.match(
 			source,
-			/if \(currentSize < meta\.offset\) \{\s*meta\.offset = 0;\s*meta\.partial = '';/,
+			/if \(currentSize < meta\.offset\) \{\s*meta\.offset = 0;\s*meta\.partial = (["'])\1;/,
 		);
 		assert.doesNotMatch(
 			source,
-			/const content = await readFile\(path, 'utf-8'\)[\s\S]*const delta = content\.slice\(meta\.offset\)/,
+			/const content = await readFile\(path, ["']utf-8["']\)[\s\S]*const delta = content\.slice\(meta\.offset\)/,
 		);
 		assert.doesNotMatch(
 			source,
